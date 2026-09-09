@@ -1,0 +1,29 @@
+{
+  "name": "paidan",
+  "version": "0.1.0",
+  "description": "派单 — delegate tasks to AI CLI agents installed on your machine; every task is a durable run you can wait on, cancel, and verify after restart",
+  "type": "module",
+  "bin": {
+    "paidan": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "dist",
+    "endpoints",
+    "docs"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "npm run build",
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node test/smoke.mjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^24.13.4",
+    "typescript": "^5.9.3"
+  }
+}

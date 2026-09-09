@@ -1,0 +1,133 @@
+{
+  "schema_version": "1.0.0",
+  "name": "codex",
+  "family": "codex",
+  "detect": {
+    "bin": "codex",
+    "version_args": [
+      "--version"
+    ],
+    "version_re": "codex-cli ([0-9]+\\.[0-9]+\\.[0-9]+)",
+    "npm_exe": "@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+    "npm_entry": "@openai/codex/bin/codex.js",
+    "detect_notes": "`codex --version` prints `codex-cli 0.153.3`. The npm global install exposes only script shims on PATH (codex / codex.cmd / codex.ps1); Node >=18.20 refuses to spawn .cmd without shell (EINVAL, verified 2026-09-10 on Node v24.15.0). Resolution is layered: npm_exe is the vendor native binary under <npm-root>/node_modules (layout verbatim from the suite adapter operations/governance/harnesses/runtime/adapters/codex.mjs npmVendorCandidate; verified on disk 2026-09-10 — the vendor codex.exe resolves its sandbox/code-mode helpers relative to its own directory, never copy codex.exe alone); npm_entry (node bin/codex.js, what codex.cmd execs) is the next fallback; cmd.exe shim is the last resort."
+  },
+  "command": {
+    "argv": [
+      "{bin}",
+      "--json",
+      "-c",
+      "approval_policy=\"never\"",
+      "--skip-git-repo-check",
+      "-"
+    ],
+    "prompt_delivery": "stdin",
+    "mode_args": {
+      "read-only": [
+        "exec",
+        "-s",
+        "read-only"
+      ],
+      "workspace-write": [
+        "exec",
+        "-s",
+        "workspace-write"
+      ],
+      "unattended": [
+        "exec",
+        "-s",
+        "danger-full-access"
+      ]
+    },
+    "resume_argv": [
+      "{bin}",
+      "exec",
+      "resume",
+      "{session}",
+      "--json",
+      "-c",
+      "approval_policy=\"never\"",
+      "--skip-git-repo-check",
+      "-"
+    ],
+    "resume_argv_notes": "On resume runs this template fully replaces command.argv (buildArgs): `codex exec resume <session-id> --json -c approval_policy=\"never\" --skip-git-repo-check -`, prompt on stdin, -m still spliced. `codex exec resume --help` (0.153.3, re-verified 2026-09-10): accepts -m/--json/-c/-i/--skip-git-repo-check and positional PROMPT (`-` = stdin); accepts NEITHER -s NOR --add-dir — the session restores its original cwd/approval/sandbox tier (since 0.148/0.149), which is why mode_args are not re-spliced.",
+    "model_arg": [
+      "-m",
+      "{model}"
+    ],
+    "add_dir_arg": [
+      "--add-dir",
+      "{dir}"
+    ],
+    "argv_notes": "Rendered fresh-run shape: `codex [-m M] [--add-dir D]... exec -s <sandbox> --json -c approval_policy=\"never\" --skip-git-repo-check -` (buildArgs splices model/add_dir/mode fragments in front of the argv tail, so the `exec` subcommand rides inside mode_args to guarantee the security-critical `-s` lands AFTER `exec`; root-level -m/--add-dir propagate into exec — verified live 2026-09-10: root `-m not-a-real-model` made exec fail with a model error, root `--add-dir B` made a workspace-write run able to write into B). Prompt rides stdin (argv tail `-` = read prompt from stdin, codex exec help 0.153.3). `approval_policy=\"never\"` is the headless approval semantic (probe report 2026-09-09 §1/§5: sandbox x approval are independent axes, headless uses never, on-failure is deprecated; exec has no -a flag so it goes via -c). --skip-git-repo-check is always on: without it codex exits 1 with `Not inside a trusted directory` outside git worktrees (verified 2026-09-10); the suite adapter adds it conditionally via a pure-fs .git walk-up, paidan v0 has no conditional-argv hook, and paidan's cwd is always the explicit run root. Native config (~/.codex/config.toml) decides model default, web_search tier, MCP servers; paidan never stages or overrides beyond the flags above.",
+    "cwd_arg": null,
+    "env": {
+      "CODEX_HOME": "{native_default}",
+      "_env_notes": "native_default = paidan does not set the variable at all (codex runs against the user's real ~/.codex). Paidan never stages or copies codex config/auth."
+    },
+    "verified_at": "2026-09-09",
+    "version": "0.153.3"
+  },
+  "permission": {
+    "fs.read": {
+      "status": "supported",
+      "via": "codex sandbox tiers read-only/workspace-write both allow local reads (live read-only run answered from cwd files, 2026-09-10)",
+      "verified_at": "2026-09-10",
+      "version": "0.153.3"
+    },
+    "fs.write": {
+      "status": "supported",
+      "via": "workspace-write sandbox tier via `-s workspace-write` (live write verified 2026-09-10; read-only tier truly blocks writes — file absent, denial on stderr)",
+      "verified_at": "2026-09-10",
+      "version": "0.153.3"
+    },
+    "shell.exec": {
+      "status": "supported",
+      "via": "codex exec runs model-generated shell commands under the selected sandbox tier; unattended preset maps to danger-full-access",
+      "verified_at": "2026-09-09",
+      "version": "0.153.3"
+    },
+    "net.fetch": {
+      "status": "unverified",
+      "via": "codex has a native web_search tool whose enablement follows the native config `web_search` tier (default cached != live per probe report 2026-09-09 §5); not covered by P1-P3 contract probes",
+      "verified_at": "2026-09-09"
+    },
+    "interact.ask": {
+      "status": "unsupported",
+      "via": "exec headless runs with approval_policy=\"never\" (paidan argv): there is no human approval channel, escalation-dependent commands fail closed back to the model",
+      "verified_at": "2026-09-09"
+    },
+    "presets": {
+      "read-only": "supported",
+      "workspace-write": "supported",
+      "unattended": "supported"
+    },
+    "presets_notes": "Mapping: read-only=`-s read-only`, workspace-write=`-s workspace-write`, unattended=`-s danger-full-access`, all with approval_policy=never (probe report 2026-09-09 §1 baseline). unattended (danger-full-access) is documented and flag-verified but NOT live-probed — P1/P2/P3 never exercise it.",
+    "denial_evidence": {
+      "status": "supported",
+      "via": "sandbox denial is observable two ways: the stderr signature `patch rejected: writing is blocked by read-only sandbox; rejected by user approval settings` (parser detectRefusals) and the final agent_message explaining the refusal; live-verified 2026-09-10 (read-only write attempt, exit 0, file absent)",
+      "verified_at": "2026-09-09",
+      "version": "0.153.3"
+    }
+  },
+  "resume": {
+    "kind": "flag",
+    "cross_process": true,
+    "notes": "codex NATIVELY supports cross-process resume: `codex exec resume <session-id>` (session UUID from thread.started thread_id; restores cwd/approval/sandbox tier since 0.148/0.149; probe report 2026-09-09 §2 P3 passed via the suite). Expressible via command.resume_argv (engine support added 2026-09-10): the resume template replaces command.argv entirely so the fresh-run mode_args (which bake in the `exec` subcommand and -s) never corrupt the resume shape. Resume runs execute in the same cwd as the source run (session restores its original cwd; --all disables cwd filtering).",
+    "verified_at": "2026-09-09",
+    "version": "0.153.3"
+  },
+  "models": {
+    "command": null,
+    "parse": "codex-native-config",
+    "connections": [],
+    "notes": "v0: heuristic read of the native $CODEX_HOME/config.toml top-level `model` key (codex has no CLI model-list surface; `app-server model/list` is experimental). Connection label chatgpt-login when ~/.codex/auth.json exists (probe report 2026-09-09 §4: one active ChatGPT-login connection on this machine; the CODEX_API_KEY path is unconfigured). Selection = config.json defaults.model or the codex native default; no cross-connection fallback."
+  },
+  "parser": "codex-exec",
+  "parser_notes": "codex exec --json emits NDJSON on stdout: thread.started{thread_id} (session handle), turn.started, item.started/item.updated/item.completed (item.type agent_message carries assistant text in item.text; item.type error is a soft in-band error), turn.completed{usage{input_tokens,cached_input_tokens,output_tokens,...}} (usage source provider), turn.failed and top-level error on failure. finalText = last agent_message (codex's own -o last-message semantics; paidan v0 has no run-dir -o templating). Non-JSON stdout lines, mid-line EOF and unknown TOP-LEVEL event types set degraded (unknown item types are ignored — item families drift fast). Evidence: suite adapter operations/governance/harnesses/runtime/adapters/codex.mjs analyzeEvents/extractCodexUsage + live 0.153.3 runs 2026-09-10.",
+  "capabilities": {
+    "background_native": false,
+    "cancel_native": false,
+    "completed_nonzero_exit": false
+  }
+}

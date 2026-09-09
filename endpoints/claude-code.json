@@ -1,0 +1,124 @@
+{
+  "schema_version": "1.0.0",
+  "name": "claude-code",
+  "family": "anthropic",
+  "detect": {
+    "bin": "claude",
+    "version_args": [
+      "--version"
+    ],
+    "version_re": "^([0-9]+\\.[0-9]+\\.[0-9]+)",
+    "npm_exe": "@anthropic-ai/claude-code/bin/claude.exe",
+    "version_re_notes": "`claude --version` prints e.g. \"2.1.260 (Claude Code)\" (live 2026-09-10). The npm global install puts only script shims on PATH; claude.cmd execs %dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe directly (read 2026-09-10), so npm_exe resolves the REAL native binary under the shim's node_modules without a shell. (There is no package-level cli.js; the shim does not route through one.)"
+  },
+  "command": {
+    "argv": [
+      "{bin}",
+      "-p",
+      "{prompt}",
+      "--output-format",
+      "stream-json",
+      "--verbose"
+    ],
+    "prompt_delivery": "argv",
+    "mode_args": {
+      "read-only": [
+        "--permission-mode",
+        "default",
+        "--permission-prompts",
+        "none"
+      ],
+      "workspace-write": [
+        "--permission-mode",
+        "acceptEdits"
+      ],
+      "unattended": [
+        "--permission-mode",
+        "bypassPermissions"
+      ]
+    },
+    "mode_args_notes": "Evidence: code.claude.com/docs/en/cli-reference + 2026-09-09 native probe (tmp/agent-probe-20260909/claude*/). `-p` always starts at the default (Manual) tier; --permission-mode re-tiers per run. read-only = default tier + `--permission-prompts none` (2.1.259+): with no answer channel headless, every permission prompt is denied, so Write/Bash are refused while built-in read-only tools stay auto-allowed (P2 live: Write denied, permission_denials populated). workspace-write = acceptEdits (Edit/Write auto-accepted; Bash still prompts and is denied headless). unattended = bypassPermissions (everything auto-accepted; shell.exec verified live 2026-09-10, v2.1.260). There is NO env var for permission mode, and project-level settings defaultMode=auto/bypass do not apply to -p.",
+    "model_arg": [
+      "--model",
+      "{model}"
+    ],
+    "add_dir_arg": [
+      "--add-dir",
+      "{dir}"
+    ],
+    "argv_notes": "stream-json REQUIRES --verbose in print mode (cli-reference). Live stream shape sampled 2026-09-10 on v2.1.260: NDJSON on stdout = system/init event -> assistant events -> one terminal result event.",
+    "cwd_arg": null,
+    "env": {
+      "CLAUDE_CONFIG_DIR": "{native_default}",
+      "_env_notes": "native_default = paidan does not set the variable at all (claude runs against the user's real ~/.claude, incl. the ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL gateway entry in native settings.json env). Paidan never stages or copies claude config."
+    },
+    "verified_at": "2026-09-09",
+    "version": "2.1.260"
+  },
+  "permission": {
+    "fs.read": {
+      "status": "supported",
+      "via": "built-in read-only tools (Read/Glob/Grep) are auto-allowed in every permission mode; static deny rules still apply on top",
+      "verified_at": "2026-09-10",
+      "version": "2.1.260"
+    },
+    "fs.write": {
+      "status": "supported",
+      "via": "acceptEdits auto-accepts Edit/Write (workspace-write); bypassPermissions for unattended; default+--permission-prompts none denies (P2 live 2026-09-09: permission_denials[Write], file not created)",
+      "verified_at": "2026-09-10",
+      "version": "2.1.260"
+    },
+    "shell.exec": {
+      "status": "supported",
+      "via": "Bash tool; auto-accepted only under bypassPermissions (verified live 2026-09-10: echo via shell ran, permission_denials empty); under acceptEdits/default a shell prompt has no headless answer channel and the call is denied",
+      "verified_at": "2026-09-10",
+      "version": "2.1.260"
+    },
+    "net.fetch": {
+      "status": "unverified",
+      "via": "WebFetch/WebSearch appear in the init event tool list (live sample 2026-09-10); per-mode auto-allow behavior in print mode not probed",
+      "verified_at": "2026-09-10"
+    },
+    "interact.ask": {
+      "status": "unsupported",
+      "via": "print mode has no user-answer channel; --permission-prompts none turns every prompt into a denial (P2 2026-09-09). --permission-prompt-tool exists but needs an MCP prompt tool paidan does not provide",
+      "verified_at": "2026-09-09"
+    },
+    "presets": {
+      "read-only": "supported",
+      "workspace-write": "supported",
+      "unattended": "supported"
+    },
+    "presets_notes": "Six native tiers exist (default/acceptEdits/plan/auto/dontAsk/bypassPermissions); the three presets map to the tiers above. plan tier is interactive-shaped (plan approval prompt) so it is not used as the read-only mapping; default+--permission-prompts none gives a true enforced read-only headless tier (P2 live-verified 2026-09-09).",
+    "denial_evidence": {
+      "status": "supported",
+      "via": "stream-json terminal result event carries permission_denials[] ({tool_name, tool_use_id, tool_input}); the claude-stream-json parser surfaces them into result.json evidence notes (P2 live 2026-09-09: Write denial visible, exit 0, subtype success)",
+      "verified_at": "2026-09-09",
+      "version": "2.1.260"
+    }
+  },
+  "resume": {
+    "kind": "flag",
+    "args": [
+      "--resume",
+      "{session}"
+    ],
+    "cross_process": true,
+    "notes": "Session handle = session_id of the stream-json system/init event (a UUID; stable across resume — P3 2026-09-09 recalled P1 content with the same id). Official constraints (code.claude.com/docs/en, 2026-09-09): (1) `-p --resume` tiers by the NEW -p invocation (back to default/Manual) — nothing is inherited from the original run, so startup flags (--permission-mode/--model/--add-dir/--settings/--mcp-config) MUST be re-passed; paidan always re-splices mode_args/model_arg on resume, which satisfies this. (2) Two processes must NOT resume the same session concurrently — both would interleave writes into one transcript (officially warned; treated as forbidden). (3) --resume searches projects machine-wide (2.1.223+), so a same-cwd resume run resolves the session. Model on resume: inherited from transcript unless --model overrides.",
+    "verified_at": "2026-09-10",
+    "version": "2.1.260"
+  },
+  "models": {
+    "command": null,
+    "connections": [],
+    "notes": "UNVERIFIED discovery: claude has no model-enumeration command. Known aliases (docs, 2026-09-09): sonnet/opus/haiku/fable/best via --model. Selection = config.json defaults.model; no cross-connection fallback. Current connection on this machine: ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL self-hosted gateway via native settings.json env (no OAuth login; under -p an API key always beats a subscription login)."
+  },
+  "parser": "claude-stream-json",
+  "parser_notes": "stdout NDJSON (stream-json): system/init carries session_id; assistant events carry message.content[] text parts; the single terminal result event carries result text, session_id (cross-checked against init), usage (input/output/cache tokens), total_cost_usd and permission_denials. Non-JSON lines / mid-line EOF / conflicting session ids degrade the parser (terminal judgment then cannot be exit-code-based).",
+  "capabilities": {
+    "background_native": false,
+    "cancel_native": false,
+    "completed_nonzero_exit": false,
+    "_capabilities_notes": "--bg exists but is mutually exclusive with -p, so no native background for print-mode runs."
+  }
+}

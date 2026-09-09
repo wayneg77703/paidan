@@ -1,0 +1,108 @@
+{
+  "schema_version": "1.0.0",
+  "name": "zcode",
+  "family": "zcode",
+  "detect": {
+    "bin": "zcode",
+    "version_args": [
+      "--version"
+    ],
+    "version_re": "([0-9]+\\.[0-9]+\\.[0-9]+)",
+    "detect_notes": "ZCode desktop (observed 3.11.1) ships the CLI only as a node bundle (resources/glm/zcode.cjs; `zcode doctor`: 'default artifact: node-bundle, sea: no'); it installs NO PATH-resolvable zcode binary on Windows (verified 2026-09-10: no zcode on user/machine PATH, and Node >= 20.12 cannot spawn a .cmd/.cjs shim without shell:true). Repair paths (doctor reports both): set endpoints.overrides.zcode.bin in the machine config.json to the bundle path (a .cjs is spawned via process.execPath), or create a PATH shim that execs node with the bundle."
+  },
+  "command": {
+    "argv": [
+      "{bin}",
+      "-p",
+      "{prompt}",
+      "--json",
+      "--disallowed-tools",
+      "Agent Task TaskStop TaskOutput CronCreate CronUpdate CronDelete SendMessage"
+    ],
+    "prompt_delivery": "argv",
+    "mode_args": {
+      "unattended": [
+        "--mode",
+        "yolo"
+      ]
+    },
+    "argv_notes": "Evidence: suite adapter operations/governance/harnesses/runtime/adapters/zcode.mjs:258-265 (buildInvocation) and contracts/zcode-cli.json required_invocation.argv_order: headless print is `-p <prompt> --mode yolo --json --cwd <cwd> --disallowed-tools <space-joined denylist>`; `--resume <sessionId>` is appended when continuing. CLI 0.16.5 --help (probed 2026-09-10) confirms -p/--print, --mode build|edit|plan|yolo (default yolo for --prompt), --json, --disallowed-tools as comma-or-space list. Dead flags that must never be emitted: --max-turns, --permission-mode, --allowed-tools (adapter DEAD_FLAGS, zcode.mjs:29; they parse but are inert). --cwd is omitted: the worker already spawns with cwd=request.cwd and zcode sessions are cwd-bound (cwd_arg below is informational only in v0).",
+    "cwd_arg": null,
+    "env": {
+      "ZCODE_CLI_DISABLE_AUTO_UPDATE": "1",
+      "ZCODE_CLI_DISABLE_TELEMETRY": "1",
+      "ZCODE_MODEL": "{native_default}",
+      "ZCODE_BASE_URL": "{native_default}",
+      "ANTHROPIC_API_KEY": "{native_default}",
+      "_env_notes": "{native_default} = paidan never sets the variable; values pass through from the caller env if present. The auth triple (ZCODE_MODEL/ZCODE_BASE_URL/ANTHROPIC_API_KEY) is zcode's native headless credential surface (adapter buildInvocation, zcode.mjs:275-277): the CLI 0.16.5 headless path does NOT read the desktop's .zcode/v2/config.json provider registry by itself (probed 2026-09-10: without the triple, stderr 'Error: Model config is missing...', exit 1). paidan never reads or stages credentials (invariant 3/4) — the triple must come from the caller's own environment or a natively configured ~/.zcode/cli/config.json (model.main)."
+    },
+    "verified_at": "2026-09-10",
+    "version": "0.16.5"
+  },
+  "permission": {
+    "fs.read": {
+      "status": "supported",
+      "via": "--mode yolo (native Full Access; ordinary tools autoallowed without per-call permit)",
+      "verified_at": "2026-09-10",
+      "version": "0.16.5"
+    },
+    "fs.write": {
+      "status": "supported",
+      "via": "--mode yolo (native Full Access; ordinary tools autoallowed without per-call permit); live: paidan run_20260910_43acbea2 (unattended) created the declared deliverable and completed, parser not degraded",
+      "verified_at": "2026-09-10",
+      "version": "0.16.5"
+    },
+    "shell.exec": {
+      "status": "supported",
+      "via": "--mode yolo (Bash tool autoallowed)",
+      "verified_at": "2026-09-09",
+      "version": "0.16.5"
+    },
+    "net.fetch": {
+      "status": "supported",
+      "via": "--mode yolo (live public web observed in suite capability matrix)",
+      "verified_at": "2026-09-09",
+      "version": "0.16.5"
+    },
+    "interact.ask": {
+      "status": "unverified",
+      "via": "headless AskUserQuestion receives permission_denied (2026-09-09 probe report); v1 marks interact.ask unverified on all endpoints",
+      "verified_at": "2026-09-10"
+    },
+    "presets": {
+      "read-only": "unsupported",
+      "workspace-write": "unsupported",
+      "unattended": "supported"
+    },
+    "presets_notes": "By design: zcode permission requests have NO timeout and wait forever, so headless plan/edit (read-only/workspace-write) deadlock instead of enforcing — the eight-agent probe (2026-09-09 report §1) and the suite gateway both reject non-yolo presets before submission. yolo is the only enforceable headless preset. This is the intended endpoint shape, not a gap.",
+    "denial_evidence": {
+      "status": "unverified",
+      "via": "no endpoint refusal signal observed for headless yolo in 0.16.5; parser detectRefusals is an honest no-op until a real refusal shape is observed",
+      "verified_at": "2026-09-10"
+    }
+  },
+  "resume": {
+    "kind": "flag",
+    "args": [
+      "--resume",
+      "{session}"
+    ],
+    "cross_process": true,
+    "notes": "Native CLI flag `--resume <sessionId>` exists (0.16.5 --help: 'Resume a persisted session by sessionId (sess_...)'). Sessions are cwd-bound (`-c/--continue` = 'resume the latest session for the current directory'); resume a run with the same cwd as its source. sessionId is extracted from the envelope sessionId field (sess_ prefix). Suite contract additionally pins same identity/mode/tool-policy/model and prior terminal state; model/permission inheritance on resume is officially unspecified. Concurrent runs on one session handle are forbidden (per-session preempt lock, bridge issue #41). Live-verified through paidan 2026-09-10: run_20260910_07255be6 (remember codename) -> run_20260910_dba2b11b (--resume same sess_ handle, same cwd) recalled the codename exactly, state completed.",
+    "verified_at": "2026-09-10",
+    "version": "0.16.5"
+  },
+  "models": {
+    "command": null,
+    "parse": "zcode-native-config",
+    "connections": [],
+    "notes": "v0: heuristic read-only scan of the desktop's native .zcode/v2/config.json provider registry (enabled providers -> provider/model aliases; connection = provider id, e.g. builtin:bigmodel-coding-plan/GLM-5.3). Selection is by ZCODE_MODEL env in the caller's environment or the CLI's own model.main; paidan has no argv model flag (0.16.5 has none for headless) and never picks across connections. bigmodel-coding-plan quota is separate from the general endpoint (2026-09-09 report §5)."
+  },
+  "parser": "zcode-print",
+  "parser_notes": "--json emits exactly one pretty-printed JSON envelope on stdout with fields sessionId/traceId/turnId/response/usage/projection (adapter extractFacts required list, zcode.mjs:432; observed live 2026-09-10, CLI 0.16.5). usage is camelCase (inputTokens/outputTokens/cacheReadTokens) -> UsageSummary with source 'provider'. Anything else on stdout degrades the parser (terminal judgment then cannot be exit-code-based).",
+  "capabilities": {
+    "background_native": false,
+    "cancel_native": false,
+    "completed_nonzero_exit": false
+  }
+}

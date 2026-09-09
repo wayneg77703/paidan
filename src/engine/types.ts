@@ -1,0 +1,101 @@
+// Shared run-record types. Normative schemas live in docs/contracts.md.
+
+export const RUN_STATES = [
+    'pending',
+    'running',
+    'completed',
+    'failed',
+    'cancelled',
+    'unknown',
+    'attention',
+] as const
+export type RunState = (typeof RUN_STATES)[number]
+
+export const TERMINAL_STATES = ['completed', 'failed', 'cancelled', 'unknown'] as const
+export type TerminalState = (typeof TERMINAL_STATES)[number]
+
+export const PERMISSION_PRESETS = ['read-only', 'workspace-write', 'unattended'] as const
+export type PermissionPreset = (typeof PERMISSION_PRESETS)[number]
+
+export interface DeliverableSpec {
+    path: string
+    expected: string | null
+}
+
+export interface RunRequest {
+    schema_version: '1.0.0'
+    run_id: string
+    fingerprint: string
+    endpoint: string
+    cwd: string
+    add_dirs: string[]
+    task_file: string | null
+    task_text: string
+    mode: PermissionPreset
+    model: string | null
+    effort: string | null
+    resume_session: string | null
+    deliverables: DeliverableSpec[]
+    created_at: string
+    warnings: string[]
+}
+
+export interface RunWorkerRef {
+    pid: number
+    started_at: string
+    endpoint_pid: number | null
+}
+
+export interface RunStateRecord {
+    schema_version: '1.0.0'
+    run_id: string
+    state: RunState
+    worker: RunWorkerRef | null
+    session: { handle: string | null; resumable: boolean }
+    created_at: string
+    updated_at: string
+    terminal_at: string | null
+}
+
+export interface DeliverableEvidence {
+    path: string
+    expected: string | null
+    found: boolean
+}
+
+export interface ParserEvidence {
+    type: string
+    degraded: boolean
+}
+
+export type UsageSource = 'provider' | 'endpoint-ledger' | 'unavailable'
+
+export interface UsageSummary {
+    input_tokens: number | null
+    output_tokens: number | null
+    cached_input_tokens: number | null
+    source: UsageSource
+}
+
+export interface RunResult {
+    schema_version: '1.0.0'
+    run_id: string
+    state: TerminalState
+    exit_code: number | null
+    final_text: string
+    evidence: {
+        deliverables: DeliverableEvidence[]
+        refusals: string[]
+        parser: ParserEvidence
+        notes: string[]
+    }
+    usage: UsageSummary
+    session_handle: string | null
+    terminal_at: string
+}
+
+export interface RunEvent {
+    ts: string
+    type: string
+    [key: string]: unknown
+}
