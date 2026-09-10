@@ -112,34 +112,47 @@ answers. The wizard-owned keys are:
   "defaults": {
     "endpoint": "kimi-code",
     "models": { "kimi-code": "kimi-code/k3", "codex": "gpt-6-astra" },
-    "effort": null,
     "efforts": { "omp": "high", "claude-code": "medium" },
     "run_timeout_sec": 1800
-  },
-  "dataDir": null,
-  "ttlDays": 30
+  }
 }
 ```
 
-Key rules (violations are hard errors with the key named):
+Key rules, in two layers (know which is which):
 
-- `endpoints.enabled`: array of endpoint names (subset of detected).
-- `endpoints.overrides.<name>.bin`: machine-local path to a native binary or
-  JS bundle for an endpoint detection cannot find (custom drives, profile
-  layouts). Machine paths live **only** here, never in the repo.
-- `defaults.endpoint` must be in `enabled`. `defaults.models.<name>` must be
-  one of that endpoint's discovered aliases **and only valid for
-  `model_selectable` endpoints** — a configured model against an endpoint with
-  no headless model selection (dsh, zcode) is refused at submit with
-  `MODEL_UNSUPPORTED`. `defaults.efforts.<name>` must be one of that
-  endpoint's declared effort `options` (see step 3.4).
-- `defaults.model` / `defaults.effort` are global fallbacks; the per-endpoint
-  maps win. **The wizard never writes `defaults.model`** (a global model
-  poisons endpoints that cannot take one headless; a hand-set value is
-  cleared on re-init deliberately) — prefer per-endpoint `defaults.models`
-  and leave the global out entirely for "native default".
+**Load-time hard errors** (`loadConfig`, everything in this layer blocks every
+verb with `CONFIG_INVALID`):
+
+- `dataDir` / `defaults.model` / `defaults.effort` / `overrides.<name>.bin`
+  must be non-empty strings **when present** — omit a key entirely for its
+  default; an explicit `null` is an error.
 - Unknown keys are rejected (typos never pass silently); `__proto__` and
   friends are rejected as dynamic keys.
+- `endpoints.enabled` must be an array of strings; `defaults.models` /
+  `defaults.efforts` must be string maps; `ttlDays` a positive number;
+  `defaults.run_timeout_sec` a non-negative number.
+
+**Semantic validation** (NOT done at load — a hand-written config that breaks
+these loads fine and fails later at the named point):
+
+- `defaults.endpoint` must be in `enabled` (enforced when a run needs it:
+  `ENDPOINT_DISABLED`/`ENDPOINT_REQUIRED` at submit).
+- `endpoints.overrides.<name>.bin`: machine-local path to a native binary or
+  JS bundle for an endpoint detection cannot find (custom drives, profile
+  layouts). Machine paths live **only** here, never in the repo. Load checks
+  shape only; a wrong path surfaces at detection (`doctor` repair hint).
+- `defaults.models.<name>` is only meaningful for `model_selectable`
+  endpoints — a configured model against an endpoint with no headless model
+  selection (dsh, zcode) is refused at submit with `MODEL_UNSUPPORTED`.
+  The wizard validates aliases against discovery; `run`/`probe` validate
+  argv-safety, not discovery membership.
+- `defaults.efforts.<name>` must be one of that endpoint's declared effort
+  `options` (enforced at submit: `EFFORT_INVALID`; a block-less endpoint with
+  a configured effort: `EFFORT_UNSUPPORTED`).
+- **The wizard never writes `defaults.model`** (a global model poisons
+  endpoints that cannot take one headless; a hand-set value is cleared on
+  re-init deliberately) — prefer per-endpoint `defaults.models` and leave the
+  global out entirely for "native default".
 
 Resolution order at run time: `--model ?? defaults.models[ep] ?? defaults.model`;
 `--effort ?? defaults.efforts[ep] ?? defaults.effort ?? native default`.
