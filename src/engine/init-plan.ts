@@ -2,15 +2,18 @@
 // gathers detection info (spawn plan + model discovery) and owns readline;
 // this module turns answers into a config.json object.
 
+import { WIZARD_DEFAULTS_KEYS } from './config.js'
+import type { PaidanConfig } from './config.js'
+
 export interface InitEndpointInfo {
     name: string
     detected: boolean
     version: string | null
     models: Array<{ alias: string; connection: string | null }>
+    /** the endpoint can take a model on its headless argv (manifest command.model_arg); discovery may still exist for information only (zcode/dsh) */
+    model_selectable?: boolean
     /** declared effort options from the manifest (null = no effort selection for this endpoint) */
     effort_options?: string[] | null
-    /** manifest-declared default effort option (null = native default) */
-    effort_default?: string | null
     /** spawn-resolution repair hint when not detected (last resolver note) */
     repair?: string | null
 }
@@ -18,7 +21,6 @@ export interface InitEndpointInfo {
 export interface InitAnswers {
     enabled: string[]
     default_endpoint: string | null
-    default_model: string | null
     /** per-endpoint default models (enabled endpoints with discovered models); absent key = native default */
     models?: Record<string, string | null>
     /** per-endpoint default efforts (enabled endpoints with declared effort options); absent key = native default */
@@ -29,21 +31,20 @@ export interface InitAnswers {
 
 export interface InitConfig {
     endpoints: { enabled: string[] }
-    defaults: { endpoint: string | null; model: string | null; models: Record<string, string>; efforts: Record<string, string> }
+    defaults: { endpoint: string | null; models: Record<string, string>; efforts: Record<string, string> }
 }
 
-/** --yes semantics: enable every detected endpoint; default = first detected; each detected endpoint's first discovered model becomes its default; efforts stay at the native default; install the skill into every detected host. */
+/** --yes semantics: enable every detected endpoint; default = first detected; each detected endpoint's first discovered model becomes its default (only where the endpoint can take one headless); efforts stay at the native default; install the skill into every detected host. */
 export function defaultInitAnswers(info: InitEndpointInfo[], detectedHosts: string[] = []): InitAnswers {
     const enabled = info.filter((e) => e.detected).map((e) => e.name)
     const first = info.find((e) => e.detected)
     const models: Record<string, string | null> = {}
     for (const e of info) {
-        if (e.detected && e.models.length > 0) models[e.name] = e.models[0]?.alias ?? null
+        if (e.detected && e.model_selectable !== false && e.models.length > 0) models[e.name] = e.models[0]?.alias ?? null
     }
     return {
         enabled,
         default_endpoint: first?.name ?? null,
-        default_model: first && first.models.length > 0 ? (first.models[0]?.alias ?? null) : null,
         models,
         efforts: {},
         skill_hosts: detectedHosts,
@@ -64,23 +65,60 @@ export function parseMultiSelect(input: string, count: number, fallback: number[
     return [...new Set(nums.map((n) => n - 1))].sort((a, b) => a - b)
 }
 
-/** Answers are validated against reality: enabled ⊆ detected, default ∈ enabled, every model ∈ its own endpoint's models. */
+/**
+ * What the wizard should ask for one endpoint's default model and effort,
+ * derived from detection info and the current config. UI-free (the raw-mode
+ * wizard, the line fallback, and a future GUI all render this one plan).
+ */
+export interface EndpointDefaultQuestions {
+    model:
+        | { kind: 'skip-no-selection' } // endpoint cannot take a model headless; its native config owns it
+        | { kind: 'skip-none' } // no discovered models; native default
+        | { kind: 'auto'; value: string } // exactly one discovered alias; announced, not asked
+        | { kind: 'ask'; options: string[]; fallback: string }
+    effort:
+        | { kind: 'skip' } // endpoint declares no effort block; native default
+        | { kind: 'ask'; options: string[]; fallback: string; staleValue: string | null }
+}
+
+export const NATIVE_DEFAULT_LABEL = '(native default)'
+
+export function planEndpointDefaultQuestions(ep: InitEndpointInfo, config: PaidanConfig): EndpointDefaultQuestions {
+    const name = ep.name
+    let model: EndpointDefaultQuestions['model']
+    const aliases = ep.models.map((m) => m.alias)
+    const existingModel = config.defaults.models[name] ?? (name === config.defaults.endpoint ? config.defaults.model : null)
+    if (ep.model_selectable === false) {
+        model = { kind: 'skip-no-selection' }
+    } else if (aliases.length === 0) {
+        model = { kind: 'skip-none' }
+    } else if (aliases.length === 1) {
+        model = { kind: 'auto', value: aliases[0] as string }
+    } else {
+        const fallback = existingModel && aliases.includes(existingModel) ? existingModel : (aliases[0] as string)
+        model = { kind: 'ask', options: aliases, fallback }
+    }
+    let effort: EndpointDefaultQuestions['effort']
+    const effOpts = ep.effort_options ?? null
+    if (effOpts && effOpts.length > 0) {
+        const existingEff = config.defaults.efforts[name] ?? config.defaults.effort
+        const staleValue = existingEff && !effOpts.includes(existingEff) ? existingEff : null
+        const fallback = existingEff && effOpts.includes(existingEff) ? existingEff : NATIVE_DEFAULT_LABEL
+        effort = { kind: 'ask', options: [NATIVE_DEFAULT_LABEL, ...effOpts], fallback, staleValue }
+    } else {
+        effort = { kind: 'skip' }
+    }
+    return { model, effort }
+}
+
+/** Answers are validated against reality: enabled ⊆ detected, default ∈ enabled, every model ∈ its own endpoint's models and only where the endpoint can take one headless, every effort ∈ its own endpoint's declared options. */
 export function buildInitConfig(info: InitEndpointInfo[], answers: InitAnswers): InitConfig {
     const detected = new Map(info.filter((e) => e.detected).map((e) => [e.name, e]))
     for (const name of answers.enabled) {
         if (!detected.has(name)) throw new Error(`cannot enable endpoint "${name}": not detected on this machine`)
     }
-    if (answers.default_endpoint !== null) {
-        if (!answers.enabled.includes(answers.default_endpoint)) {
-            throw new Error(`default endpoint "${answers.default_endpoint}" is not enabled`)
-        }
-        if (answers.default_model !== null) {
-            const ep = info.find((e) => e.name === answers.default_endpoint)
-            const aliases = new Set((ep?.models ?? []).map((m) => m.alias))
-            if (aliases.size > 0 && !aliases.has(answers.default_model)) {
-                throw new Error(`model "${answers.default_model}" is not a discovered alias of ${answers.default_endpoint}`)
-            }
-        }
+    if (answers.default_endpoint !== null && !answers.enabled.includes(answers.default_endpoint)) {
+        throw new Error(`default endpoint "${answers.default_endpoint}" is not enabled`)
     }
     const models: Record<string, string> = {}
     for (const [name, model] of Object.entries(answers.models ?? {})) {
@@ -90,6 +128,9 @@ export function buildInitConfig(info: InitEndpointInfo[], answers: InitAnswers):
         }
         const ep = detected.get(name)
         if (!ep) throw new Error(`default model given for endpoint "${name}": not detected on this machine`)
+        if (ep.model_selectable === false) {
+            throw new Error(`endpoint "${name}" has no headless model selection (its native config owns the model)`)
+        }
         const aliases = new Set(ep.models.map((m) => m.alias))
         if (aliases.size > 0 && !aliases.has(model)) {
             throw new Error(`model "${model}" is not a discovered alias of ${name}`)
@@ -113,7 +154,10 @@ export function buildInitConfig(info: InitEndpointInfo[], answers: InitAnswers):
     }
     return {
         endpoints: { enabled: answers.enabled },
-        defaults: { endpoint: answers.default_endpoint, model: answers.default_endpoint ? answers.default_model : null, models, efforts },
+        // note: InitConfig.defaults has no `model` — the wizard never writes the
+        // global defaults.model (it poisons endpoints with no headless model
+        // selection); per-endpoint defaults.models only.
+        defaults: { endpoint: answers.default_endpoint, models, efforts },
     }
 }
 
@@ -121,7 +165,6 @@ export function buildInitConfig(info: InitEndpointInfo[], answers: InitAnswers):
 export function initConfigToJson(cfg: InitConfig): Record<string, unknown> {
     const defaults: Record<string, unknown> = {}
     if (cfg.defaults.endpoint !== null) defaults.endpoint = cfg.defaults.endpoint
-    if (cfg.defaults.model !== null) defaults.model = cfg.defaults.model
     if (Object.keys(cfg.defaults.models ?? {}).length > 0) defaults.models = cfg.defaults.models
     if (Object.keys(cfg.defaults.efforts ?? {}).length > 0) defaults.efforts = cfg.defaults.efforts
     const out: Record<string, unknown> = { endpoints: { enabled: cfg.endpoints.enabled } }
@@ -132,17 +175,21 @@ export function initConfigToJson(cfg: InitConfig): Record<string, unknown> {
 /**
  * Merge fresh init answers into an existing config.json document: only
  * endpoints.enabled and the wizard-owned defaults keys (endpoint, model,
- * models, effort, efforts) are replaced; machine-local keys the wizard does
- * not own (endpoints.overrides, dataDir, defaults.run_timeout_sec, ...)
- * survive a re-init verbatim.
+ * models, efforts) are replaced; machine-local keys the wizard does not own
+ * (endpoints.overrides, dataDir, defaults.run_timeout_sec, the hand-set
+ * global defaults.effort, ...) survive a re-init verbatim.
  */
 export function mergeInitConfig(existing: Record<string, unknown>, cfg: InitConfig): Record<string, unknown> {
     const fresh = initConfigToJson(cfg)
     const existingEndpoints = (existing.endpoints ?? {}) as Record<string, unknown>
     const existingDefaults = { ...((existing.defaults ?? {}) as Record<string, unknown>) }
-    // wizard-owned keys are cleared first so a stale one never survives an
-    // answer that no longer sets it (e.g. re-init onto a model-less endpoint)
-    for (const key of ['endpoint', 'model', 'models', 'effort', 'efforts']) delete existingDefaults[key]
+    // wizard-owned keys (WIZARD_DEFAULTS_KEYS, single source in config.ts) are
+    // cleared first so a stale one never survives an answer that no longer sets
+    // it. 'model' is cleared deliberately: the wizard never writes the global
+    // model (it poisons endpoints with no headless model selection), so re-init
+    // self-heals a hand-set value. The global 'effort' is NOT wizard-owned
+    // (no global effort menu) and survives like the machine-local keys.
+    for (const key of WIZARD_DEFAULTS_KEYS) delete existingDefaults[key]
     const mergedDefaults = { ...existingDefaults, ...((fresh.defaults ?? {}) as Record<string, unknown>) }
     const out: Record<string, unknown> = {
         ...existing,

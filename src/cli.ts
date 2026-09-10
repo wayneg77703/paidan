@@ -23,7 +23,9 @@ import {
     buildInitConfig,
     initConfigToJson,
     mergeInitConfig,
+    NATIVE_DEFAULT_LABEL,
     parseMultiSelect,
+    planEndpointDefaultQuestions,
     type InitAnswers,
     type InitEndpointInfo,
 } from './engine/init-plan.js'
@@ -37,7 +39,7 @@ import {
 } from './engine/skill-install.js'
 import { reconcileRuns, pidAlive } from './engine/reconcile.js'
 import { verifyProcessIdentity } from './engine/process-identity.js'
-import { ModelsCache, type CachedModels } from './engine/models-cache.js'
+import { ModelsCache } from './engine/models-cache.js'
 import { RunStore, writeJsonAtomic } from './engine/run-store.js'
 import { isTerminal, transitionRecord } from './engine/state-machine.js'
 import { launchWorker, terminateEndpointTree } from './engine/supervisor.js'
@@ -54,10 +56,10 @@ import {
 import {
     checkPermission,
     DEFAULT_PROMPT_MAX_BYTES,
+    discoverAndCacheModels,
     EndpointRegistry,
-    filterSafeAliases,
-    loadParserModule,
     ManifestError,
+    refreshManifestVerifiedAt,
     measureArgvBytes,
     pickProbePreset,
     parseCapabilitySet,
@@ -66,7 +68,7 @@ import {
     type EndpointManifest,
 } from './endpoints/registry.js'
 import { checkNativePreflight } from './endpoints/native-preflight.js'
-import { finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn, type SpawnPlan } from './endpoints/spawn.js'
+import { cmdShimRefusalMessage, finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn, type SpawnPlan } from './endpoints/spawn.js'
 import { checkboxSelect, menuSelect, PromptAbort, rawSelectSupported } from './tty-select.js'
 
 const execFileAsync = promisify(execFile)
@@ -147,12 +149,26 @@ function resolveEffort(ctx: Ctx, endpoint: string, flag: string | undefined): st
     return flag ?? ctx.config.defaults.efforts[endpoint] ?? ctx.config.defaults.effort
 }
 
+/** Submit-time model gate: a resolved model an endpoint cannot take headless is a config error, named with the repair. */
+function checkModelSupported(manifest: EndpointManifest, model: string | null): void {
+    if (model === null || manifest.command.model_arg !== undefined) return
+    throw new CliError(
+        'MODEL_UNSUPPORTED',
+        `endpoint "${manifest.name}" has no headless model selection (its native config owns the model), but "${model}" is configured.` +
+        ` Repair: remove defaults.models.${manifest.name} / defaults.model from config.json, or don't pass --model.`,
+    )
+}
+
 /** Submit-time effort gate with dedicated codes; buildArgs re-validates the same rules for non-CLI callers. */
 function checkEffort(manifest: EndpointManifest, effort: string | null): void {
     if (effort === null) return
     const block = manifest.effort
     if (!block) {
-        throw new CliError('EFFORT_UNSUPPORTED', `endpoint "${manifest.name}" has no effort selection (native default only)`)
+        throw new CliError(
+            'EFFORT_UNSUPPORTED',
+            `endpoint "${manifest.name}" has no effort selection (native default only).` +
+            ` Repair: remove defaults.efforts.${manifest.name} / defaults.effort from config.json, or don't pass --effort.`,
+        )
     }
     if (!block.options.includes(effort)) {
         throw new CliError('EFFORT_INVALID', `effort "${effort}" is not one of ${manifest.name}'s options: ${block.options.join(', ')}`)
@@ -176,6 +192,17 @@ async function waitForTerminal(
 
 function resultOrNull(store: RunStore, runId: string): Promise<RunResult | null> {
     return store.readResult(runId).catch(() => null)
+}
+
+/** Launch the detached worker for a run, with the store-backed pid liveness probe (shared by run and probe). */
+function launchWorkerFor(ctx: Ctx, runId: string): Promise<number> {
+    return launchWorker(runId, {
+        dataDir: ctx.dataDir,
+        readWorkerPid: async () => {
+            const s = await ctx.store.readState(runId)
+            return s ? { workerPid: s.worker?.pid ?? null, terminal: isTerminal(s.state) } : null
+        },
+    })
 }
 
 // ---------- verbs ----------
@@ -255,6 +282,9 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
         }
     }
     const cwd = nodePath.resolve(values.cwd ?? process.cwd())
+    const addDirs = (values['add-dir'] ?? []).map((d) => nodePath.resolve(d))
+    const model = resolveModel(ctx, manifest.name, values.model)
+    checkModelSupported(manifest, model)
     const effort = resolveEffort(ctx, manifest.name, values.effort)
     checkEffort(manifest, effort)
     let runTimeoutFlag: number | null = null
@@ -275,14 +305,7 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
         const configBin = ctx.config.endpoints.overrides[manifest.name]?.bin ?? null
         const spawnRes = await planEndpointSpawn(manifest, { configBin })
         if (spawnRes.plan?.resolved_from === 'cmd-shim') {
-            throw new CliError(
-                'SPAWN_UNSUPPORTED',
-                `endpoint "${manifest.name}" resolves to a cmd.exe shim (${spawnRes.plan.endpoint_bin ?? manifest.detect.bin});` +
-                ' cmd.exe shims cannot preserve argument boundaries for argv prompt delivery' +
-                ' (npm .cmd shims pass %* and re-split on spaces — task text can smuggle flags).' +
-                ` Repair: set endpoints.overrides.${manifest.name}.bin in config.json to the native binary or JS bundle,` +
-                ' or install the agent so a native exe is on PATH.',
-            )
+            throw new CliError('SPAWN_UNSUPPORTED', cmdShimRefusalMessage(manifest.name, spawnRes.plan.endpoint_bin ?? manifest.detect.bin))
         }
         const hint = withPromptCwdHint(manifest, taskText, cwd)
         const draft: RunRequest = {
@@ -291,11 +314,11 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
             fingerprint: '',
             endpoint: manifest.name,
             cwd,
-            add_dirs: (values['add-dir'] ?? []).map((d) => nodePath.resolve(d)),
+            add_dirs: addDirs,
             task_file: taskFile,
             task_text: hint.text,
             mode,
-            model: resolveModel(ctx, manifest.name, values.model),
+            model,
             effort,
             resume_session: values.resume ?? null,
             run_timeout_sec: runTimeoutSec,
@@ -326,11 +349,11 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
     const created = await ctx.store.create({
         endpoint: manifest.name,
         cwd,
-        add_dirs: (values['add-dir'] ?? []).map((d) => nodePath.resolve(d)),
+        add_dirs: addDirs,
         task_file: taskFile,
         task_text: taskText,
         mode,
-        model: resolveModel(ctx, manifest.name, values.model),
+        model,
         effort,
         resume_session: values.resume ?? null,
         run_timeout_sec: runTimeoutSec,
@@ -338,6 +361,17 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
         warnings: perm.warnings,
     })
     if (!created.created) {
+        // fingerprint dedup does not cover model/effort: a re-submit that only
+        // changes those returns the original run — say so out loud
+        const mismatch: string[] = []
+        if ((created.request.model ?? null) !== model) mismatch.push(`model (run has ${JSON.stringify(created.request.model ?? null)})`)
+        if ((created.request.effort ?? null) !== effort) mismatch.push(`effort (run has ${JSON.stringify(created.request.effort ?? null)})`)
+        if (mismatch.length > 0) {
+            created.request.warnings.push(
+                `dedup matched an existing run with different ${mismatch.join(' and ')};` +
+                ' the original values apply (fingerprint = endpoint+cwd+task+mode)',
+            )
+        }
         emitOk({
             run_id: created.request.run_id,
             endpoint: manifest.name,
@@ -350,13 +384,7 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
     }
     const runId = created.request.run_id
     try {
-        await launchWorker(runId, {
-            dataDir: ctx.dataDir,
-            readWorkerPid: async () => {
-                const s = await ctx.store.readState(runId)
-                return s ? { workerPid: s.worker?.pid ?? null, terminal: isTerminal(s.state) } : null
-            },
-        })
+        await launchWorkerFor(ctx, runId)
     } catch (err) {
         throw new CliError(
             'WORKER_SPAWN_FAILED',
@@ -552,35 +580,17 @@ async function verbModels(ctx: Ctx, args: string[]): Promise<void> {
     }
 
     try {
-        const parserMod = manifest.models?.parse ? await loadParserModule(manifest.parser) : null
-        if (!parserMod?.discoverModels) {
-            throw new CliError('UNSUPPORTED', `endpoint "${manifest.name}" has no model discovery in v0`)
-        }
-        const discovered = await parserMod.discoverModels()
-        // aliases are substitution candidates for {model}; keep only argv-safe ones
-        const safe = filterSafeAliases(discovered.models)
-        const models = safe.models
-        const notes = safe.dropped > 0
-            ? [...discovered.notes, `dropped ${safe.dropped} alias(es) failing the argv-safety charset`]
-            : discovered.notes
         const spawnRes = await planEndpointSpawn(manifest, {
             configBin: ctx.config.endpoints.overrides[manifest.name]?.bin ?? null,
         })
         const version = spawnRes.plan ? await detectVersion(manifest, spawnRes.plan) : null
-        const entry: CachedModels = {
-            schema_version: '1.0.0',
-            endpoint: manifest.name,
-            fetched_at: new Date().toISOString(),
-            version,
-            source: manifest.models?.parse ?? 'parser-module',
-            models,
-            notes: [...notes, 'selection = --model ?? config.json defaults.models[endpoint] ?? defaults.model; no cross-connection fallback'],
+        const entry = await discoverAndCacheModels(manifest, cache, version)
+        if (!entry) {
+            throw new CliError('UNSUPPORTED', `endpoint "${manifest.name}" has no model discovery in v0`)
         }
-        // success writes through, even with an empty model list (no borrowing)
-        await cache.write(entry)
         emitOk({
             endpoint: manifest.name,
-            models,
+            models: entry.models,
             source: entry.source,
             fetched_at: entry.fetched_at,
             version,
@@ -714,6 +724,10 @@ async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
         const ownCwd = opts.cwd === undefined
         const cwd = opts.cwd ?? (await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-probe-')))
         try {
+            const probeModel = resolveModel(ctx, manifest.name, undefined)
+            checkModelSupported(manifest, probeModel)
+            const probeEffort = resolveEffort(ctx, manifest.name, undefined)
+            checkEffort(manifest, probeEffort)
             const created = await ctx.store.create({
                 endpoint: manifest.name,
                 cwd,
@@ -721,21 +735,15 @@ async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
                 task_file: null,
                 task_text: task,
                 mode: opts.mode ?? probePreset ?? 'workspace-write',
-                model: resolveModel(ctx, manifest.name, undefined),
-                effort: resolveEffort(ctx, manifest.name, undefined),
+                model: probeModel,
+                effort: probeEffort,
                 resume_session: opts.resume ?? null,
                 run_timeout_sec: effectiveRunTimeoutSec(null, ctx.config),
                 deliverables: opts.deliverables ?? [],
                 warnings: [],
             })
             const runId = created.request.run_id
-            await launchWorker(runId, {
-                dataDir: ctx.dataDir,
-                readWorkerPid: async () => {
-                    const s = await ctx.store.readState(runId)
-                    return s ? { workerPid: s.worker?.pid ?? null, terminal: isTerminal(s.state) } : null
-                },
-            })
+            await launchWorkerFor(ctx, runId)
             const state = await waitForTerminal(ctx.store, runId, timeoutSec)
             const result = await resultOrNull(ctx.store, runId)
             return { runId, state, result }
@@ -869,33 +877,6 @@ async function detectVersion(manifest: EndpointManifest, plan: SpawnPlan): Promi
     }
 }
 
-async function refreshManifestVerifiedAt(
-    dir: string,
-    name: string,
-    probes: Array<{ name: string; verdict: string }>,
-    today: string,
-    version: string | null,
-): Promise<void> {
-    const file = nodePath.join(dir, `${name}.json`)
-    const parsed = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>
-    const permission = parsed.permission as Record<string, Record<string, unknown>> | undefined
-    const passed = new Set(probes.filter((p) => p.verdict === 'pass').map((p) => p.name))
-    if (passed.has('P1-write') && permission) {
-        for (const cap of ['fs.read', 'fs.write']) {
-            if (permission[cap] && typeof permission[cap] === 'object') {
-                permission[cap].verified_at = today
-                if (version) permission[cap].version = version
-            }
-        }
-    }
-    if (passed.has('P3-resume') && parsed.resume && typeof parsed.resume === 'object') {
-        const resume = parsed.resume as Record<string, unknown>
-        resume.verified_at = today
-        if (version) resume.version = version
-    }
-    await writeJsonAtomic(file, parsed)
-}
-
 // ---------- init wizard ----------
 
 /** Package root (dist/cli.js -> ..); the skill payload and host registry live under skills/. */
@@ -924,37 +905,18 @@ async function gatherEndpointInfo(ctx: Ctx): Promise<InitEndpointInfo[]> {
         const detected = spawnRes.plan !== null
         const version = spawnRes.plan ? await detectVersion(manifest, spawnRes.plan) : null
         let models: InitEndpointInfo['models'] = []
-        if (manifest.models?.parse) {
-            try {
-                const mod = await loadParserModule(manifest.parser)
-                if (mod.discoverModels) {
-                    const found = await mod.discoverModels()
-                    // aliases are substitution candidates for {model}; keep only argv-safe ones
-                    const safe = filterSafeAliases(found.models)
-                    models = safe.models
-                    await cache.write({
-                        schema_version: '1.0.0',
-                        endpoint: manifest.name,
-                        fetched_at: new Date().toISOString(),
-                        version,
-                        source: manifest.models.parse,
-                        models: safe.models,
-                        notes: safe.dropped > 0
-                            ? [...found.notes, `dropped ${safe.dropped} alias(es) failing the argv-safety charset`]
-                            : found.notes,
-                    })
-                }
-            } catch {
-                // discovery is best-effort during init; notes stay with the cache
-            }
+        try {
+            models = (await discoverAndCacheModels(manifest, cache, version))?.models ?? []
+        } catch {
+            // discovery is best-effort during init; notes stay with the cache
         }
         out.push({
             name: manifest.name,
             detected,
             version,
             models,
+            model_selectable: manifest.command.model_arg !== undefined,
             effort_options: manifest.effort?.options ?? null,
-            effort_default: manifest.effort?.default ?? null,
             repair: detected ? null : (spawnRes.notes.at(-1) ?? null),
         })
     }
@@ -980,7 +942,7 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
                 config_exists: existsSync(ctx.configPath),
                 endpoints: info,
                 hosts: hostInfo.hosts.map((h) => ({ name: h.name, detected: h.detected, skills_dir: h.skills_dir })),
-                non_interactive: 'paidan init --yes enables all detected endpoints, picks the first discovered model as default, and installs the paidan skill into every detected host',
+                non_interactive: 'paidan init --yes enables all detected endpoints, sets each headless-selectable endpoint\'s first discovered model as its default (native effort everywhere), and installs the paidan skill into every detected host',
             },
         }) + '\n')
         return 1
@@ -1009,8 +971,10 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
         // one cheap insurance copy before overwrite
         await fs.copyFile(ctx.configPath, `${ctx.configPath}.bak-${Date.now()}`).catch(() => {})
     }
-    // re-init merges: the wizard owns only endpoints.enabled + defaults; machine-local
-    // keys it does not own (endpoints.overrides, dataDir, run_timeout_sec, ...) survive
+    // re-init merges: the wizard owns endpoints.enabled + the wizard-owned
+    // defaults keys (endpoint/model/models/efforts); machine-local keys
+    // it does not own (endpoints.overrides, dataDir, defaults.run_timeout_sec,
+    // the hand-set global defaults.effort, ...) survive
     let existingRaw: Record<string, unknown> = {}
     if (existsSync(ctx.configPath)) {
         existingRaw = JSON.parse(await fs.readFile(ctx.configPath, 'utf8')) as Record<string, unknown>
@@ -1073,43 +1037,48 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config
         enabled = picked.map((i) => (detectedEps[i] as InitEndpointInfo).name)
     }
     let defaultEndpoint: string | null = null
-    let defaultModel: string | null = null
     const models: Record<string, string | null> = {}
     const efforts: Record<string, string | null> = {}
     if (enabled.length > 0) {
         defaultEndpoint = enabled[await menuSelect('Default endpoint', enabled.map((name) => ({ label: name })), enabled.indexOf(config.defaults.endpoint ?? ''))] as string
-        // every enabled endpoint gets its own default model and effort
+        // every enabled endpoint gets its own default model and effort — the
+        // decision plan is shared (init-plan), this shell only renders it
         for (const name of enabled) {
-            const epInfo = info.find((e) => e.name === name)
-            const found = epInfo?.models ?? []
-            const existing = config.defaults.models[name] ?? (name === config.defaults.endpoint ? config.defaults.model : null)
-            if (found.length === 0) {
+            const epInfo = info.find((e) => e.name === name) as InitEndpointInfo
+            const q = planEndpointDefaultQuestions(epInfo, config)
+            if (q.model.kind === 'skip-no-selection') {
+                process.stderr.write(`(no headless model selection for ${name}; its native config owns the model)\n`)
+            } else if (q.model.kind === 'skip-none') {
                 process.stderr.write(`(no discovered models for ${name}; native default will be used)\n`)
-            } else if (found.length === 1) {
-                models[name] = (found[0] as { alias: string }).alias
-                process.stderr.write(`Default model for ${name}: ${(found[0] as { alias: string }).alias} (only discovered model)\n`)
+            } else if (q.model.kind === 'auto') {
+                models[name] = q.model.value
+                process.stderr.write(`Default model for ${name}: ${q.model.value} (only discovered model)\n`)
             } else {
                 const idx = await menuSelect(
                     `Default model for ${name}`,
-                    found.map((m) => ({ label: m.alias, hint: m.connection ?? undefined })),
-                    found.findIndex((m) => m.alias === existing),
+                    q.model.options.map((alias) => ({
+                        label: alias,
+                        hint: epInfo.models.find((m) => m.alias === alias)?.connection ?? undefined,
+                    })),
+                    q.model.options.indexOf(q.model.fallback),
                 )
-                models[name] = (found[idx] as { alias: string }).alias
+                models[name] = q.model.options[idx] as string
             }
-            const effOpts = epInfo?.effort_options ?? null
-            if (effOpts && effOpts.length > 0) {
-                const existingEff = config.defaults.efforts[name] ?? config.defaults.effort
+            if (q.effort.kind === 'skip') {
+                process.stderr.write(`(no effort selection for ${name}; native default)\n`)
+            } else {
+                if (q.effort.staleValue) {
+                    process.stderr.write(`(configured effort "${q.effort.staleValue}" for ${name} is no longer in its options; it will be replaced unless you pick one)\n`)
+                }
                 const idx = await menuSelect(
                     `Default effort for ${name}`,
-                    [{ label: '(native default)' }, ...effOpts.map((o) => ({ label: o }))],
-                    existingEff ? effOpts.indexOf(existingEff) + 1 : 0,
+                    q.effort.options.map((o) => ({ label: o })),
+                    q.effort.options.indexOf(q.effort.fallback),
                 )
-                if (idx > 0) efforts[name] = effOpts[idx - 1] as string
-            } else {
-                process.stderr.write(`(no effort selection for ${name}; native default)\n`)
+                const choice = q.effort.options[idx] as string
+                if (choice !== NATIVE_DEFAULT_LABEL) efforts[name] = choice
             }
         }
-        defaultModel = models[defaultEndpoint] ?? null
     }
     const skillHosts: string[] = []
     const detectedHosts = hosts.filter((h) => h.detected)
@@ -1124,7 +1093,7 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config
         )
         skillHosts.push(...picked.map((i) => (detectedHosts[i] as HostInfo).name))
     }
-    return { enabled, default_endpoint: defaultEndpoint, default_model: defaultModel, models, efforts, skill_hosts: skillHosts }
+    return { enabled, default_endpoint: defaultEndpoint, models, efforts, skill_hosts: skillHosts }
 }
 
 /** Line-based fallback for when stderr is not a TTY (raw-mode widgets need it). */
@@ -1151,38 +1120,36 @@ async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[], confi
             enabled = picked.map((i) => (detectedEps[i] as InitEndpointInfo).name)
         }
         let defaultEndpoint: string | null = null
-        let defaultModel: string | null = null
         const models: Record<string, string | null> = {}
         const efforts: Record<string, string | null> = {}
         if (enabled.length > 0) {
             const preDefault = config.defaults.endpoint && enabled.includes(config.defaults.endpoint) ? config.defaults.endpoint : (enabled[0] as string)
             defaultEndpoint = await pickOne(rl, 'Default endpoint', enabled, preDefault)
-            // every enabled endpoint gets its own default model and effort
+            // every enabled endpoint gets its own default model and effort — the
+            // decision plan is shared (init-plan), this shell only renders it
             for (const name of enabled) {
-                const epInfo = info.find((e) => e.name === name)
-                const found = epInfo?.models ?? []
-                const aliases = found.map((m) => m.alias)
-                const existing = config.defaults.models[name] ?? (name === config.defaults.endpoint ? config.defaults.model : null)
-                if (aliases.length === 0) {
+                const epInfo = info.find((e) => e.name === name) as InitEndpointInfo
+                const q = planEndpointDefaultQuestions(epInfo, config)
+                if (q.model.kind === 'skip-no-selection') {
+                    process.stderr.write(`(no headless model selection for ${name}; its native config owns the model)\n`)
+                } else if (q.model.kind === 'skip-none') {
                     process.stderr.write(`(no discovered models for ${name}; native default will be used)\n`)
-                } else if (aliases.length === 1) {
-                    models[name] = aliases[0] as string
-                    process.stderr.write(`Default model for ${name}: ${aliases[0] as string} (only discovered model)\n`)
+                } else if (q.model.kind === 'auto') {
+                    models[name] = q.model.value
+                    process.stderr.write(`Default model for ${name}: ${q.model.value} (only discovered model)\n`)
                 } else {
-                    const fallback = existing && aliases.includes(existing) ? existing : (aliases[0] as string)
-                    models[name] = await pickOne(rl, `Default model for ${name}`, aliases, fallback)
+                    models[name] = await pickOne(rl, `Default model for ${name}`, q.model.options, q.model.fallback)
                 }
-                const effOpts = epInfo?.effort_options ?? null
-                if (effOpts && effOpts.length > 0) {
-                    const existingEff = config.defaults.efforts[name] ?? config.defaults.effort
-                    const fallback = existingEff && effOpts.includes(existingEff) ? existingEff : '(native default)'
-                    const choice = await pickOne(rl, `Default effort for ${name}`, ['(native default)', ...effOpts], fallback)
-                    if (choice !== '(native default)') efforts[name] = choice
-                } else {
+                if (q.effort.kind === 'skip') {
                     process.stderr.write(`(no effort selection for ${name}; native default)\n`)
+                } else {
+                    if (q.effort.staleValue) {
+                        process.stderr.write(`(configured effort "${q.effort.staleValue}" for ${name} is no longer in its options; it will be replaced unless you pick one)\n`)
+                    }
+                    const choice = await pickOne(rl, `Default effort for ${name}`, q.effort.options, q.effort.fallback)
+                    if (choice !== NATIVE_DEFAULT_LABEL) efforts[name] = choice
                 }
             }
-            defaultModel = models[defaultEndpoint] ?? null
         }
         const skillHosts: string[] = []
         const detectedHosts = hosts.filter((h) => h.detected)
@@ -1194,7 +1161,7 @@ async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[], confi
             const picked = await pickMulti(rl, 'Install skill into hosts', detectedHosts.length)
             skillHosts.push(...picked.map((i) => (detectedHosts[i] as HostInfo).name))
         }
-        return { enabled, default_endpoint: defaultEndpoint, default_model: defaultModel, models, efforts, skill_hosts: skillHosts }
+        return { enabled, default_endpoint: defaultEndpoint, models, efforts, skill_hosts: skillHosts }
     } finally {
         rl.close()
     }

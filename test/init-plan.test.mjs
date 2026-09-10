@@ -1,5 +1,8 @@
 // init wizard logic (engine/init-plan.ts) + CLI shell behavior:
 // non-TTY refusal envelope and --yes non-interactive mode (isolated PAIDAN_HOME).
+// NOTE: this file also carries CLI-level integration cases (init --yes writes
+// config.json, skill install into fixture hosts) — keep them here as the
+// wizard's regression net.
 
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
@@ -29,7 +32,6 @@ test('buildInitConfig: per-endpoint efforts are validated against declared optio
     const ok = buildInitConfig(INFO, {
         enabled: ['claude-code', 'codex'],
         default_endpoint: 'codex',
-        default_model: 'gpt-5',
         models: { codex: 'gpt-5' },
         efforts: { 'claude-code': 'high' },
         skill_hosts: [],
@@ -37,41 +39,39 @@ test('buildInitConfig: per-endpoint efforts are validated against declared optio
     assert.deepEqual(ok.defaults.efforts, { 'claude-code': 'high' })
     // not enabled -> rejected
     assert.throws(
-        () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', default_model: 'gpt-5', efforts: { 'claude-code': 'high' } }),
+        () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', efforts: { 'claude-code': 'high' } }),
         /not enabled/,
     )
     // endpoint without declared options -> rejected
     assert.throws(
-        () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', default_model: 'gpt-5', efforts: { codex: 'high' } }),
+        () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', efforts: { codex: 'high' } }),
         /has no effort selection/,
     )
     // value outside options -> rejected
     assert.throws(
-        () => buildInitConfig(INFO, { enabled: ['claude-code'], default_endpoint: 'claude-code', default_model: null, efforts: { 'claude-code': 'ultra' } }),
+        () => buildInitConfig(INFO, { enabled: ['claude-code'], default_endpoint: 'claude-code', efforts: { 'claude-code': 'ultra' } }),
         /not one of claude-code's options/,
     )
     // native default (null entry) passes and emits nothing
     const native = buildInitConfig(INFO, {
         enabled: ['claude-code'],
         default_endpoint: 'claude-code',
-        default_model: null,
         efforts: { 'claude-code': null },
         skill_hosts: [],
     })
     assert.deepEqual(native.defaults.efforts, {})
-    // merge treats effort/efforts as wizard-owned: stale values are cleared
+    // merge: global effort survives (not wizard-owned), per-endpoint efforts are cleared
     const merged = mergeInitConfig(
         { endpoints: { enabled: ['claude-code'] }, defaults: { endpoint: 'claude-code', effort: 'high', efforts: { 'claude-code': 'max' }, run_timeout_sec: 900 } },
         { endpoints: { enabled: ['claude-code'] }, defaults: { endpoint: 'claude-code', model: null, models: {}, efforts: {} } },
     )
-    assert.deepEqual(merged.defaults, { endpoint: 'claude-code', run_timeout_sec: 900 })
+    assert.deepEqual(merged.defaults, { endpoint: 'claude-code', effort: 'high', run_timeout_sec: 900 })
 })
 
 test('--yes defaults: enable detected only, default = first detected; per-endpoint first models', () => {
     const answers = defaultInitAnswers(INFO)
     assert.deepEqual(answers.enabled, ['claude-code', 'codex', 'kimi-code'])
     assert.equal(answers.default_endpoint, 'claude-code')
-    assert.equal(answers.default_model, null) // claude has no discovered models
     assert.deepEqual(answers.models, { codex: 'gpt-5', 'kimi-code': 'kimi-for-coding/k3' })
     const cfg = buildInitConfig(INFO, answers)
     assert.deepEqual(cfg.endpoints.enabled, ['claude-code', 'codex', 'kimi-code'])
@@ -83,26 +83,31 @@ test('--yes defaults: enable detected only, default = first detected; per-endpoi
 })
 
 test('buildInitConfig rejects impossible answers', () => {
-    assert.throws(() => buildInitConfig(INFO, { enabled: ['nope'], default_endpoint: null, default_model: null }), /not detected/)
-    assert.throws(() => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'kimi-code', default_model: null }), /not enabled/)
+    assert.throws(() => buildInitConfig(INFO, { enabled: ['nope'], default_endpoint: null }), /not detected/)
+    assert.throws(() => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'kimi-code' }), /not enabled/)
+    // per-endpoint models: must target an enabled, headless-selectable endpoint and its own aliases
     assert.throws(
-        () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', default_model: 'not-a-model' }),
-        /not a discovered alias/,
-    )
-    // per-endpoint models: must target an enabled endpoint and its own aliases
-    assert.throws(
-        () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', default_model: 'gpt-5', models: { 'kimi-code': 'k3' } }),
+        () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', models: { 'kimi-code': 'k3' } }),
         /not enabled/,
     )
     assert.throws(
-        () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', default_model: 'gpt-5', models: { codex: 'kimi-for-coding/k3' } }),
+        () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', models: { codex: 'kimi-for-coding/k3' } }),
         /not a discovered alias of codex/,
     )
+    // endpoints with no headless model selection reject a default model outright
+    const withZcode = INFO.map((e) => (e.name === 'zcode' ? { ...e, detected: true, model_selectable: false, models: [{ alias: 'glm-x', connection: null }] } : e))
+    assert.throws(
+        () => buildInitConfig(withZcode, { enabled: ['zcode'], default_endpoint: 'zcode', models: { zcode: 'glm-x' } }),
+        /no headless model selection/,
+    )
+    // the wizard never writes the global defaults.model (it would poison endpoints
+    // with no headless model selection); per-endpoint models only
+    const noGlobal = buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', models: { codex: 'gpt-5' }, skill_hosts: [] })
+    assert.ok(!('model' in noGlobal.defaults))
     // null entries mean "native default" and pass validation
     const cfg = buildInitConfig(INFO, {
         enabled: ['codex', 'kimi-code'],
         default_endpoint: 'codex',
-        default_model: 'gpt-5',
         models: { codex: 'gpt-5', 'kimi-code': null },
         skill_hosts: [],
     })
@@ -196,12 +201,12 @@ test('mergeInitConfig preserves machine-local keys across re-init', async () => 
     }
     const merged = mergeInitConfig(existing, {
         endpoints: { enabled: ['kimi-code', 'codex'] },
-        defaults: { endpoint: 'codex', model: 'gpt-5.3-codex-spark', models: {} },
+        defaults: { endpoint: 'codex', models: { codex: 'gpt-5.3-codex-spark' }, efforts: {} },
     })
     assert.deepEqual(merged.endpoints.enabled, ['kimi-code', 'codex'])
     assert.deepEqual(merged.endpoints.overrides, { zcode: { bin: 'E:/custom/zcode.cjs' } })
     // wizard-owned defaults keys are replaced, machine-local keys inside defaults survive
-    assert.deepEqual(merged.defaults, { endpoint: 'codex', model: 'gpt-5.3-codex-spark', run_timeout_sec: 600 })
+    assert.deepEqual(merged.defaults, { endpoint: 'codex', models: { codex: 'gpt-5.3-codex-spark' }, run_timeout_sec: 600 })
     assert.equal(merged.run_timeout_sec, 600)
 })
 
@@ -250,11 +255,11 @@ test('CLI init --yes twice preserves endpoints.overrides written between runs', 
 
 test('buildInitConfig refuses to enable an endpoint that was not detected', () => {
     assert.throws(
-        () => buildInitConfig(INFO, { enabled: ['zcode'], default_endpoint: null, default_model: null, skill_hosts: [] }),
+        () => buildInitConfig(INFO, { enabled: ['zcode'], default_endpoint: null, skill_hosts: [] }),
         /not detected/,
     )
     // detected subset still validates
-    const cfg = buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', default_model: 'gpt-5', skill_hosts: [] })
+    const cfg = buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', skill_hosts: [] })
     assert.deepEqual(cfg.endpoints.enabled, ['codex'])
 })
 
