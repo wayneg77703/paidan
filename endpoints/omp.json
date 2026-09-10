@@ -59,13 +59,13 @@
       "status": "supported",
       "via": "read-tier tools (read/grep/glob) are auto-approved under every approval-mode including always-ask; live read-only run answered from cwd files 2026-09-10",
       "verified_at": "2026-09-10",
-      "version": "18.1.14"
+      "version": "18.1.16"
     },
     "fs.write": {
       "status": "supported",
       "via": "--approval-mode write auto-approves the write tier (live 2026-09-10: write-tier run created w-check.txt, exit 0); yolo also covers it",
       "verified_at": "2026-09-10",
-      "version": "18.1.14"
+      "version": "18.1.16"
     },
     "shell.exec": {
       "status": "supported",
@@ -106,7 +106,7 @@
     "cross_process": true,
     "notes": "-r accepts a session id prefix or full UUID (omp --help 18.1.14: 'Resume a session (by ID prefix, path, or picker if omitted)'); live-verified 2026-09-10 with the paidan argv shape (-p --mode json --approval-mode yolo -r <full-uuid>): same session id echoed, earlier context recalled exactly. The session store is per-cwd (~/.omp/agent/sessions/<encoded-cwd>/<ts>_<uuid>.jsonl): resume MUST use the same cwd as the source run — cross-project resume on a non-TTY errors out (probe report 2026-09-09 section 2). Resume restores model/thinking/service tier/MCP/tools/system prompt while the model is still listed (same source); paidan re-passes --approval-mode/--tools per the run's preset and --model when set (the suite adapter's buildInvocation likewise re-passes the full flag frame plus -r). Resume ABORTS an in-flight run on the same session (same source): never resume a session another process is actively running. -c/--continue (latest session for this cwd) is intentionally unused — paidan resumes only explicit handles. Session handle source: the stream's single session event id (full UUID; a prefix also works for -r).",
     "verified_at": "2026-09-10",
-    "version": "18.1.14"
+    "version": "18.1.16"
   },
   "models": {
     "command": [

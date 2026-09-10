@@ -73,13 +73,13 @@
       "status": "supported",
       "via": "codex sandbox tiers read-only/workspace-write both allow local reads (live read-only run answered from cwd files, 2026-09-10)",
       "verified_at": "2026-09-10",
-      "version": "0.153.3"
+      "version": "0.154.0"
     },
     "fs.write": {
       "status": "supported",
       "via": "workspace-write sandbox tier via `-s workspace-write` (live write verified 2026-09-10; read-only tier truly blocks writes — file absent, denial on stderr)",
       "verified_at": "2026-09-10",
-      "version": "0.153.3"
+      "version": "0.154.0"
     },
     "shell.exec": {
       "status": "supported",
@@ -114,8 +114,8 @@
     "kind": "flag",
     "cross_process": true,
     "notes": "codex NATIVELY supports cross-process resume: `codex exec resume <session-id>` (session UUID from thread.started thread_id; restores cwd/approval/sandbox tier since 0.148/0.149; probe report 2026-09-09 §2 P3 passed via the suite). Expressible via command.resume_argv (engine support added 2026-09-10): the resume template replaces command.argv entirely so the fresh-run mode_args (which bake in the `exec` subcommand and -s) never corrupt the resume shape. Resume runs execute in the same cwd as the source run (session restores its original cwd; --all disables cwd filtering).",
-    "verified_at": "2026-09-09",
-    "version": "0.153.3"
+    "verified_at": "2026-09-10",
+    "version": "0.154.0"
   },
   "models": {
     "command": null,

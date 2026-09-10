@@ -62,13 +62,13 @@
       "status": "supported",
       "via": "all agents (incl. read-only plan) read the cwd natively; live runs 2026-09-10 answered from the working directory",
       "verified_at": "2026-09-10",
-      "version": "1.18.29"
+      "version": "1.18.30"
     },
     "fs.write": {
       "status": "supported",
       "via": "build agent: edit permission defaults allow inside the project dir (live 2026-09-10: `run --agent build --format json` created probe-write.txt exactly, exit 0); plan agent denies writes (read-only)",
       "verified_at": "2026-09-10",
-      "version": "1.18.29"
+      "version": "1.18.30"
     },
     "shell.exec": {
       "status": "supported",
@@ -108,7 +108,7 @@
     "cross_process": true,
     "notes": "Session handle = the ses_... sessionID carried on every stdout event (single unique value per stream; drift degrades the parser). `opencode run --session <ses_id>` continues cross-process (run --help 1.18.29); live-verified 2026-09-10: fresh run remembered a codename, second process `--session <ses> --model <m> run --agent build --format json` recalled it with the same sessionID. Sessions are per-project: resume with the same cwd as the source run. --model/--agent may be re-passed on continue (suite adapter always re-passes them; official inheritance semantics unspecified). `--continue` (latest session) is implicit and never used by paidan; --fork exists but is not used (paidan continues in place, same as the suite). Concurrency on one session handle: officially unspecified.",
     "verified_at": "2026-09-10",
-    "version": "1.18.29"
+    "version": "1.18.30"
   },
   "models": {
     "command": [
