@@ -13,9 +13,9 @@ import { RunStore, sha256Hex } from './engine/run-store.js'
 import { isTerminal, transitionRecord } from './engine/state-machine.js'
 import { terminateEndpointTree } from './engine/supervisor.js'
 import { judgeTerminal } from './engine/terminal.js'
-import type { DeliverableEvidence, RunEvent, RunResult, TerminalState } from './engine/types.js'
+import type { DeliverableEvidence, RunEvent, RunRequest, RunResult, TerminalState } from './engine/types.js'
 import { UsageDb } from './engine/usage-db.js'
-import { buildArgs, buildEnv, createEndpointParser, EndpointRegistry, ManifestError } from './endpoints/registry.js'
+import { buildArgs, buildEnv, createEndpointParser, EndpointRegistry, ManifestError, withPromptCwdHint } from './endpoints/registry.js'
 import { finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn } from './endpoints/spawn.js'
 
 const STDERR_CAPTURE_LIMIT = 256 * 1024
@@ -98,10 +98,16 @@ async function main(): Promise<number> {
         }
         const plan = spawnRes.plan
 
-        let args = buildArgs(manifest, request)
+        // request.json keeps the original task text; only the delivered copy carries the hint
+        const hint = withPromptCwdHint(manifest, request.task_text, request.cwd)
+        const delivery: RunRequest = hint.appended ? { ...request, task_text: hint.text } : request
+        if (hint.appended) {
+            await store.appendEvent(runId, { ts: now(), type: 'note', note: 'prompt_cwd_hint appended' })
+        }
+        let args = buildArgs(manifest, delivery)
         if (manifest.command.prompt_delivery === 'file') {
             const promptPath = nodePath.join(store.runDir(runId), 'prompt.txt')
-            await fs.writeFile(promptPath, request.task_text, 'utf8')
+            await fs.writeFile(promptPath, delivery.task_text, 'utf8')
             args = args.map((a) => a.replaceAll('{prompt_file}', promptPath))
         }
         let spawnArgs: string[]
@@ -121,7 +127,7 @@ async function main(): Promise<number> {
             windowsVerbatimArguments: needsVerbatimArgs(plan),
         })
         if (useStdin && child.stdin) {
-            child.stdin.write(request.task_text)
+            child.stdin.write(delivery.task_text)
             child.stdin.end()
         }
         if (child.pid === undefined) {
@@ -133,7 +139,7 @@ async function main(): Promise<number> {
             worker: { pid: process.pid, started_at: current?.worker?.started_at ?? now(), endpoint_pid: endpointPid },
         })
         const argvForLog = [plan.endpoint_bin ?? plan.command, ...args].map((a) =>
-            a === request.task_text ? `[prompt sha256:${sha256Hex(a).slice(0, 12)}]` : a,
+            a === delivery.task_text ? `[prompt sha256:${sha256Hex(a).slice(0, 12)}]` : a,
         )
         await store.appendEvent(runId, redactor.redactJson({
             ts: now(), type: 'spawn', pid: endpointPid, argv: argvForLog, cwd: request.cwd, resolved_from: plan.resolved_from,

@@ -100,6 +100,7 @@ Judgment order (terminal.js): deliverable evidence → endpoint refusal signals 
     "resume_argv": ["{bin}", "exec", "resume", "{session}", "-"],
     "mode_args": { "workspace-write": ["--some-native-write-flag"] },
     "cwd_arg": null,
+    "prompt_cwd_hint": true,
     "env": { "KIMI_CODE_HOME": "{native_default}" }
   },
   "permission": {
@@ -123,6 +124,8 @@ Judgment order (terminal.js): deliverable evidence → endpoint refusal signals 
 `command.mode_args` splices per-preset flag fragments (e.g. codex `-s read-only` vs `-s workspace-write`, claude `--permission-mode …`); a manifest that declares `mode_args` must cover every preset its permission map marks supported. `command.cwd_arg` (optional array, `{cwd}` → run cwd) is consumed by buildArgs and spliced **after** `mode_args`, so a subcommand riding in `mode_args` (codex `exec`, opencode `run`) stays left of the cwd flag — the "security-critical flags never land in the wrong position" invariant. `command.mode_env` (optional per-preset env map, e.g. dsh `read-only` → `DSH_PERMISSION_MODE=read-only`) is spliced by buildEnv on top of static `env`; partial coverage is normal (only tiers needing an env override declare it).
 
 `command.env` value sentinels: `"{native_default}"` = never set the variable; `"{unset}"` = delete the inherited variable (opencode strips `PWD`, which otherwise re-anchors the project root). Keys starting with `_` are documentation and are never exported to the child process.
+
+`command.prompt_cwd_hint` (optional boolean, default false): the worker appends one fixed line — `The current working directory is <request.cwd>. Use absolute paths for all file operations.` — to the delivered task text on every delivery form (argv/stdin/file) and equally on resume (`resume_argv` `{prompt}`). `request.json` stores the original text and the fingerprint is unchanged (cwd is already inside it); `events.jsonl` records a `prompt_cwd_hint appended` note. For endpoints whose tools ignore the spawn cwd — agy 1.2.0 `run_command` starts in its own scratch dir, so deliverables only land reliably via absolute paths.
 
 `command.resume_argv` (optional) fully replaces `command.argv` on resume runs: `{session}`/`{prompt}` are substituted and `model_arg` is still spliced, but `mode_args`/`add_dir_arg` are not (a resumed session restores its original tier — e.g. `codex exec resume` accepts neither `-s` nor `--add-dir`). Without `resume_argv`, `resume.args` flags are spliced and `mode_args` are re-passed (claude semantics). `detect.npm_exe`/`npm_entry` are package-relative paths under the npm install tree (never machine-absolute), used when PATH exposes only a script shim. `detect.known_paths` (optional) lists well-known per-platform install locations as templates that must start with `{home}` or `{env:NAME}` and contain no `..`; unset env tokens skip the candidate, and a hit resolves with `resolved_from: "known-path"`.
 

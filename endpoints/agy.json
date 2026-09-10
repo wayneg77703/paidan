@@ -51,7 +51,8 @@
       "_env_notes": "AGY_CLI_DISABLE_AUTO_UPDATE=true is pinned (same as the suite): without it, headless runs still touched the native updater (update_status.json flipped to 'Update failed, please install from website', last_check.timestamp refreshed; live 2026-09-10) even though antigravity-cli/settings.json carries update.mode=none; with the env var, updater files stay untouched (verified). HOME/USERPROFILE are NOT set: agy runs against the user's real ~/.gemini (zero-copy native home; Google OAuth lives in the OS keyring, unaffected by HOME isolation). Paidan never stages or copies agy config/credentials."
     },
     "verified_at": "2026-09-10",
-    "version": "1.1.28"
+    "version": "1.1.28",
+    "prompt_cwd_hint": true
   },
   "permission": {
     "fs.read": {
@@ -61,16 +62,16 @@
       "version": "1.2.0"
     },
     "fs.write": {
-      "status": "supported",
-      "via": "workspace-write = --mode accept-edits + native allow write_file(*). CALIBRATED 2026-09-10 on agy 1.2.0 (self-update from 1.1.28): scoped write_file allow rules stopped matching on Windows — 4-variant live test (unscoped glob / drive-letter glob / exact dir / drive-letter exact) showed ONLY unscoped write_file(*) authorizes writes; 1.1.28-era scoped rules (drive-stripped official normalization) are inert under 1.2.0, same limitation class as read_file. Consequence: on Windows 1.2.0 write governance is whole-disk within accept-edits; the old out-of-scope auto-deny (t3-out) is no longer expressible via scoped rules. read-only = --mode plan still auto-denies all writes headless even rule-free (t2a; P2 probe pass on 1.2.0). deny write_file(*) beats accept-edits auto-approval (t2b, 1.1.28). Native settings are user-maintained; paidan never writes them (invariant 4).",
+      "status": "soft",
+      "via": "RECALIBRATED 2026-09-10 on agy 1.2.0 (supersedes the 1.1.28 scoped-rule story AND the same-day intermediate 'unscoped-only' note, which was mechanism-confounded): write_to_file is artifact-confined upstream — a non-artifact target dies at permission conversion ('not a valid artifact path; artifacts must be in brain/<conversation>/', invalid_args) BEFORE any write_file rule is evaluated, so write_file allow rules are irrelevant to deliverable writes. Deliverables actually ride run_command (shell), gated by command(*); and run_command starts in agy's own scratch dir (~/.gemini/antigravity-cli/scratch, pwd-verified), NOT the run cwd — models must be told absolute paths (paidan injects a cwd hint into the task text, command.prompt_cwd_hint). SOFT because deliverable writes are shell-ridden and not path-governed; reliability depends on the model using absolute paths. read-only (--mode plan) produced no writes (P2 pass on 1.2.0). Evidence: 4-variant rule matrix + 3 raw-stream direct runs + brain transcript of run_20260910_ca92a967.",
       "verified_at": "2026-09-10",
       "version": "1.2.0"
     },
     "shell.exec": {
       "status": "soft",
-      "via": "run_command auto-approved headless when the native allow rule command(*) is present (verified 2026-09-10: output captured, DONE, no denial); without the rule it auto-denies (request-review + no prompt channel). SOFT because shell is NOT path-confined without --sandbox: on 2026-09-10 a workspace-write run's shell leg wrote a duplicate deliverable into the paidan CALLER's cwd (outside the run cwd; run_command starts from an inherited PWD-ish directory on Windows — the suite documented this as 'run_command may start from C:\\'); write_file tool writes stay natively path-governed, shell writes are not. Under --sandbox run_command demands an unsandboxed grant headless runs can never receive — paidan does not pass --sandbox.",
+      "via": "run_command auto-approved headless when the native allow rule command(*) is present (verified 2026-09-10: output captured, DONE, no denial); without the rule it auto-denies (request-review + no prompt channel). SOFT because shell is NOT path-confined without --sandbox: on 2026-09-10 a workspace-write run's shell leg wrote a duplicate deliverable into the paidan CALLER's cwd (outside the run cwd; run_command starts from an inherited PWD-ish directory on Windows — the suite documented this as 'run_command may start from C:\\'); write_file tool writes stay natively path-governed, shell writes are not. Under --sandbox run_command demands an unsandboxed grant headless runs can never receive — paidan does not pass --sandbox. 1.2.0 addendum: run_command starts in ~/.gemini/antigravity-cli/scratch regardless of the spawn cwd (pwd-verified 2026-09-10); 'context canceled' tool errors observed at turn end on otherwise-successful runs are upstream shell-leg teardown noise (1.1.28 and 1.2.0 alike).",
       "verified_at": "2026-09-10",
-      "version": "1.1.28"
+      "version": "1.2.0"
     },
     "net.fetch": {
       "status": "unverified",
@@ -87,7 +88,7 @@
       "workspace-write": "supported",
       "unattended": "supported"
     },
-    "presets_notes": "Mapping: read-only=--mode plan (write/exec auto-deny headless, in-band evidence), workspace-write=--mode accept-edits (+ native allow write_file(*)), unattended=--mode accept-edits (+ native command(*) rule for shell.exec). Enforcement is carried by the user's native ~/.gemini/antigravity-cli/settings.json permissions — user-maintained native config that paidan never writes. Windows 1.2.0 caveat: write_file rules only match unscoped (*), so workspace-write is whole-disk within the file tool (scoped path rules are inert); run_command shell egress was never path-confined (shell.exec=soft). Unattended submits therefore carry a soft warning.",
+    "presets_notes": "Mapping: read-only=--mode plan, workspace-write=--mode accept-edits, unattended=--mode accept-edits (+ native command(*) rule). 1.2.0 reality: write_to_file is artifact-confined upstream (brain/<conversation>/ only); deliverable writes ride run_command (shell, command(*) gated) whose start dir is agy's scratch (~/.gemini/antigravity-cli/scratch), so paidan appends a cwd/absolute-path hint to the task text (prompt_cwd_hint). Native settings are user-maintained; paidan never writes them (invariant 4). shell.exec and (since 1.2.0) fs.write are both soft: the shell leg is neither path-anchored nor path-governed; unattended submits carry a soft warning.",
     "denial_evidence": {
       "status": "supported",
       "via": "three in-band channels, all live-verified 2026-09-10: (1) result.denied_actions[] e.g. {action:write_file,display_name:WriteToFile} for ask/plan auto-denies; (2) step_update state=ERROR tool_info.error TOOL_ERROR messages ('permission check failed ... Matches user-configured deny rule', 'user denied permission ...') for explicit rules; (3) stderr 'jetski: no output produced — a tool required the \"<action>\" permission ... auto-denied'. Empty response with SUCCESS is a legal terminal shape and stays evidence, not automatic failure",

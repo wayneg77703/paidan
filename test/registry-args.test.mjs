@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildArgs, pickProbePreset } from '../dist/endpoints/registry.js'
+import { buildArgs, pickProbePreset, withPromptCwdHint } from '../dist/endpoints/registry.js'
 
 function codexLike() {
     return {
@@ -121,4 +121,41 @@ test('cwd_arg omitted from resume_argv rendering (resume restores the session cw
         request({ resume_session: 'thread-123' }),
     )
     assert.ok(!args.includes('--dir'))
+})
+
+function kimiLike(hint) {
+    return {
+        schema_version: '1.0.0',
+        name: 'kimi-code',
+        detect: { bin: 'kimi' },
+        command: {
+            argv: ['{bin}', '-p', '{prompt}', '--output-format', 'stream-json'],
+            prompt_delivery: 'argv',
+            ...(hint === undefined ? {} : { prompt_cwd_hint: hint }),
+        },
+        permission: { presets: { 'workspace-write': 'supported' } },
+        resume: { kind: 'flag', args: ['-S', '{session}'] },
+        parser: 'kimi-print',
+    }
+}
+
+test('prompt_cwd_hint appends the fixed cwd line; default is off', () => {
+    const on = withPromptCwdHint(kimiLike(true), 'do the thing', 'D:/w')
+    assert.equal(on.appended, true)
+    assert.equal(
+        on.text,
+        'do the thing\n\nThe current working directory is D:/w. Use absolute paths for all file operations.',
+    )
+    assert.deepEqual(withPromptCwdHint(kimiLike(undefined), 'do the thing', 'D:/w'), { text: 'do the thing', appended: false })
+    assert.deepEqual(withPromptCwdHint(kimiLike(false), 'do the thing', 'D:/w'), { text: 'do the thing', appended: false })
+})
+
+test('prompt_cwd_hint text flows into argv on fresh and resume deliveries alike', () => {
+    const manifest = kimiLike(true)
+    const hint = withPromptCwdHint(manifest, request().task_text, 'D:/w')
+    const delivery = { ...request(), task_text: hint.text }
+    const fresh = buildArgs(manifest, delivery)
+    assert.ok(fresh.includes(hint.text), 'fresh argv carries the hinted text')
+    const resumed = buildArgs(manifest, { ...delivery, resume_session: 'session_abc' })
+    assert.deepEqual(resumed, ['-S', 'session_abc', '-p', hint.text, '--output-format', 'stream-json'])
 })

@@ -6,6 +6,7 @@
 
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
@@ -114,7 +115,7 @@ test('kimi endpoint-ledger: stream-less usage is adopted from the native session
             schema_version: '1.0.0',
             name: 'fake-kimi',
             detect: { bin: fakeBin },
-            command: { argv: ['{bin}', '-p', '{prompt}'], prompt_delivery: 'argv' },
+            command: { argv: ['{bin}', '-p', '{prompt}'], prompt_delivery: 'argv', prompt_cwd_hint: true },
             permission: {
                 'fs.read': { status: 'supported' },
                 'fs.write': { status: 'supported' },
@@ -145,6 +146,19 @@ test('kimi endpoint-ledger: stream-less usage is adopted from the native session
         const row = db.prepare('SELECT source, input_tokens, output_tokens FROM usage WHERE run_id = ?').get(run.run_id)
         db.close()
         assert.deepEqual({ ...row }, { source: 'endpoint-ledger', input_tokens: 230, output_tokens: 11 })
+
+        // prompt_cwd_hint: request.json keeps the original text; events record the append
+        const runDir = nodePath.join(root, 'data', 'runs', run.run_id)
+        const reqJson = JSON.parse(await fs.readFile(nodePath.join(runDir, 'request.json'), 'utf8'))
+        assert.equal(reqJson.task_text, 'x')
+        const events = (await fs.readFile(nodePath.join(runDir, 'events.jsonl'), 'utf8'))
+            .trim().split('\n').map((l) => JSON.parse(l))
+        assert.ok(events.some((e) => e.type === 'note' && e.note === 'prompt_cwd_hint appended'), 'hint note event')
+        const spawnEvent = events.find((e) => e.type === 'spawn')
+        const hintedSha = createHash('sha256')
+            .update(`x\n\nThe current working directory is ${work}. Use absolute paths for all file operations.`)
+            .digest('hex').slice(0, 12)
+        assert.ok(spawnEvent.argv.some((a) => a === `[prompt sha256:${hintedSha}]`), 'hinted prompt is what argv carried')
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }

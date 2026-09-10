@@ -45,6 +45,8 @@ export interface EndpointManifest {
         model_arg?: string[]
         add_dir_arg?: string[]
         env?: Record<string, string>
+        /** append a fixed cwd/absolute-paths hint line to the delivered task text (all delivery forms, resume included) */
+        prompt_cwd_hint?: boolean
     }
     permission: {
         presets: Partial<Record<PermissionPreset, CapabilityStatus['status']>>
@@ -186,6 +188,9 @@ export function validateManifest(value: unknown, source: string): EndpointManife
     if (command.prompt_delivery === 'argv' && !command.argv.includes('{prompt}')) {
         throw new ManifestError(`${source}: command.argv must contain {prompt} when prompt_delivery is argv`)
     }
+    if (command.prompt_cwd_hint !== undefined && typeof command.prompt_cwd_hint !== 'boolean') {
+        throw new ManifestError(`${source}: command.prompt_cwd_hint must be a boolean`)
+    }
     for (const key of ['model_arg', 'add_dir_arg'] as const) {
         if (command[key] !== undefined && !isStringArray(command[key])) {
             throw new ManifestError(`${source}: command.${key} must be a string array`)
@@ -306,6 +311,24 @@ export function checkPermission(manifest: EndpointManifest, mode: PermissionPres
         }
     }
     return { ok: missing.length === 0, missing, warnings }
+}
+
+/**
+ * command.prompt_cwd_hint: endpoints whose tools ignore the spawn cwd (agy
+ * 1.2.0 run_command starts in its own scratch dir) need the cwd stated inside
+ * the task text. The delivered text gets one fixed line appended; request.json
+ * keeps the original (the fingerprint already pins cwd).
+ */
+export function withPromptCwdHint(
+    manifest: EndpointManifest,
+    taskText: string,
+    cwd: string,
+): { text: string; appended: boolean } {
+    if (manifest.command.prompt_cwd_hint !== true) return { text: taskText, appended: false }
+    return {
+        text: `${taskText}\n\nThe current working directory is ${cwd}. Use absolute paths for all file operations.`,
+        appended: true,
+    }
 }
 
 /**
