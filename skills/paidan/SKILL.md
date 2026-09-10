@@ -48,8 +48,8 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 - 永不把凭据搬进任务正文、参数或配置；端点用各 agent 自己的原生配置与调用方 env 运行，paidan 不代理、不暂存凭据。
 - paidan 不写任何 agent 的原生 home；缺原生设置时按 `doctor` 的 `repair_hint` 报告，不擅自改用户配置。
 - 模型/连接失败（配额、认证等）不跨连接 fallback：拒绝并报告，不自动换模型、换端点、升权。
-- 不传 `--model` 时生效值为 `--model ?? config defaults.models.<端点> ?? defaults.model ?? 端点原生默认`（不跨连接）；需要核对时用 `paidan models --endpoint <name>` 查询。
+- 不传 `--model` 时生效值为 `--model ?? config defaults.models.<端点> ?? defaults.model ?? 端点原生默认`（不跨连接）；dsh/zcode 这类端点没有 headless 模型选择（模型归其原生配置管），给它们配了模型会被 `MODEL_UNSUPPORTED` 拒绝。需要核对时用 `paidan models --endpoint <name>` 查询。
 
 ## 错误处理
 
-先读 `error.code` + `error.message`，不只看进程退出码。常见码：`ENDPOINT_UNKNOWN` / `ENDPOINT_DISABLED`（未在 config 启用）/ `PERMISSION_UNSUPPORTED` / `MODE_INVALID` / `TASK_REQUIRED` / `TASK_TOO_LONG`（argv 投递超长度上限，改 --task-file 或换 stdin 投递端点）/ `SPAWN_UNSUPPORTED`（端点只能经 cmd shim 解析且为 argv 投递，按 message 设 overrides.bin 或装原生 exe）/ `EFFORT_UNSUPPORTED`（端点无 effort 选择）/ `EFFORT_INVALID`（档位不在端点 options 内）/ `RUN_NOT_FOUND` / `CONFIG_INVALID` / `WORKER_SPAWN_FAILED`。端点相关问题先 `paidan doctor` 看探测状态与 `repair_hint`，再决定报告或修复。
+先读 `error.code` + `error.message`，不只看进程退出码。常见码：`ENDPOINT_UNKNOWN` / `ENDPOINT_DISABLED`（未在 config 启用）/ `PERMISSION_UNSUPPORTED` / `MODE_INVALID` / `TASK_REQUIRED` / `TASK_TOO_LONG`（argv 投递超长度上限，改 --task-file 或换 stdin 投递端点）/ `SPAWN_UNSUPPORTED`（端点只能经 cmd shim 解析且为 argv 投递，按 message 设 overrides.bin 或装原生 exe）/ `MODEL_UNSUPPORTED`（端点无 headless 模型选择却配了模型，按 message 从 config 删除对应键）/ `EFFORT_UNSUPPORTED`（端点无 effort 选择）/ `EFFORT_INVALID`（档位不在端点 options 内）/ `RUN_NOT_FOUND` / `CONFIG_INVALID` / `WORKER_SPAWN_FAILED`。端点相关问题先 `paidan doctor` 看探测状态与 `repair_hint`，再决定报告或修复。

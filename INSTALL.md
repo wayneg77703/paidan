@@ -27,6 +27,10 @@ Once the package is published to npm, the one-liner is `npm i -g paidan`
 (no clone needed). Verify: `paidan doctor` prints a JSON envelope with
 `ok: true`.
 
+On a machine with **zero** agents detected, `init` still succeeds and writes
+an empty `endpoints.enabled` — install any agent and re-run `paidan init`;
+re-init merges and never destroys machine-local keys.
+
 ## 2. Read the machine state (no TTY needed)
 
 Run `paidan init` **without answering it** (or simply note that your stdin is
@@ -37,7 +41,12 @@ the same envelope, hands you the full machine survey:
 {
   "state": {
     "config_path": "...", "config_exists": false,
-    "endpoints": [ { "name": "kimi-code", "detected": true, "version": "0.42.0", "models": [...] } ],
+    "endpoints": [ {
+      "name": "kimi-code", "detected": true, "version": "0.42.0",
+      "models": [...],
+      "model_selectable": true,
+      "effort_options": null
+    } ],
     "hosts":     [ { "name": "kimi-code", "detected": true, "skills_dir": "..." } ]
   }
 }
@@ -47,6 +56,11 @@ the same envelope, hands you the full machine survey:
   installed in an unusual location → set `endpoints.overrides.<name>.bin`).
 - `endpoints[].models` is the discovered model list per endpoint (also
   refreshable later with `paidan models --endpoint <name> --refresh`).
+- `endpoints[].model_selectable === false` means the endpoint takes no model
+  on its headless command line (its native config owns the model — dsh,
+  zcode): do NOT offer or write a default model for it — a configured model
+  is refused at submit with `MODEL_UNSUPPORTED`.
+- `endpoints[].effort_options` is the declared effort list, or `null`.
 
 ## 3. Ask the user the option set
 
@@ -54,8 +68,10 @@ Present these five questions (this is exactly the interactive wizard's set):
 
 1. **Enable which endpoints?** (from `state.endpoints` where `detected`)
 2. **Default endpoint?** (used when `paidan run` gets no `--endpoint`)
-3. **Default model per enabled endpoint?** (from that endpoint's `models`
-   list; an endpoint with no discovered models keeps its native default)
+3. **Default model per enabled endpoint that is `model_selectable`?** (from
+   that endpoint's `models` list; an endpoint with no discovered models keeps
+   its native default; `model_selectable === false` endpoints are skipped —
+   their native config owns the model)
 4. **Default effort per enabled endpoint?** — only where the endpoint
    declares an effort block: today **claude-code** (low/medium/high/xhigh/max),
    **omp** (off/minimal/low/medium/high/xhigh/max/auto), **opencode**
@@ -77,9 +93,10 @@ paidan init        # checkboxes: space toggles, enter confirms
 **B. Agent-driven (you collected the answers in step 3)**
 
 ```bash
-paidan init --yes  # enables all detected endpoints, first model per endpoint,
-                   # native effort everywhere, installs the skill into all
-                   # detected hosts — a sane baseline you now adjust
+paidan init --yes  # enables all detected endpoints, first discovered model per
+                   # model_selectable endpoint, native effort everywhere,
+                   # installs the skill into all detected hosts — a sane
+                   # baseline you now adjust
 ```
 
 Then edit the machine config (`state.config_path`; `%APPDATA%\paidan\config.json`
@@ -94,7 +111,6 @@ answers. The wizard-owned keys are:
   },
   "defaults": {
     "endpoint": "kimi-code",
-    "model": null,
     "models": { "kimi-code": "kimi-code/k3", "codex": "gpt-6-astra" },
     "effort": null,
     "efforts": { "omp": "high", "claude-code": "medium" },
@@ -112,10 +128,16 @@ Key rules (violations are hard errors with the key named):
   JS bundle for an endpoint detection cannot find (custom drives, profile
   layouts). Machine paths live **only** here, never in the repo.
 - `defaults.endpoint` must be in `enabled`. `defaults.models.<name>` must be
-  one of that endpoint's discovered aliases. `defaults.efforts.<name>` must
-  be one of that endpoint's declared effort `options` (see step 3.4).
+  one of that endpoint's discovered aliases **and only valid for
+  `model_selectable` endpoints** — a configured model against an endpoint with
+  no headless model selection (dsh, zcode) is refused at submit with
+  `MODEL_UNSUPPORTED`. `defaults.efforts.<name>` must be one of that
+  endpoint's declared effort `options` (see step 3.4).
 - `defaults.model` / `defaults.effort` are global fallbacks; the per-endpoint
-  maps win. Leave a key out entirely for "native default".
+  maps win. **The wizard never writes `defaults.model`** (a global model
+  poisons endpoints that cannot take one headless; a hand-set value is
+  cleared on re-init deliberately) — prefer per-endpoint `defaults.models`
+  and leave the global out entirely for "native default".
 - Unknown keys are rejected (typos never pass silently); `__proto__` and
   friends are rejected as dynamic keys.
 
@@ -127,7 +149,7 @@ Resolution order at run time: `--model ?? defaults.models[ep] ?? defaults.model`
 ```bash
 paidan doctor    # every enabled endpoint should show resolved + a version;
                  # usage.db ok
-paidan run --endpoint <default> --cwd <scratch-dir> --task "reply with ok" --deliverable ok.txt || true
+paidan run --endpoint <default> --cwd <scratch-dir> --task "reply with ok" --deliverable ok.txt
 paidan get <run_id> --wait
 ```
 

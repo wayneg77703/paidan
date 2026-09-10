@@ -6,7 +6,7 @@ Delegate a task to an AI CLI agent already installed on your machine.
 Every task is a **durable run**: you can wait for it, cancel it, and verify its result after a reboot.
 
 ```
-npm i -g paidan
+npm i -g paidan                               # requires Node >= 24 (node:sqlite)
 paidan init                                   # first-run wizard (detect endpoints, pick defaults)
 paidan doctor                                 # what agents are installed and usable?
 paidan run --endpoint kimi-code --cwd . --task "summarize this repo"
@@ -22,7 +22,7 @@ All CLI output is JSON. There is no daemon: each run is supervised by a detached
 
 ## Host integration
 
-A host AI agent drives paidan through the CLI — no plugin system. The `paidan init` wizard is fully interactive: checkbox multi-selects (space toggles, enter confirms) for the endpoints to enable and for the hosts to receive the skill file ([`skills/paidan/SKILL.md`](skills/paidan/SKILL.md)), an arrow-key menu for the default endpoint, and a default-model pick for **every** enabled endpoint (stored as `defaults.models.<endpoint>`; `--yes` installs into all detected hosts and picks each endpoint's first discovered model). Every supported agent can be a host as well as a delegatee — [`skills/hosts.json`](skills/hosts.json) lists the user-scope skills directory of all eight agents (kimi-code, claude-code, zcode, codex, dsh, opencode, agy, omp). You can also copy it by hand (for Kimi Code: the user-scope `~/.kimi-code/skills/paidan/` directory). It teaches the seven verbs, the permission-preset semantics, and the evidence-first terminal judgment rules.
+A host AI agent drives paidan through the CLI — no plugin system. The `paidan init` wizard is fully interactive: checkbox multi-selects (space toggles, enter confirms) for the endpoints to enable and for the hosts to receive the skill file ([`skills/paidan/SKILL.md`](skills/paidan/SKILL.md)), an arrow-key menu for the default endpoint, and a default-model pick for every enabled endpoint **that can take a model headless** (endpoints like dsh/zcode, whose native config owns the model, are noted and skipped; selections are stored as `defaults.models.<endpoint>` — the wizard never writes a global `defaults.model`, which would poison those endpoints). Every supported agent can be a host as well as a delegatee — [`skills/hosts.json`](skills/hosts.json) lists the user-scope skills directory of all eight agents (kimi-code, claude-code, zcode, codex, dsh, opencode, agy, omp), and the payload's frontmatter is adapted to each host's spec. You can also copy it by hand (for Kimi Code: the user-scope `~/.kimi-code/skills/paidan/` directory). It teaches the seven verbs, the permission-preset semantics, and the evidence-first terminal judgment rules.
 
 ## What it is / is not
 
@@ -39,7 +39,7 @@ It deliberately does **not** do: orchestration / multi-agent pipelines, daemons,
 | Zone | Location | Contents |
 |---|---|---|
 | code repo | this repository | zero machine paths, zero credentials |
-| machine config | `%APPDATA%\paidan\config.json` | endpoints enabled, defaults (endpoint + per-endpoint default models), data dir override, per-endpoint bin overrides |
+| machine config | `%APPDATA%\paidan\config.json` | endpoints enabled, defaults (endpoint + per-endpoint default models and efforts, run timeout), data dir override, per-endpoint bin overrides |
 | data plane | `%APPDATA%\paidan\runs\` + `usage.db` + `models-cache/` | one directory per run (request/state/events.jsonl/result), usage accounting (provider / endpoint-ledger / unavailable, never fabricated), model discovery cache, TTL self-cleaning |
 
 Data never flows back into the code repo. Move the data dir anywhere via config; nothing is pinned to one machine.
