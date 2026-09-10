@@ -13,15 +13,23 @@ export interface PaidanConfig {
         /** per-endpoint machine overrides; bin may be a native binary or a JS bundle path */
         overrides: Record<string, { bin: string | null }>
     }
-    defaults: { endpoint: string | null; model: string | null }
+    defaults: { endpoint: string | null; model: string | null; run_timeout_sec: number | null }
     ttlDays: number
 }
 
 export const DEFAULT_TTL_DAYS = 30
 
+/** Engine wall-clock cap per run when neither the flag nor config overrides it. */
+export const DEFAULT_RUN_TIMEOUT_SEC = 1800
+
+/** Effective run timeout: CLI flag ?? config defaults.run_timeout_sec ?? 1800; 0 disables. */
+export function effectiveRunTimeoutSec(flag: number | null, config: PaidanConfig): number {
+    return flag ?? config.defaults.run_timeout_sec ?? DEFAULT_RUN_TIMEOUT_SEC
+}
+
 const TOP_LEVEL_KEYS = new Set(['dataDir', 'endpoints', 'defaults', 'ttlDays'])
 const ENDPOINTS_KEYS = new Set(['enabled', 'overrides'])
-const DEFAULTS_KEYS = new Set(['endpoint', 'model'])
+const DEFAULTS_KEYS = new Set(['endpoint', 'model', 'run_timeout_sec'])
 const OVERRIDE_KEYS = new Set(['bin'])
 
 /** Root for machine config and (by default) the data plane. PAIDAN_HOME overrides (tests, portability). */
@@ -48,7 +56,7 @@ function defaults(): PaidanConfig {
     return {
         dataDir: null,
         endpoints: { enabled: null, overrides: {} },
-        defaults: { endpoint: null, model: null },
+        defaults: { endpoint: null, model: null, run_timeout_sec: null },
         ttlDays: DEFAULT_TTL_DAYS,
     }
 }
@@ -142,6 +150,12 @@ export function loadConfig(configPath: string = defaultConfigPath()): PaidanConf
                 throw new Error('config key "defaults.model" must be a non-empty string')
             }
             out.defaults.model = df.model
+        }
+        if (df.run_timeout_sec !== undefined) {
+            if (typeof df.run_timeout_sec !== 'number' || !Number.isFinite(df.run_timeout_sec) || df.run_timeout_sec < 0) {
+                throw new Error('config key "defaults.run_timeout_sec" must be a non-negative number (0 disables)')
+            }
+            out.defaults.run_timeout_sec = df.run_timeout_sec
         }
     }
     return out

@@ -35,6 +35,8 @@ export interface RunRequest {
     model: string | null
     effort: string | null
     resume_session: string | null
+    /** effective engine wall-clock cap in seconds (0 = disabled); resolved at submit */
+    run_timeout_sec: number
     deliverables: DeliverableSpec[]
     created_at: string
     warnings: string[]

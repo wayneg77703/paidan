@@ -68,6 +68,8 @@ export interface EndpointManifest {
         background_native?: boolean
         cancel_native?: boolean
         completed_nonzero_exit?: boolean
+        /** documentation-only native total-time cap in seconds; null = none, the engine cap backstops */
+        max_run_sec?: number | null
     }
 }
 
@@ -248,6 +250,16 @@ export function validateManifest(value: unknown, source: string): EndpointManife
 
     if (typeof m.parser !== 'string' || m.parser.length === 0) {
         throw new ManifestError(`${source}: missing parser`)
+    }
+    if (m.capabilities !== undefined) {
+        if (!isPlainObject(m.capabilities)) {
+            throw new ManifestError(`${source}: capabilities must be an object`)
+        }
+        const maxRun = m.capabilities.max_run_sec
+        if (maxRun !== undefined && maxRun !== null
+            && (typeof maxRun !== 'number' || !Number.isFinite(maxRun) || maxRun <= 0)) {
+            throw new ManifestError(`${source}: capabilities.max_run_sec must be a positive number or null`)
+        }
     }
     return m as unknown as EndpointManifest
 }

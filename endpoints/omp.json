@@ -123,6 +123,7 @@
   "capabilities": {
     "background_native": false,
     "cancel_native": false,
-    "completed_nonzero_exit": false
+    "completed_nonzero_exit": false,
+    "max_run_sec": 1800
   }
 }

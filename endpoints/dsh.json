@@ -100,6 +100,7 @@
     "background_native": false,
     "cancel_native": false,
     "completed_nonzero_exit": false,
+    "max_run_sec": null,
     "capabilities_notes": "Stock headless waits only for the root Agent to become idle; subagent/shell background routes CAN outlive the root turn (why the suite ships the foreground-settlement patch). paidan does not inject that patch, so background_native is false and tasks that force background subagents may exit with descendants pending — keep tasks foreground-shaped."
   }
 }

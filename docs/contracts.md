@@ -31,12 +31,15 @@ Root: `<dataDir>/runs/<run_id>/` (default `<APPDATA>/paidan/runs`).
   "model": null,
   "effort": null,
   "resume_session": null,
+  "run_timeout_sec": 1800,
   "created_at": "ISO-8601",
   "warnings": ["permission:fs.read is soft on this endpoint, verified_at 2026-09-09"]
 }
 ```
 
 `mode` is one of the presets `read-only | workspace-write | unattended`, or an explicit capability set `{"fs.read": {"roots": [...]}, ...}`. Submit-time rule: any required capability mapped `unsupported` in the endpoint manifest → reject with an error naming the missing capability; `soft` → warning recorded in request.warnings.
+
+`run_timeout_sec` is the engine wall-clock cap for the run: the effective value is `--run-timeout` ?? config `defaults.run_timeout_sec` ?? 1800, resolved at submit and stored here; `0` disables the cap. On expiry the worker kills the endpoint tree through the cancel termination path and the terminal state is `failed` with an evidence note `run timeout after Ns`.
 
 ## 3. state.json
 
@@ -82,6 +85,7 @@ Judgment order (terminal.js): deliverable evidence → endpoint refusal signals 
 - Submit spawns a **detached worker** (`node dist/worker.js <run_id>`); the worker spawns the endpoint process and owns events/state/result. CLI never babysits.
 - Endpoint spawn resolution (Windows EINVAL-safe) is layered: machine-config override (`endpoints.overrides.<name>.bin`, may point at a JS bundle — spawned via `process.execPath`) → PATH scan (`.EXE` preferred over `.CMD` in one directory) → manifest npm layout (`detect.npm_exe` native binary preferred, then `detect.npm_entry` JS entry via node) under the shim's `node_modules` or the standard npm global roots → manifest well-known install locations (`detect.known_paths`, `{home}`/`{env:NAME}` templates so the repo stays free of machine-absolute literals) → last resort `cmd.exe /d /s /c` with caret-escaped verbatim argv (CR/LF and empty arguments are rejected outright). Doctor, probe and the worker share this one resolution path.
 - Cancel: explicit only. v0 transition: `taskkill /PID <pid> /T /F` on Windows, process-group kill elsewhere; Windows Job Object-based reaping is the planned replacement (documented gap, not a bug).
+- Run timeout: the worker enforces `request.run_timeout_sec` as a wall-clock cap on the endpoint process (0 = disabled); expiry reuses the cancel termination path and ends the run `failed` with the note `run timeout after Ns`.
 - Reconcile runs at CLI start: scan non-terminal states, worker pid dead → state `attention` with evidence note. Never auto-restart.
 
 ## 6. Endpoint manifest (`endpoints/<name>.json`)
@@ -115,9 +119,11 @@ Judgment order (terminal.js): deliverable evidence → endpoint refusal signals 
   "resume": { "kind": "flag", "args": ["--resume", "{session}"], "cross_process": true, "notes": "..." },
   "models": { "command": ["{bin}", "..."], "parse": "kimi-models", "connections": [] },
   "parser": "kimi-print",
-  "capabilities": { "background_native": false, "cancel_native": false }
+  "capabilities": { "background_native": false, "cancel_native": false, "max_run_sec": 1800 }
 }
 ```
+
+`capabilities.max_run_sec` (optional number|null) is documentation-only: the endpoint's own total-time cap (omp's native 30m → `1800`; dsh has none → `null`, the engine cap backstops). The enforcing timeout is always the engine's `run_timeout_sec` (§2).
 
 `status` ∈ `supported | soft | unsupported | unverified`. `soft` = endpoint claims it but enforcement is doubtful (e.g. intent-only modes); always surfaces as a submit warning.
 

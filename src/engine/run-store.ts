@@ -33,6 +33,7 @@ export interface CreateRunInput {
     model: string | null
     effort: string | null
     resume_session: string | null
+    run_timeout_sec: number
     deliverables: DeliverableSpec[]
     warnings: string[]
 }
@@ -181,6 +182,7 @@ export class RunStore {
             model: input.model,
             effort: input.effort,
             resume_session: input.resume_session,
+            run_timeout_sec: input.run_timeout_sec,
             deliverables: input.deliverables,
             created_at: now,
             warnings: input.warnings,

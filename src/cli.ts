@@ -13,6 +13,7 @@ import * as readline from 'node:readline/promises'
 import { promisify } from 'node:util'
 import {
     defaultConfigPath,
+    effectiveRunTimeoutSec,
     loadConfig,
     resolveDataDir,
     type PaidanConfig,
@@ -153,6 +154,7 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
             model: { type: 'string' },
             effort: { type: 'string' },
             resume: { type: 'string' },
+            'run-timeout': { type: 'string' },
             'add-dir': { type: 'string', multiple: true },
             deliverable: { type: 'string', multiple: true },
         },
@@ -178,6 +180,13 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
         )
     }
     const cwd = nodePath.resolve(values.cwd ?? process.cwd())
+    let runTimeoutFlag: number | null = null
+    if (values['run-timeout'] !== undefined) {
+        runTimeoutFlag = Number(values['run-timeout'])
+        if (!Number.isFinite(runTimeoutFlag) || runTimeoutFlag < 0) {
+            throw new CliError('ARGS_INVALID', '--run-timeout must be a non-negative number of seconds (0 disables)')
+        }
+    }
     const created = await ctx.store.create({
         endpoint: manifest.name,
         cwd,
@@ -188,6 +197,7 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
         model: values.model ?? ctx.config.defaults.model,
         effort: values.effort ?? null,
         resume_session: values.resume ?? null,
+        run_timeout_sec: effectiveRunTimeoutSec(runTimeoutFlag, ctx.config),
         deliverables: (values.deliverable ?? []).map((p) => ({ path: p, expected: null })),
         warnings: perm.warnings,
     })
@@ -544,6 +554,7 @@ async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
                 model: ctx.config.defaults.model,
                 effort: null,
                 resume_session: opts.resume ?? null,
+                run_timeout_sec: effectiveRunTimeoutSec(null, ctx.config),
                 deliverables: opts.deliverables ?? [],
                 warnings: [],
             })

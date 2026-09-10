@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import * as nodePath from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { loadConfig, resolveDataDir } from './engine/config.js'
+import { loadConfig, resolveDataDir, DEFAULT_RUN_TIMEOUT_SEC } from './engine/config.js'
 import { createRedactor } from './engine/redactor.js'
 import { RunStore, sha256Hex } from './engine/run-store.js'
 import { isTerminal, transitionRecord } from './engine/state-machine.js'
@@ -156,6 +156,25 @@ async function main(): Promise<number> {
             ts: now(), type: 'spawn', pid: endpointPid, argv: argvForLog, cwd: request.cwd, resolved_from: plan.resolved_from,
         }) as RunEvent)
 
+        // engine wall-clock cap: at the deadline kill the endpoint tree (same
+        // termination path as cancel); the judgment below is then forced to
+        // failed with a 'run timeout after Ns' note. 0 disables; pre-timeout
+        // requests (no field) fall back to the default.
+        const runTimeoutSec = request.run_timeout_sec ?? DEFAULT_RUN_TIMEOUT_SEC
+        let runTimedOut = false
+        const runTimer = runTimeoutSec > 0
+            ? setTimeout(() => {
+                runTimedOut = true
+                void (async () => {
+                    const term = await terminateEndpointTree(endpointPid)
+                    await store.appendEvent(runId, {
+                        ts: now(), type: 'run-timeout', pid: endpointPid, after_sec: runTimeoutSec,
+                        method: term.method, ok: term.ok,
+                    }).catch(() => {})
+                })()
+            }, runTimeoutSec * 1000)
+            : null
+
         const completion = new Promise<{ exitCode: number | null; signal: string | null }>((resolve) => {
             if (child.exitCode !== null || child.signalCode !== null) {
                 resolve({ exitCode: child.exitCode, signal: child.signalCode })
@@ -224,6 +243,7 @@ async function main(): Promise<number> {
         if (existsSync(store.cancelMarkerPath(runId))) startCancelKill()
 
         const { exitCode, signal } = await completion
+        if (runTimer) clearTimeout(runTimer)
         clearInterval(cancelWatcher)
         await Promise.all([stdoutDone, stderrDone])
 
@@ -275,6 +295,11 @@ async function main(): Promise<number> {
             parser: { type: manifest.parser, degraded: parsed.degraded },
             capabilities: { completed_nonzero_exit: manifest.capabilities?.completed_nonzero_exit },
         })
+        if (runTimedOut) {
+            // the wall-clock cap outranks whatever the process happened to report
+            judgment.state = 'failed'
+            judgment.notes.unshift(`run timeout after ${runTimeoutSec}s`)
+        }
         const notes = [...judgment.notes, ...parsed.warnings, ...usageNotes]
         await store.appendEvent(runId, redactor.redactJson({
             ts: now(), type: 'terminal', state: judgment.state, exit_code: exitCode, signal, notes,
