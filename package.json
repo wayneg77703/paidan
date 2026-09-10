@@ -13,7 +13,9 @@
     "dist",
     "endpoints",
     "docs",
-    "skills"
+    "skills",
+    "INSTALL.md",
+    "AGENTS.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -23,6 +25,20 @@
     "smoke": "node test/smoke.mjs"
   },
   "license": "MIT",
+  "author": "paidan contributors",
+  "keywords": [
+    "ai-agents",
+    "cli",
+    "delegate",
+    "dispatch",
+    "kimi-code",
+    "codex",
+    "claude-code",
+    "opencode",
+    "zcode",
+    "durable-runs",
+    "local-first"
+  ],
   "devDependencies": {
     "@types/node": "^24.13.4",
     "typescript": "^5.9.3"
