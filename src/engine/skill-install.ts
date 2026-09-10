@@ -13,6 +13,12 @@ export interface HostEntry {
     skills_dir: string
     verified_at?: string
     notes?: string
+    /**
+     * Frontmatter keys this host's skill spec allows, in order (e.g.
+     * ["name","description"]). Absent = the payload's full frontmatter is
+     * installed verbatim (kimi-code additionally reads `whenToUse`).
+     */
+    frontmatter_fields?: string[]
 }
 
 export interface HostRegistry {
@@ -30,6 +36,8 @@ export interface HostInfo {
     /** the target already holds a copy (any content) */
     installed: boolean
     notes?: string
+    /** frontmatter keys this host's spec allows; absent = payload verbatim */
+    frontmatter_fields?: string[]
 }
 
 export type SkillInstallStatus = 'created' | 'updated' | 'unchanged' | 'error'
@@ -90,6 +98,7 @@ export async function detectHosts(
             target,
             installed,
             ...(host.notes ? { notes: host.notes } : {}),
+            ...(host.frontmatter_fields ? { frontmatter_fields: host.frontmatter_fields } : {}),
         })
     }
     return out
@@ -110,11 +119,11 @@ export async function installSkill(
     host: HostInfo,
     sourcePath: string,
 ): Promise<SkillInstallResult> {
-    const source = await fs.readFile(sourcePath)
+    const payload = adaptSkillPayload(await fs.readFile(sourcePath, 'utf8'), host.frontmatter_fields)
     let status: SkillInstallStatus = 'created'
     try {
-        const existing = await fs.readFile(host.target)
-        if (existing.equals(source)) return { host: host.name, path: host.target, status: 'unchanged' }
+        const existing = await fs.readFile(host.target, 'utf8')
+        if (existing === payload) return { host: host.name, path: host.target, status: 'unchanged' }
         status = 'updated'
     } catch {
         // absent target -> created
@@ -124,7 +133,7 @@ export async function installSkill(
         nodePath.dirname(host.target),
         `.SKILL.md.${process.pid}.${Date.now()}.tmp`,
     )
-    await fs.writeFile(tmp, source)
+    await fs.writeFile(tmp, payload, 'utf8')
     try {
         await fs.rename(tmp, host.target)
     } catch (err) {
@@ -133,4 +142,32 @@ export async function installSkill(
         throw err
     }
     return { host: host.name, path: host.target, status }
+}
+
+/**
+ * Per-host frontmatter adaptation: each agent's skill spec allows a specific
+ * key set (kimi-code reads name/description/whenToUse; every other verified
+ * host spec is name+description only). Fields are split into blocks at
+ * `key:` line starts (continuation lines stay with their field), unlisted
+ * fields are dropped, order and values are preserved verbatim, and the body
+ * is never touched. A payload without a frontmatter block passes through.
+ */
+export function adaptSkillPayload(source: string, fields?: string[]): string {
+    if (!fields) return source
+    const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(source)
+    if (!m) return source
+    const lines = (m[1] as string).split('\n')
+    const blocks: Array<{ key: string; text: string[] }> = []
+    for (const line of lines) {
+        const keyMatch = /^([A-Za-z_][A-Za-z0-9_-]*):/.exec(line)
+        if (keyMatch) {
+            blocks.push({ key: keyMatch[1] as string, text: [line] })
+        } else if (blocks.length > 0) {
+            ;(blocks[blocks.length - 1] as { key: string; text: string[] }).text.push(line)
+        }
+    }
+    const kept = blocks.filter((b) => fields.includes(b.key))
+    if (kept.length === blocks.length) return source
+    const frontmatter = kept.map((b) => b.text.join('\n')).join('\n')
+    return `---\n${frontmatter}\n---\n${source.slice(m[0].length)}`
 }

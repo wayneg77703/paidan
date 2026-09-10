@@ -151,10 +151,64 @@ test('init --yes reports a failing host as status error and still installs the r
         // the failing host left no staged tmp file behind
         const leftovers = (await fs.readdir(kimiTargetDir)).filter((f) => f.endsWith('.tmp'))
         assert.deepEqual(leftovers, [])
-        // and the successful host really holds the payload
+        // and the successful host really holds the payload — adapted to its
+        // spec's frontmatter fields (claude-code: name+description only)
         const installed = nodePath.join(hostHome, '.claude', 'skills', 'paidan', 'SKILL.md')
+        const { adaptSkillPayload } = await import('../dist/engine/skill-install.js')
         const source = await fs.readFile(nodePath.join(repoRoot, 'skills', 'paidan', 'SKILL.md'), 'utf8')
-        assert.equal(await fs.readFile(installed, 'utf8'), source)
+        assert.equal(await fs.readFile(installed, 'utf8'), adaptSkillPayload(source, ['name', 'description']))
+    } finally {
+        await fs.rm(root, { recursive: true, force: true })
+    }
+})
+
+test('adaptSkillPayload: per-host frontmatter fields are honored, body untouched', async () => {
+    const { adaptSkillPayload } = await import('../dist/engine/skill-install.js')
+    const source = [
+        '---',
+        'name: paidan',
+        'description: long single-line description here',
+        'whenToUse: kimi-only field',
+        '---',
+        '# Body',
+        'kept verbatim',
+        '',
+    ].join('\n')
+    // kimi-code carries no field restriction: payload verbatim
+    assert.equal(adaptSkillPayload(source, undefined), source)
+    // every other host gets name+description only
+    const adapted = adaptSkillPayload(source, ['name', 'description'])
+    assert.ok(adapted.includes('name: paidan'))
+    assert.ok(adapted.includes('description: long single-line description here'))
+    assert.ok(!adapted.includes('whenToUse'))
+    assert.ok(adapted.endsWith('# Body\nkept verbatim\n'))
+    // multiline field values stay with their field block
+    const folded = '---\nname: x\ndescription: >-\n  folded line one\n  folded line two\nextra: drop me\n---\nbody\n'
+    const kept = adaptSkillPayload(folded, ['name', 'description'])
+    assert.ok(kept.includes('folded line two'))
+    assert.ok(!kept.includes('drop me'))
+    // no frontmatter at all -> passthrough
+    assert.equal(adaptSkillPayload('# just a body\n', ['name']), '# just a body\n')
+})
+
+test('installSkill writes the per-host adapted payload (kimi keeps whenToUse, codex drops it)', async () => {
+    const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-skill-'))
+    try {
+        const registry = await loadHostRegistry(repoRoot)
+        const kimi = { name: 'kimi-code', skills_dir: nodePath.join(root, '.kimi-code', 'skills'), detected: true, target: nodePath.join(root, '.kimi-code', 'skills', 'paidan', 'SKILL.md'), installed: false }
+        const codexEntry = registry.hosts.find((h) => h.name === 'codex')
+        const codex = { name: 'codex', skills_dir: nodePath.join(root, '.codex', 'skills'), detected: true, target: nodePath.join(root, '.codex', 'skills', 'paidan', 'SKILL.md'), installed: false, frontmatter_fields: codexEntry.frontmatter_fields }
+        const source = nodePath.join(repoRoot, 'skills', 'paidan', 'SKILL.md')
+        await installSkill(kimi, source)
+        await installSkill(codex, source)
+        const kimiText = await fs.readFile(kimi.target, 'utf8')
+        const codexText = await fs.readFile(codex.target, 'utf8')
+        assert.ok(kimiText.includes('whenToUse:'))
+        assert.ok(!codexText.includes('whenToUse:'))
+        assert.ok(codexText.includes('name: paidan'))
+        assert.ok(codexText.includes('description:'))
+        // body identical between the two installs
+        assert.equal(codexText.split('---\n').slice(2).join('---\n'), kimiText.split('---\n').slice(2).join('---\n'))
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }
