@@ -142,6 +142,23 @@ function resolveModel(ctx: Ctx, endpoint: string, flag: string | undefined): str
     return flag ?? ctx.config.defaults.models[endpoint] ?? ctx.config.defaults.model
 }
 
+/** Effort selection: --effort flag ?? per-endpoint default ?? global default ?? null (native default). */
+function resolveEffort(ctx: Ctx, endpoint: string, flag: string | undefined): string | null {
+    return flag ?? ctx.config.defaults.efforts[endpoint] ?? ctx.config.defaults.effort
+}
+
+/** Submit-time effort gate with dedicated codes; buildArgs re-validates the same rules for non-CLI callers. */
+function checkEffort(manifest: EndpointManifest, effort: string | null): void {
+    if (effort === null) return
+    const block = manifest.effort
+    if (!block) {
+        throw new CliError('EFFORT_UNSUPPORTED', `endpoint "${manifest.name}" has no effort selection (native default only)`)
+    }
+    if (!block.options.includes(effort)) {
+        throw new CliError('EFFORT_INVALID', `effort "${effort}" is not one of ${manifest.name}'s options: ${block.options.join(', ')}`)
+    }
+}
+
 async function waitForTerminal(
     store: RunStore,
     runId: string,
@@ -238,6 +255,8 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
         }
     }
     const cwd = nodePath.resolve(values.cwd ?? process.cwd())
+    const effort = resolveEffort(ctx, manifest.name, values.effort)
+    checkEffort(manifest, effort)
     let runTimeoutFlag: number | null = null
     if (values['run-timeout'] !== undefined) {
         runTimeoutFlag = Number(values['run-timeout'])
@@ -277,7 +296,7 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
             task_text: hint.text,
             mode,
             model: resolveModel(ctx, manifest.name, values.model),
-            effort: values.effort ?? null,
+            effort,
             resume_session: values.resume ?? null,
             run_timeout_sec: runTimeoutSec,
             deliverables: [],
@@ -312,7 +331,7 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
         task_text: taskText,
         mode,
         model: resolveModel(ctx, manifest.name, values.model),
-        effort: values.effort ?? null,
+        effort,
         resume_session: values.resume ?? null,
         run_timeout_sec: runTimeoutSec,
         deliverables: (values.deliverable ?? []).map((p) => ({ path: p, expected: null })),
@@ -703,7 +722,7 @@ async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
                 task_text: task,
                 mode: opts.mode ?? probePreset ?? 'workspace-write',
                 model: resolveModel(ctx, manifest.name, undefined),
-                effort: null,
+                effort: resolveEffort(ctx, manifest.name, undefined),
                 resume_session: opts.resume ?? null,
                 run_timeout_sec: effectiveRunTimeoutSec(null, ctx.config),
                 deliverables: opts.deliverables ?? [],
@@ -929,7 +948,15 @@ async function gatherEndpointInfo(ctx: Ctx): Promise<InitEndpointInfo[]> {
                 // discovery is best-effort during init; notes stay with the cache
             }
         }
-        out.push({ name: manifest.name, detected, version, models, repair: detected ? null : (spawnRes.notes.at(-1) ?? null) })
+        out.push({
+            name: manifest.name,
+            detected,
+            version,
+            models,
+            effort_options: manifest.effort?.options ?? null,
+            effort_default: manifest.effort?.default ?? null,
+            repair: detected ? null : (spawnRes.notes.at(-1) ?? null),
+        })
     }
     return out
 }
@@ -1048,11 +1075,13 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config
     let defaultEndpoint: string | null = null
     let defaultModel: string | null = null
     const models: Record<string, string | null> = {}
+    const efforts: Record<string, string | null> = {}
     if (enabled.length > 0) {
         defaultEndpoint = enabled[await menuSelect('Default endpoint', enabled.map((name) => ({ label: name })), enabled.indexOf(config.defaults.endpoint ?? ''))] as string
-        // every enabled endpoint gets its own default model
+        // every enabled endpoint gets its own default model and effort
         for (const name of enabled) {
-            const found = info.find((e) => e.name === name)?.models ?? []
+            const epInfo = info.find((e) => e.name === name)
+            const found = epInfo?.models ?? []
             const existing = config.defaults.models[name] ?? (name === config.defaults.endpoint ? config.defaults.model : null)
             if (found.length === 0) {
                 process.stderr.write(`(no discovered models for ${name}; native default will be used)\n`)
@@ -1066,6 +1095,18 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config
                     found.findIndex((m) => m.alias === existing),
                 )
                 models[name] = (found[idx] as { alias: string }).alias
+            }
+            const effOpts = epInfo?.effort_options ?? null
+            if (effOpts && effOpts.length > 0) {
+                const existingEff = config.defaults.efforts[name] ?? config.defaults.effort
+                const idx = await menuSelect(
+                    `Default effort for ${name}`,
+                    [{ label: '(native default)' }, ...effOpts.map((o) => ({ label: o }))],
+                    existingEff ? effOpts.indexOf(existingEff) + 1 : 0,
+                )
+                if (idx > 0) efforts[name] = effOpts[idx - 1] as string
+            } else {
+                process.stderr.write(`(no effort selection for ${name}; native default)\n`)
             }
         }
         defaultModel = models[defaultEndpoint] ?? null
@@ -1083,7 +1124,7 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config
         )
         skillHosts.push(...picked.map((i) => (detectedHosts[i] as HostInfo).name))
     }
-    return { enabled, default_endpoint: defaultEndpoint, default_model: defaultModel, models, skill_hosts: skillHosts }
+    return { enabled, default_endpoint: defaultEndpoint, default_model: defaultModel, models, efforts, skill_hosts: skillHosts }
 }
 
 /** Line-based fallback for when stderr is not a TTY (raw-mode widgets need it). */
@@ -1112,12 +1153,14 @@ async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[], confi
         let defaultEndpoint: string | null = null
         let defaultModel: string | null = null
         const models: Record<string, string | null> = {}
+        const efforts: Record<string, string | null> = {}
         if (enabled.length > 0) {
             const preDefault = config.defaults.endpoint && enabled.includes(config.defaults.endpoint) ? config.defaults.endpoint : (enabled[0] as string)
             defaultEndpoint = await pickOne(rl, 'Default endpoint', enabled, preDefault)
-            // every enabled endpoint gets its own default model
+            // every enabled endpoint gets its own default model and effort
             for (const name of enabled) {
-                const found = info.find((e) => e.name === name)?.models ?? []
+                const epInfo = info.find((e) => e.name === name)
+                const found = epInfo?.models ?? []
                 const aliases = found.map((m) => m.alias)
                 const existing = config.defaults.models[name] ?? (name === config.defaults.endpoint ? config.defaults.model : null)
                 if (aliases.length === 0) {
@@ -1128,6 +1171,15 @@ async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[], confi
                 } else {
                     const fallback = existing && aliases.includes(existing) ? existing : (aliases[0] as string)
                     models[name] = await pickOne(rl, `Default model for ${name}`, aliases, fallback)
+                }
+                const effOpts = epInfo?.effort_options ?? null
+                if (effOpts && effOpts.length > 0) {
+                    const existingEff = config.defaults.efforts[name] ?? config.defaults.effort
+                    const fallback = existingEff && effOpts.includes(existingEff) ? existingEff : '(native default)'
+                    const choice = await pickOne(rl, `Default effort for ${name}`, ['(native default)', ...effOpts], fallback)
+                    if (choice !== '(native default)') efforts[name] = choice
+                } else {
+                    process.stderr.write(`(no effort selection for ${name}; native default)\n`)
                 }
             }
             defaultModel = models[defaultEndpoint] ?? null
@@ -1142,7 +1194,7 @@ async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[], confi
             const picked = await pickMulti(rl, 'Install skill into hosts', detectedHosts.length)
             skillHosts.push(...picked.map((i) => (detectedHosts[i] as HostInfo).name))
         }
-        return { enabled, default_endpoint: defaultEndpoint, default_model: defaultModel, models, skill_hosts: skillHosts }
+        return { enabled, default_endpoint: defaultEndpoint, default_model: defaultModel, models, efforts, skill_hosts: skillHosts }
     } finally {
         rl.close()
     }

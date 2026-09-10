@@ -120,5 +120,23 @@
     "cancel_native": false,
     "completed_nonzero_exit": false,
     "_capabilities_notes": "--bg exists but is mutually exclusive with -p, so no native background for print-mode runs."
+  },
+  "effort": {
+    "options": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "arg": [
+      "--effort",
+      "{effort}"
+    ],
+    "default": null,
+    "status": "supported",
+    "verified_at": "2026-09-10",
+    "version": "2.1.260",
+    "notes": "`claude --help` 2.1.260: `--effort <level>  Effort level for the current session (low, medium, high, xhigh, max)`. Absent = claude's native session default applies; no cross-connection fallback."
   }
 }

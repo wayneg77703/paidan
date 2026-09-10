@@ -125,5 +125,21 @@
     "background_native": false,
     "cancel_native": false,
     "completed_nonzero_exit": false
+  },
+  "effort": {
+    "options": [
+      "minimal",
+      "high",
+      "max"
+    ],
+    "arg": [
+      "--variant",
+      "{effort}"
+    ],
+    "default": null,
+    "status": "supported",
+    "verified_at": "2026-09-10",
+    "version": "1.18.30",
+    "notes": "`opencode run --help` 1.18.30: `--variant  model variant (provider-specific reasoning effort, e.g., high, max, minimal)`. Values are provider-specific; the option list is exactly the help's examples. Absent = native default."
   }
 }

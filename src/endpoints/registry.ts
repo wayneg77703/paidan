@@ -63,6 +63,16 @@ export interface EndpointManifest {
         parse?: string
         connections?: unknown[]
     }
+    /** effort/intensity selection: arg is spliced with {effort} whenever a value is configured (absent = no effort selection for this endpoint) */
+    effort?: {
+        options: string[]
+        arg: string[]
+        default?: string | null
+        status?: string
+        verified_at?: string
+        version?: string
+        notes?: string
+    }
     parser: string
     /** read-only native-settings check: required allow rules in a {home}/{env:} templated file */
     native_preflight?: {
@@ -205,6 +215,26 @@ export function validateManifest(value: unknown, source: string): EndpointManife
     for (const key of ['model_arg', 'add_dir_arg'] as const) {
         if (command[key] !== undefined && !isStringArray(command[key])) {
             throw new ManifestError(`${source}: command.${key} must be a string array`)
+        }
+    }
+    if (m.effort !== undefined) {
+        const eff = m.effort as Record<string, unknown>
+        if (!eff || typeof eff !== 'object' || Array.isArray(eff)) {
+            throw new ManifestError(`${source}: effort must be an object`)
+        }
+        if (!isStringArray(eff.options) || eff.options.length === 0) {
+            throw new ManifestError(`${source}: effort.options must be a non-empty string array`)
+        }
+        for (const opt of eff.options) {
+            if (!SAFE_SUBSTITUTION_VALUE_RE.test(opt)) {
+                throw new ManifestError(`${source}: effort option ${JSON.stringify(opt)} would not survive argv substitution`)
+            }
+        }
+        if (!isStringArray(eff.arg) || !eff.arg.some((a) => a.includes('{effort}'))) {
+            throw new ManifestError(`${source}: effort.arg must be a string array containing {effort}`)
+        }
+        if (eff.default !== undefined && eff.default !== null && !eff.options.includes(eff.default as string)) {
+            throw new ManifestError(`${source}: effort.default must be one of effort.options`)
         }
     }
     if (command.resume_argv !== undefined) {
@@ -411,6 +441,16 @@ export function filterSafeAliases<T extends { alias: string }>(models: readonly 
     return { models: kept, dropped: models.length - kept.length }
 }
 
+/** Validate an effort value against the endpoint's declared block and return the argv splice. */
+function effortArgs(manifest: EndpointManifest, effort: string): string[] {
+    const block = manifest.effort
+    if (!block) throw new ManifestError(`endpoint ${manifest.name} has no effort selection`)
+    if (!block.options.includes(effort)) {
+        throw new ManifestError(`effort "${effort}" is not one of ${manifest.name}'s options: ${block.options.join(', ')}`)
+    }
+    return block.arg.map((a) => a.replaceAll('{effort}', effort))
+}
+
 /**
  * Build the endpoint argument list (without {bin}; the spawn plan resolves the
  * command). Splice order in front of the template tail: resume, model,
@@ -432,6 +472,7 @@ export function buildArgs(manifest: EndpointManifest, request: RunRequest): stri
             if (!modelArg) throw new ManifestError(`endpoint ${manifest.name} does not support model selection`)
             insert.push(...modelArg.map((a) => a.replaceAll('{model}', request.model as string)))
         }
+        if (request.effort) insert.push(...effortArgs(manifest, request.effort))
         const argv = manifest.command.resume_argv.map((a) =>
             a.replaceAll('{session}', request.resume_session as string).replaceAll('{prompt}', request.task_text),
         )
@@ -451,6 +492,7 @@ export function buildArgs(manifest: EndpointManifest, request: RunRequest): stri
         if (!modelArg) throw new ManifestError(`endpoint ${manifest.name} does not support model selection`)
         insert.push(...modelArg.map((a) => a.replaceAll('{model}', request.model as string)))
     }
+    if (request.effort) insert.push(...effortArgs(manifest, request.effort))
     const addDirArg = manifest.command.add_dir_arg
     for (const dir of request.add_dirs) {
         if (!addDirArg) throw new ManifestError(`endpoint ${manifest.name} does not support add_dirs`)

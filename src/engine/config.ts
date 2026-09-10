@@ -18,6 +18,10 @@ export interface PaidanConfig {
         model: string | null
         /** per-endpoint default models; wins over `model` for its endpoint */
         models: Record<string, string>
+        /** global default effort (native default when null) */
+        effort: string | null
+        /** per-endpoint default efforts; wins over `effort` for its endpoint */
+        efforts: Record<string, string>
         run_timeout_sec: number | null
     }
     ttlDays: number
@@ -35,7 +39,7 @@ export function effectiveRunTimeoutSec(flag: number | null, config: PaidanConfig
 
 const TOP_LEVEL_KEYS = new Set(['dataDir', 'endpoints', 'defaults', 'ttlDays'])
 const ENDPOINTS_KEYS = new Set(['enabled', 'overrides'])
-const DEFAULTS_KEYS = new Set(['endpoint', 'model', 'models', 'run_timeout_sec'])
+const DEFAULTS_KEYS = new Set(['endpoint', 'model', 'models', 'effort', 'efforts', 'run_timeout_sec'])
 const OVERRIDE_KEYS = new Set(['bin'])
 // dynamic keys land in plain objects; these three would hit the prototype
 // machinery instead of becoming entries (pollution or silent drops)
@@ -71,7 +75,7 @@ function defaults(): PaidanConfig {
     return {
         dataDir: null,
         endpoints: { enabled: null, overrides: {} },
-        defaults: { endpoint: null, model: null, models: {}, run_timeout_sec: null },
+        defaults: { endpoint: null, model: null, models: {}, effort: null, efforts: {}, run_timeout_sec: null },
         ttlDays: DEFAULT_TTL_DAYS,
     }
 }
@@ -177,6 +181,24 @@ export function loadConfig(configPath: string = defaultConfigPath()): PaidanConf
                     throw new Error(`config key "defaults.models.${name}" must be a non-empty string`)
                 }
                 out.defaults.models[name] = m
+            }
+        }
+        if (df.effort !== undefined) {
+            if (typeof df.effort !== 'string' || df.effort.length === 0) {
+                throw new Error('config key "defaults.effort" must be a non-empty string')
+            }
+            out.defaults.effort = df.effort
+        }
+        if (df.efforts !== undefined) {
+            if (!df.efforts || typeof df.efforts !== 'object' || Array.isArray(df.efforts)) {
+                throw new Error('config key "defaults.efforts" must be an object keyed by endpoint name')
+            }
+            for (const [name, e] of Object.entries(df.efforts as Record<string, unknown>)) {
+                assertSafeDynamicKey(name, 'defaults.efforts.')
+                if (typeof e !== 'string' || e.length === 0) {
+                    throw new Error(`config key "defaults.efforts.${name}" must be a non-empty string`)
+                }
+                out.defaults.efforts[name] = e
             }
         }
         if (df.run_timeout_sec !== undefined) {

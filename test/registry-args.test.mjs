@@ -209,3 +209,45 @@ test('filterSafeAliases drops argv-unsafe aliases and counts them', () => {
     assert.equal(dropped, 2)
     assert.deepEqual(filterSafeAliases([]), { models: [], dropped: 0 })
 })
+
+// ---- effort block: splice, membership, no-block rejection ----
+
+function claudeLike() {
+    return {
+        schema_version: '1.0.0',
+        name: 'claude-code',
+        detect: { bin: 'claude' },
+        command: {
+            argv: ['{bin}', '-p', '{prompt}', '--output-format', 'stream-json'],
+            prompt_delivery: 'argv',
+            model_arg: ['--model', '{model}'],
+        },
+        effort: { options: ['low', 'medium', 'high', 'xhigh', 'max'], arg: ['--effort', '{effort}'] },
+        permission: { presets: { 'workspace-write': 'supported' } },
+        resume: { kind: 'flag', args: ['--resume', '{session}'], cross_process: true },
+        parser: 'claude-stream-json',
+    }
+}
+
+test('buildArgs: effort splices after model on fresh runs', () => {
+    const argv = buildArgs(claudeLike(), request({ model: 'sonnet', effort: 'high', task_text: 'do it' }))
+    const modelIdx = argv.indexOf('--model')
+    const effortIdx = argv.indexOf('--effort')
+    assert.ok(modelIdx > -1 && effortIdx > modelIdx)
+    assert.equal(argv[effortIdx + 1], 'high')
+    assert.ok(argv.includes('do it'))
+})
+
+test('buildArgs: effort splices on resume too (flag-style resume)', () => {
+    const argv = buildArgs(claudeLike(), request({ resume_session: 'sess-1', effort: 'max', task_text: 'again' }))
+    assert.ok(argv.includes('--resume'))
+    const effortIdx = argv.indexOf('--effort')
+    assert.ok(effortIdx > -1)
+    assert.equal(argv[effortIdx + 1], 'max')
+})
+
+test('buildArgs: effort without a manifest block is rejected; unknown values are rejected', () => {
+    const noBlock = codexLike()
+    assert.throws(() => buildArgs(noBlock, request({ effort: 'high' })), /has no effort selection/)
+    assert.throws(() => buildArgs(claudeLike(), request({ effort: 'ultra' })), /not one of claude-code's options: low, medium, high, xhigh, max/)
+})

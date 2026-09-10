@@ -7,6 +7,10 @@ export interface InitEndpointInfo {
     detected: boolean
     version: string | null
     models: Array<{ alias: string; connection: string | null }>
+    /** declared effort options from the manifest (null = no effort selection for this endpoint) */
+    effort_options?: string[] | null
+    /** manifest-declared default effort option (null = native default) */
+    effort_default?: string | null
     /** spawn-resolution repair hint when not detected (last resolver note) */
     repair?: string | null
 }
@@ -17,16 +21,18 @@ export interface InitAnswers {
     default_model: string | null
     /** per-endpoint default models (enabled endpoints with discovered models); absent key = native default */
     models?: Record<string, string | null>
+    /** per-endpoint default efforts (enabled endpoints with declared effort options); absent key = native default */
+    efforts?: Record<string, string | null>
     /** hosts selected for the paidan skill install (validated against detected hosts) */
     skill_hosts: string[]
 }
 
 export interface InitConfig {
     endpoints: { enabled: string[] }
-    defaults: { endpoint: string | null; model: string | null; models: Record<string, string> }
+    defaults: { endpoint: string | null; model: string | null; models: Record<string, string>; efforts: Record<string, string> }
 }
 
-/** --yes semantics: enable every detected endpoint; default = first detected; each detected endpoint's first discovered model becomes its default; install the skill into every detected host. */
+/** --yes semantics: enable every detected endpoint; default = first detected; each detected endpoint's first discovered model becomes its default; efforts stay at the native default; install the skill into every detected host. */
 export function defaultInitAnswers(info: InitEndpointInfo[], detectedHosts: string[] = []): InitAnswers {
     const enabled = info.filter((e) => e.detected).map((e) => e.name)
     const first = info.find((e) => e.detected)
@@ -39,6 +45,7 @@ export function defaultInitAnswers(info: InitEndpointInfo[], detectedHosts: stri
         default_endpoint: first?.name ?? null,
         default_model: first && first.models.length > 0 ? (first.models[0]?.alias ?? null) : null,
         models,
+        efforts: {},
         skill_hosts: detectedHosts,
     }
 }
@@ -89,9 +96,24 @@ export function buildInitConfig(info: InitEndpointInfo[], answers: InitAnswers):
         }
         models[name] = model
     }
+    const efforts: Record<string, string> = {}
+    for (const [name, effort] of Object.entries(answers.efforts ?? {})) {
+        if (effort === null) continue
+        if (!answers.enabled.includes(name)) {
+            throw new Error(`default effort given for endpoint "${name}" which is not enabled`)
+        }
+        const ep = detected.get(name)
+        if (!ep) throw new Error(`default effort given for endpoint "${name}": not detected on this machine`)
+        const options = ep.effort_options ?? null
+        if (!options) throw new Error(`endpoint "${name}" has no effort selection`)
+        if (!options.includes(effort)) {
+            throw new Error(`effort "${effort}" is not one of ${name}'s options: ${options.join(', ')}`)
+        }
+        efforts[name] = effort
+    }
     return {
         endpoints: { enabled: answers.enabled },
-        defaults: { endpoint: answers.default_endpoint, model: answers.default_endpoint ? answers.default_model : null, models },
+        defaults: { endpoint: answers.default_endpoint, model: answers.default_endpoint ? answers.default_model : null, models, efforts },
     }
 }
 
@@ -100,7 +122,8 @@ export function initConfigToJson(cfg: InitConfig): Record<string, unknown> {
     const defaults: Record<string, unknown> = {}
     if (cfg.defaults.endpoint !== null) defaults.endpoint = cfg.defaults.endpoint
     if (cfg.defaults.model !== null) defaults.model = cfg.defaults.model
-    if (Object.keys(cfg.defaults.models).length > 0) defaults.models = cfg.defaults.models
+    if (Object.keys(cfg.defaults.models ?? {}).length > 0) defaults.models = cfg.defaults.models
+    if (Object.keys(cfg.defaults.efforts ?? {}).length > 0) defaults.efforts = cfg.defaults.efforts
     const out: Record<string, unknown> = { endpoints: { enabled: cfg.endpoints.enabled } }
     if (Object.keys(defaults).length > 0) out.defaults = defaults
     return out
@@ -109,9 +132,9 @@ export function initConfigToJson(cfg: InitConfig): Record<string, unknown> {
 /**
  * Merge fresh init answers into an existing config.json document: only
  * endpoints.enabled and the wizard-owned defaults keys (endpoint, model,
- * models) are replaced; machine-local keys the wizard does not own
- * (endpoints.overrides, dataDir, defaults.run_timeout_sec, ...) survive a
- * re-init verbatim.
+ * models, effort, efforts) are replaced; machine-local keys the wizard does
+ * not own (endpoints.overrides, dataDir, defaults.run_timeout_sec, ...)
+ * survive a re-init verbatim.
  */
 export function mergeInitConfig(existing: Record<string, unknown>, cfg: InitConfig): Record<string, unknown> {
     const fresh = initConfigToJson(cfg)
@@ -119,7 +142,7 @@ export function mergeInitConfig(existing: Record<string, unknown>, cfg: InitConf
     const existingDefaults = { ...((existing.defaults ?? {}) as Record<string, unknown>) }
     // wizard-owned keys are cleared first so a stale one never survives an
     // answer that no longer sets it (e.g. re-init onto a model-less endpoint)
-    for (const key of ['endpoint', 'model', 'models']) delete existingDefaults[key]
+    for (const key of ['endpoint', 'model', 'models', 'effort', 'efforts']) delete existingDefaults[key]
     const mergedDefaults = { ...existingDefaults, ...((fresh.defaults ?? {}) as Record<string, unknown>) }
     const out: Record<string, unknown> = {
         ...existing,

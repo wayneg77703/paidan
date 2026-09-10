@@ -10,7 +10,7 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 
 ## 标准调用循环
 
-1. 派发：任务正文写入 UTF-8 文件后运行 `paidan run --endpoint <name> --cwd <绝对路径> --task-file <任务文件>`；短任务可用 `--task <文本>`。返回即完成派发，**立即保存 `run_id`**。长正文一律用 `--task-file`（argv 投递有长度上限教训）。可选：`--mode <预设>`、`--model <别名>`、`--effort`、`--add-dir <路径>`（可多次）、`--deliverable <相对路径>`（可多次，声明交付物供终态证据核对）。
+1. 派发：任务正文写入 UTF-8 文件后运行 `paidan run --endpoint <name> --cwd <绝对路径> --task-file <任务文件>`；短任务可用 `--task <文本>`。返回即完成派发，**立即保存 `run_id`**。长正文一律用 `--task-file`（argv 投递有长度上限教训）。可选：`--mode <预设>`、`--model <别名>`、`--effort <档位>`（仅声明了 effort 块的端点：claude-code/omp/opencode，档位表见各端点 manifest 或 `paidan doctor`）、`--add-dir <路径>`（可多次）、`--deliverable <相对路径>`（可多次，声明交付物供终态证据核对）。
 2. 收取：`paidan get <run_id> --wait` 前台阻塞到终态；可加 `--timeout <秒>` 防宿主工具超时。底层 run 是持久的，宿主超时后重新 `get --wait` 即可继续收取，**不重派**。
 3. 取消：仅用户明确要求停止时 `paidan cancel <run_id>`。
 4. 查找历史：`paidan list [--state completed,failed] [--limit N]`。
@@ -52,4 +52,4 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 
 ## 错误处理
 
-先读 `error.code` + `error.message`，不只看进程退出码。常见码：`ENDPOINT_UNKNOWN` / `ENDPOINT_DISABLED`（未在 config 启用）/ `PERMISSION_UNSUPPORTED` / `MODE_INVALID` / `TASK_REQUIRED` / `TASK_TOO_LONG`（argv 投递超长度上限，改 --task-file 或换 stdin 投递端点）/ `SPAWN_UNSUPPORTED`（端点只能经 cmd shim 解析且为 argv 投递，按 message 设 overrides.bin 或装原生 exe）/ `RUN_NOT_FOUND` / `CONFIG_INVALID` / `WORKER_SPAWN_FAILED`。端点相关问题先 `paidan doctor` 看探测状态与 `repair_hint`，再决定报告或修复。
+先读 `error.code` + `error.message`，不只看进程退出码。常见码：`ENDPOINT_UNKNOWN` / `ENDPOINT_DISABLED`（未在 config 启用）/ `PERMISSION_UNSUPPORTED` / `MODE_INVALID` / `TASK_REQUIRED` / `TASK_TOO_LONG`（argv 投递超长度上限，改 --task-file 或换 stdin 投递端点）/ `SPAWN_UNSUPPORTED`（端点只能经 cmd shim 解析且为 argv 投递，按 message 设 overrides.bin 或装原生 exe）/ `EFFORT_UNSUPPORTED`（端点无 effort 选择）/ `EFFORT_INVALID`（档位不在端点 options 内）/ `RUN_NOT_FOUND` / `CONFIG_INVALID` / `WORKER_SPAWN_FAILED`。端点相关问题先 `paidan doctor` 看探测状态与 `repair_hint`，再决定报告或修复。

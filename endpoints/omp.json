@@ -125,5 +125,26 @@
     "cancel_native": false,
     "completed_nonzero_exit": false,
     "max_run_sec": 1800
+  },
+  "effort": {
+    "options": [
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "auto"
+    ],
+    "arg": [
+      "--thinking",
+      "{effort}"
+    ],
+    "default": null,
+    "status": "supported",
+    "verified_at": "2026-09-10",
+    "version": "18.1.14",
+    "notes": "`omp --help` 18.1.14 live: `--thinking=<value>  Set thinking level: off, minimal, low, medium, high, xhigh, max, auto` (same list documented for 18.1.16). Resume restores the session's thinking level, but paidan re-passes the flag like --model (omp.json resume notes). Absent = native default."
   }
 }

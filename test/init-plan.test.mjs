@@ -17,11 +17,55 @@ const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const CLI = nodePath.join(repoRoot, 'dist', 'cli.js')
 
 const INFO = [
-    { name: 'claude-code', detected: true, version: '2.1.260', models: [] },
+    { name: 'claude-code', detected: true, version: '2.1.260', models: [], effort_options: ['low', 'medium', 'high', 'xhigh', 'max'] },
     { name: 'codex', detected: true, version: '0.153.3', models: [{ alias: 'gpt-5', connection: 'chatgpt-login' }] },
     { name: 'kimi-code', detected: true, version: '0.42.0', models: [{ alias: 'kimi-for-coding/k3', connection: 'kimi-for-coding' }] },
     { name: 'zcode', detected: false, version: null, models: [] },
 ]
+
+test('buildInitConfig: per-endpoint efforts are validated against declared options', async () => {
+    const { mergeInitConfig } = await import('../dist/engine/init-plan.js')
+    // valid: declared endpoint + listed option
+    const ok = buildInitConfig(INFO, {
+        enabled: ['claude-code', 'codex'],
+        default_endpoint: 'codex',
+        default_model: 'gpt-5',
+        models: { codex: 'gpt-5' },
+        efforts: { 'claude-code': 'high' },
+        skill_hosts: [],
+    })
+    assert.deepEqual(ok.defaults.efforts, { 'claude-code': 'high' })
+    // not enabled -> rejected
+    assert.throws(
+        () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', default_model: 'gpt-5', efforts: { 'claude-code': 'high' } }),
+        /not enabled/,
+    )
+    // endpoint without declared options -> rejected
+    assert.throws(
+        () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', default_model: 'gpt-5', efforts: { codex: 'high' } }),
+        /has no effort selection/,
+    )
+    // value outside options -> rejected
+    assert.throws(
+        () => buildInitConfig(INFO, { enabled: ['claude-code'], default_endpoint: 'claude-code', default_model: null, efforts: { 'claude-code': 'ultra' } }),
+        /not one of claude-code's options/,
+    )
+    // native default (null entry) passes and emits nothing
+    const native = buildInitConfig(INFO, {
+        enabled: ['claude-code'],
+        default_endpoint: 'claude-code',
+        default_model: null,
+        efforts: { 'claude-code': null },
+        skill_hosts: [],
+    })
+    assert.deepEqual(native.defaults.efforts, {})
+    // merge treats effort/efforts as wizard-owned: stale values are cleared
+    const merged = mergeInitConfig(
+        { endpoints: { enabled: ['claude-code'] }, defaults: { endpoint: 'claude-code', effort: 'high', efforts: { 'claude-code': 'max' }, run_timeout_sec: 900 } },
+        { endpoints: { enabled: ['claude-code'] }, defaults: { endpoint: 'claude-code', model: null, models: {}, efforts: {} } },
+    )
+    assert.deepEqual(merged.defaults, { endpoint: 'claude-code', run_timeout_sec: 900 })
+})
 
 test('--yes defaults: enable detected only, default = first detected; per-endpoint first models', () => {
     const answers = defaultInitAnswers(INFO)

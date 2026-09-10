@@ -39,7 +39,12 @@ async function mkEnv(root) {
         schema_version: '1.0.0',
         name: 'fake-sleeper',
         detect: { bin: fakeBin },
-        command: { argv: ['{bin}', '-p', '{prompt}'], prompt_delivery: 'argv', model_arg: ['--model', '{model}'] },
+        command: {
+            argv: ['{bin}', '-p', '{prompt}'],
+            prompt_delivery: 'argv',
+            model_arg: ['--model', '{model}'],
+        },
+        effort: { options: ['low', 'high'], arg: ['--thinking', '{effort}'] },
         permission: {
             'fs.read': { status: 'supported' },
             'fs.write': { status: 'supported' },
@@ -116,6 +121,83 @@ test('run resolves --model ?? defaults.models[endpoint] ?? defaults.model', asyn
         const req3 = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run3.run_id, 'request.json'), 'utf8'))
         assert.equal(req3.model, 'global-m')
         await paidan(env, ['cancel', run3.run_id])
+    } finally {
+        await fs.rm(root, { recursive: true, force: true })
+    }
+})
+
+test('loadConfig: defaults.effort / defaults.efforts parse; bad shapes are hard errors', async () => {
+    const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-cfg-effort-'))
+    try {
+        const p = nodePath.join(root, 'config.json')
+        await fs.writeFile(p, JSON.stringify({ defaults: { effort: 'high', efforts: { omp: 'max' } } }))
+        const cfg = loadConfig(p)
+        assert.equal(cfg.defaults.effort, 'high')
+        assert.deepEqual(cfg.defaults.efforts, { omp: 'max' })
+        await fs.writeFile(p, JSON.stringify({ defaults: { efforts: { omp: 5 } } }))
+        assert.throws(() => loadConfig(p), /defaults\.efforts\.omp/)
+        await fs.writeFile(p, JSON.stringify({ defaults: { efforts: ['omp'] } }))
+        assert.throws(() => loadConfig(p), /defaults\.efforts/)
+        await fs.writeFile(p, '{"defaults":{"efforts":{"__proto__":"x"}}}')
+        assert.throws(() => loadConfig(p), /not allowed/)
+    } finally {
+        await fs.rm(root, { recursive: true, force: true })
+    }
+})
+
+test('run resolves --effort ?? defaults.efforts[endpoint] ?? defaults.effort; bad values rejected at submit', async () => {
+    const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-effort-'))
+    try {
+        const { work, home, env } = await mkEnv(root)
+        await fs.writeFile(nodePath.join(home, 'config.json'), JSON.stringify({
+            endpoints: { enabled: ['fake-sleeper'] },
+            defaults: { endpoint: 'fake-sleeper', effort: 'low', efforts: { 'fake-sleeper': 'high' } },
+        }))
+        // per-endpoint entry wins
+        const run1 = await paidan(env, ['run', '--endpoint', 'fake-sleeper', '--cwd', work, '--task', 'x'])
+        assert.equal(run1.ok, true, JSON.stringify(run1))
+        const req1 = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run1.run_id, 'request.json'), 'utf8'))
+        assert.equal(req1.effort, 'high')
+        await paidan(env, ['cancel', run1.run_id])
+        // the flag wins over everything
+        const run2 = await paidan(env, ['run', '--endpoint', 'fake-sleeper', '--cwd', work, '--task', 'x', '--effort', 'low'])
+        const req2 = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run2.run_id, 'request.json'), 'utf8'))
+        assert.equal(req2.effort, 'low')
+        await paidan(env, ['cancel', run2.run_id])
+        // a value outside the manifest options is EFFORT_INVALID at submit
+        const bad = await paidan(env, ['run', '--endpoint', 'fake-sleeper', '--cwd', work, '--task', 'x', '--effort', 'ultra'])
+        assert.equal(bad.ok, false)
+        assert.equal(bad.error.code, 'EFFORT_INVALID')
+    } finally {
+        await fs.rm(root, { recursive: true, force: true })
+    }
+})
+
+test('run --effort against an endpoint without an effort block is EFFORT_UNSUPPORTED', async () => {
+    const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-effort-unsup-'))
+    try {
+        const endpointsDir = nodePath.join(root, 'endpoints')
+        const work = nodePath.join(root, 'work')
+        await fs.mkdir(endpointsDir, { recursive: true })
+        await fs.mkdir(work, { recursive: true })
+        const fakeBin = nodePath.join(repoRoot, 'test', 'fixtures', 'fake-sleeper.cjs')
+        await fs.writeFile(nodePath.join(endpointsDir, 'fake-plain.json'), JSON.stringify({
+            schema_version: '1.0.0',
+            name: 'fake-plain',
+            detect: { bin: fakeBin },
+            command: { argv: ['{bin}', '-p', '{prompt}'], prompt_delivery: 'argv' },
+            permission: { presets: { 'workspace-write': 'supported' } },
+            parser: 'kimi-print',
+        }))
+        const env = {
+            ...process.env,
+            PAIDAN_HOME: nodePath.join(root, 'home'),
+            PAIDAN_DATA_DIR: nodePath.join(root, 'data'),
+            PAIDAN_ENDPOINTS_DIR: endpointsDir,
+        }
+        const res = await paidan(env, ['run', '--endpoint', 'fake-plain', '--cwd', work, '--task', 'x', '--effort', 'high'])
+        assert.equal(res.ok, false)
+        assert.equal(res.error.code, 'EFFORT_UNSUPPORTED')
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }
