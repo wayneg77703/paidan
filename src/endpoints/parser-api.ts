@@ -42,10 +42,18 @@ export interface EndpointParserModule {
     /**
      * Optional post-terminal ledger observation (e.g. kimi's native session
      * wire.jsonl). Called only when the stream parser produced no usage.
-     * `resume` marks resume runs whose ledger contains earlier turns.
-     * Must return null usage rather than fabricate numbers.
+     * `resume` marks resume runs whose ledger contains earlier turns; `cursor`
+     * is the opaque pre-spawn capture from captureLedgerCursor (undefined when
+     * none was taken). Must return null usage rather than fabricate numbers.
      */
-    readLedgerUsage?(sessionHandle: string, opts: { resume: boolean }): Promise<LedgerReadResult>
+    readLedgerUsage?(sessionHandle: string, opts: { resume: boolean; cursor?: unknown }): Promise<LedgerReadResult>
+    /**
+     * Optional pre-spawn ledger cursor capture (resume runs only). The worker
+     * stores the returned value in memory and hands it back to readLedgerUsage;
+     * null means "ledger absent pre-spawn" (fresh semantics), a throw means
+     * "cursor unavailable".
+     */
+    captureLedgerCursor?(sessionHandle: string): Promise<unknown>
 }
 
 export interface LedgerReadResult {

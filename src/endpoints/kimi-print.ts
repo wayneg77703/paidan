@@ -14,7 +14,7 @@ import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import type { UsageSummary } from '../engine/types.js'
 import type { DiscoverModelsResult, EndpointStreamParser, LedgerReadResult } from './parser-api.js'
-import { readKimiLedgerUsage } from './kimi-ledger.js'
+import { captureKimiLedgerCursor, readKimiLedgerUsage, type KimiLedgerCursor } from './kimi-ledger.js'
 
 export interface KimiParseResult {
     finalText: string
@@ -163,6 +163,14 @@ export async function discoverModels(): Promise<DiscoverModelsResult> {
 }
 
 /** Post-terminal ledger observation; stream parser never yields usage for kimi. */
-export function readLedgerUsage(sessionHandle: string, opts: { resume: boolean }): Promise<LedgerReadResult> {
-    return readKimiLedgerUsage(sessionHandle, opts)
+export function readLedgerUsage(
+    sessionHandle: string,
+    opts: { resume: boolean; cursor?: unknown },
+): Promise<LedgerReadResult> {
+    return readKimiLedgerUsage(sessionHandle, { ...opts, cursor: opts.cursor as KimiLedgerCursor | null | undefined })
+}
+
+/** Pre-spawn wire byte cursor so a resume run's usage is only its own delta. */
+export function captureLedgerCursor(sessionHandle: string): Promise<KimiLedgerCursor | null> {
+    return captureKimiLedgerCursor(sessionHandle)
 }

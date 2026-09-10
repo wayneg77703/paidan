@@ -86,7 +86,7 @@ async function main(): Promise<number> {
 
     try {
         const manifest = registry.get(request.endpoint)
-        const { parser, detectRefusals, readLedgerUsage } = await createEndpointParser(manifest)
+        const { parser, detectRefusals, readLedgerUsage, captureLedgerCursor } = await createEndpointParser(manifest)
         const spawnRes = await planEndpointSpawn(manifest, {
             configBin: config.endpoints.overrides[request.endpoint]?.bin ?? null,
         })
@@ -97,6 +97,17 @@ async function main(): Promise<number> {
             )
         }
         const plan = spawnRes.plan
+
+        // resume runs with a native ledger: pin wire byte sizes pre-spawn so the
+        // settlement sums only this run's delta (undefined = no cursor taken)
+        let ledgerCursor: unknown
+        if (request.resume_session && readLedgerUsage && captureLedgerCursor) {
+            try {
+                ledgerCursor = await captureLedgerCursor(request.resume_session)
+            } catch {
+                ledgerCursor = undefined
+            }
+        }
 
         // request.json keeps the original task text; only the delivered copy carries the hint
         const hint = withPromptCwdHint(manifest, request.task_text, request.cwd)
@@ -236,7 +247,10 @@ async function main(): Promise<number> {
         const usageNotes: string[] = []
         if (!usage && parsed.sessionId && readLedgerUsage) {
             try {
-                const ledger = await readLedgerUsage(parsed.sessionId, { resume: request.resume_session !== null })
+                const ledger = await readLedgerUsage(parsed.sessionId, {
+                    resume: request.resume_session !== null,
+                    cursor: ledgerCursor,
+                })
                 usageNotes.push(...ledger.warnings)
                 if (ledger.usage) {
                     usage = ledger.usage

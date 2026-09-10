@@ -216,3 +216,75 @@ test('claude total_cost_usd flows into result.json usage.cost and the usage.db c
         await fs.rm(root, { recursive: true, force: true })
     }
 })
+
+test('kimi resume run: worker captures a pre-spawn wire cursor and usage is only the new delta', async () => {
+    const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-fake-kimi-resume-'))
+    try {
+        const endpointsDir = nodePath.join(root, 'endpoints')
+        const work = nodePath.join(root, 'work')
+        await fs.mkdir(endpointsDir, { recursive: true })
+        await fs.mkdir(work, { recursive: true })
+        const kimiHome = nodePath.join(root, 'kimi-home')
+        const sessionDir = nodePath.join(kimiHome, 'sessions', 'wd_test', 'session_fakekimi01')
+        await fs.mkdir(nodePath.join(sessionDir, 'agents', 'main'), { recursive: true })
+        await fs.writeFile(
+            nodePath.join(kimiHome, 'session_index.jsonl'),
+            JSON.stringify({ sessionId: 'session_fakekimi01', sessionDir, workDir: work }) + '\n',
+        )
+        const wire = nodePath.join(sessionDir, 'agents', 'main', 'wire.jsonl')
+        // the fixture appends one (200 in / 11 out) usage.record row per invocation
+        const fakeBin = nodePath.join(repoRoot, 'test', 'fixtures', 'fake-kimi-ledger-writer.cjs')
+        await fs.writeFile(nodePath.join(endpointsDir, 'fake-kimi.json'), JSON.stringify({
+            schema_version: '1.0.0',
+            name: 'fake-kimi',
+            detect: { bin: fakeBin },
+            command: { argv: ['{bin}', '-p', '{prompt}'], prompt_delivery: 'argv' },
+            permission: {
+                'fs.read': { status: 'supported' },
+                'fs.write': { status: 'supported' },
+                presets: { 'workspace-write': 'supported' },
+            },
+            resume: { kind: 'flag', args: ['-S', '{session}'] },
+            parser: 'kimi-print',
+        }))
+        const env = {
+            ...process.env,
+            PAIDAN_HOME: nodePath.join(root, 'home'),
+            PAIDAN_DATA_DIR: nodePath.join(root, 'data'),
+            PAIDAN_ENDPOINTS_DIR: endpointsDir,
+            KIMI_CODE_HOME: kimiHome,
+            FAKE_WIRE: wire,
+        }
+        const runOnce = (extra) => paidan(env, ['run', '--endpoint', 'fake-kimi', '--cwd', work, '--task', 'x', ...extra])
+        const waitUsage = async (runId) => (await paidan(env, ['get', runId, '--wait', '--timeout', '60'])).result.usage
+
+        // fresh run: no cursor, the whole wire (just this run's row) is summed
+        const first = await runOnce([])
+        assert.equal(first.ok, true, JSON.stringify(first))
+        assert.deepEqual(await waitUsage(first.run_id), {
+            input_tokens: 200,
+            output_tokens: 11,
+            cached_input_tokens: 0,
+            cost: null,
+            source: 'endpoint-ledger',
+        })
+
+        // resume: the worker pins the wire size pre-spawn; the fixture's new
+        // row lands after the cursor. A whole-file read would sum 400/600.
+        const second = await runOnce(['--resume', 'session_fakekimi01'])
+        assert.equal(second.ok, true, JSON.stringify(second))
+        const usage2 = await waitUsage(second.run_id)
+        assert.deepEqual(usage2, {
+            input_tokens: 200,
+            output_tokens: 11,
+            cached_input_tokens: 0,
+            cost: null,
+            source: 'endpoint-ledger',
+        })
+        const third = await runOnce(['--resume', 'session_fakekimi01'])
+        assert.equal(third.ok, true, JSON.stringify(third))
+        assert.deepEqual(await waitUsage(third.run_id), usage2, 'each resume sees only its own delta')
+    } finally {
+        await fs.rm(root, { recursive: true, force: true })
+    }
+})

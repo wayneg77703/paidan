@@ -7,9 +7,9 @@
 // Field names and pairing rules per kimi-job-runner/src/kimi-session.ts
 // (aggregateSessionUsage). Read-only: this module never writes to the native home.
 //
-// v0 scope: only fresh runs (a session created by this run) are summed —
-// a resumed session's wire contains earlier turns and cannot be split without
-// a pre-spawn byte cursor (runner did baseline-delta; that is the P2 TODO).
+// Resume runs are summed from a pre-spawn byte cursor (the worker captures each
+// wire's size before spawning the endpoint); bytes after the cursor are this
+// run's delta. Without a cursor a resume run stays honestly unavailable.
 
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
@@ -19,6 +19,11 @@ import type { UsageSummary } from '../engine/types.js'
 export interface LedgerReadResult {
     usage: UsageSummary | null
     warnings: string[]
+}
+
+/** Pre-spawn byte offsets per wire file (absolute path -> size). Engine treats it as opaque. */
+export interface KimiLedgerCursor {
+    wires: Record<string, number>
 }
 
 const WIRE_USAGE_FIELDS = ['inputCacheRead', 'inputOther', 'inputCacheCreation', 'output'] as const
@@ -50,18 +55,70 @@ async function findSessionDir(home: string, sessionHandle: string): Promise<stri
     return found
 }
 
+/** Wire files of a session dir: absolute path per agents/<id>/wire.jsonl. */
+async function listWireFiles(sessionDir: string): Promise<string[] | null> {
+    let agentDirs: string[]
+    try {
+        agentDirs = (await fs.readdir(nodePath.join(sessionDir, 'agents'), { withFileTypes: true }))
+            .filter((d) => d.isDirectory())
+            .map((d) => d.name)
+    } catch {
+        return null
+    }
+    return agentDirs.sort().map((id) => nodePath.join(sessionDir, 'agents', id, 'wire.jsonl'))
+}
+
+/**
+ * Pre-spawn cursor for resume runs: current byte size of every existing wire.
+ * null = session dir not found (a session this run will create) — the read then
+ * falls back to whole-file semantics. Throws are the caller's (worker) cue that
+ * the cursor is unavailable.
+ */
+export async function captureKimiLedgerCursor(
+    sessionHandle: string,
+    opts: { home?: string } = {},
+): Promise<KimiLedgerCursor | null> {
+    const home = opts.home ?? kimiNativeHome()
+    const sessionDir = await findSessionDir(home, sessionHandle)
+    if (!sessionDir) return null
+    const wires = await listWireFiles(sessionDir)
+    if (!wires) return null
+    const cursor: KimiLedgerCursor = { wires: {} }
+    for (const wire of wires) {
+        try {
+            cursor.wires[wire] = (await fs.stat(wire)).size
+        } catch {
+            // wire absent pre-spawn: no entry, the read sums it whole
+        }
+    }
+    return cursor
+}
+
 async function sumWireFile(
     path: string,
     totals: Record<(typeof WIRE_USAGE_FIELDS)[number], number>,
+    offset = 0,
 ): Promise<{ records: number; invalid: boolean }> {
-    let raw: string
+    let buf: Buffer
     try {
-        raw = await fs.readFile(path, 'utf8')
+        buf = await fs.readFile(path)
     } catch {
         return { records: 0, invalid: false }
     }
+    if (offset > 0) {
+        if (offset >= buf.length) return { records: 0, invalid: false }
+        // an offset not preceded by a newline sits inside a line the previous
+        // turns own; skip to the first complete line after it
+        let start = offset
+        if (buf[offset - 1] !== 0x0a) {
+            const nl = buf.indexOf(0x0a, offset)
+            if (nl < 0) return { records: 0, invalid: false }
+            start = nl + 1
+        }
+        buf = buf.subarray(start)
+    }
     let records = 0
-    for (const line of raw.split(/\r?\n/)) {
+    for (const line of buf.toString('utf8').split(/\r?\n/)) {
         if (!line.trim()) continue
         let row: Record<string, unknown>
         try {
@@ -89,27 +146,25 @@ async function sumWireFile(
  * Sum the session ledger into a UsageSummary (source endpoint-ledger).
  * Returns null usage — never fabricated — when the session dir is missing,
  * no usage.record rows exist, or any row is invalid.
+ * Resume runs: with a pre-spawn cursor only bytes after it are summed; cursor
+ * null means the session did not exist pre-spawn (fresh semantics); no cursor
+ * at all is honestly unavailable.
  */
 export async function readKimiLedgerUsage(
     sessionHandle: string,
-    opts: { resume: boolean; home?: string },
+    opts: { resume: boolean; cursor?: KimiLedgerCursor | null; home?: string },
 ): Promise<LedgerReadResult> {
-    if (opts.resume) {
-        // a resumed session's wire includes earlier turns; without a pre-spawn
-        // cursor the run delta is unknowable
-        return { usage: null, warnings: ['ledger usage skipped: resume run (wire contains earlier turns)'] }
+    if (opts.resume && opts.cursor === undefined) {
+        return { usage: null, warnings: ['ledger usage unavailable: resume run without a pre-spawn cursor'] }
     }
+    const cursor = opts.resume ? (opts.cursor ?? null) : null
     const home = opts.home ?? kimiNativeHome()
     const sessionDir = await findSessionDir(home, sessionHandle)
     if (!sessionDir) {
         return { usage: null, warnings: [`ledger usage unavailable: session ${sessionHandle} not in session_index`] }
     }
-    let agentDirs: string[]
-    try {
-        agentDirs = (await fs.readdir(nodePath.join(sessionDir, 'agents'), { withFileTypes: true }))
-            .filter((d) => d.isDirectory())
-            .map((d) => d.name)
-    } catch {
+    const wires = await listWireFiles(sessionDir)
+    if (!wires) {
         return { usage: null, warnings: ['ledger usage unavailable: agents dir not found'] }
     }
     const totals: Record<(typeof WIRE_USAGE_FIELDS)[number], number> = {
@@ -119,10 +174,12 @@ export async function readKimiLedgerUsage(
         output: 0,
     }
     let records = 0
-    for (const agentId of agentDirs.sort()) {
-        const r = await sumWireFile(nodePath.join(sessionDir, 'agents', agentId, 'wire.jsonl'), totals)
+    for (const wire of wires) {
+        // wires absent from the cursor map appeared during this run: sum whole
+        const offset = cursor ? (cursor.wires[wire] ?? 0) : 0
+        const r = await sumWireFile(wire, totals, offset)
         if (r.invalid) {
-            return { usage: null, warnings: [`ledger usage unavailable: invalid usage.record in wire of agent ${agentId}`] }
+            return { usage: null, warnings: [`ledger usage unavailable: invalid usage.record in wire ${nodePath.basename(nodePath.dirname(wire))}`] }
         }
         records += r.records
     }

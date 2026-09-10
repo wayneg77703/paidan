@@ -434,6 +434,7 @@ export interface EndpointParserBundle {
     parser: EndpointStreamParser
     detectRefusals: (stderrText: string, exitCode: number | null) => string[]
     readLedgerUsage?: EndpointParserModule['readLedgerUsage']
+    captureLedgerCursor?: EndpointParserModule['captureLedgerCursor']
 }
 
 const PARSER_NAME_RE = /^[a-z0-9][a-z0-9-]*$/
@@ -462,5 +463,10 @@ export async function loadParserModule(parserName: string): Promise<EndpointPars
 /** Parser selection by manifest.parser; the only place engine code reaches parser code. */
 export async function createEndpointParser(manifest: EndpointManifest): Promise<EndpointParserBundle> {
     const mod = await loadParserModule(manifest.parser)
-    return { parser: mod.createParser(), detectRefusals: mod.detectRefusals, readLedgerUsage: mod.readLedgerUsage }
+    return {
+        parser: mod.createParser(),
+        detectRefusals: mod.detectRefusals,
+        readLedgerUsage: mod.readLedgerUsage,
+        captureLedgerCursor: mod.captureLedgerCursor,
+    }
 }
