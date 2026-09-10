@@ -934,7 +934,7 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
         answers = defaultInitAnswers(info, hostInfo.hosts.filter((h) => h.detected).map((h) => h.name))
     } else {
         try {
-            answers = await promptInitAnswers(info, hostInfo.hosts)
+            answers = await promptInitAnswers(info, hostInfo.hosts, ctx.config)
         } catch (err) {
             if (err instanceof PromptAbort) {
                 process.stdout.write(
@@ -977,14 +977,14 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
     return 0
 }
 
-async function promptInitAnswers(info: InitEndpointInfo[], hosts: HostInfo[]): Promise<InitAnswers> {
+async function promptInitAnswers(info: InitEndpointInfo[], hosts: HostInfo[], config: PaidanConfig): Promise<InitAnswers> {
     process.stderr.write('paidan init — detection complete. Human output is on stderr; stdout stays JSON.\n\n')
-    if (rawSelectSupported()) return promptInitRaw(info, hosts)
-    return promptInitLine(info, hosts)
+    if (rawSelectSupported()) return promptInitRaw(info, hosts, config)
+    return promptInitLine(info, hosts, config)
 }
 
 /** Raw-mode wizard: checkbox multi-selects (space toggles, enter confirms) and arrow-key menus. */
-async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[]): Promise<InitAnswers> {
+async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config: PaidanConfig): Promise<InitAnswers> {
     const detectedEps = info.filter((e) => e.detected)
     for (const ep of info) {
         if (!ep.detected) {
@@ -993,12 +993,14 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[]): Promi
     }
     let enabled: string[] = []
     if (detectedEps.length > 0) {
+        // re-init starts from the current selection, fresh installs from "all"
+        const preEnabled = config.endpoints.enabled
         const picked = await checkboxSelect(
             'Enable endpoints',
             detectedEps.map((ep) => ({
                 label: `${ep.name}  ${ep.version ?? 'unknown version'}`,
                 hint: ep.models.length > 0 ? `${ep.models.length} models` : undefined,
-                checked: true,
+                checked: preEnabled ? preEnabled.includes(ep.name) : true,
             })),
         )
         enabled = picked.map((i) => (detectedEps[i] as InitEndpointInfo).name)
@@ -1007,10 +1009,11 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[]): Promi
     let defaultModel: string | null = null
     const models: Record<string, string | null> = {}
     if (enabled.length > 0) {
-        defaultEndpoint = enabled[await menuSelect('Default endpoint', enabled.map((name) => ({ label: name })))] as string
+        defaultEndpoint = enabled[await menuSelect('Default endpoint', enabled.map((name) => ({ label: name })), enabled.indexOf(config.defaults.endpoint ?? ''))] as string
         // every enabled endpoint gets its own default model
         for (const name of enabled) {
             const found = info.find((e) => e.name === name)?.models ?? []
+            const existing = config.defaults.models[name] ?? (name === config.defaults.endpoint ? config.defaults.model : null)
             if (found.length === 0) {
                 process.stderr.write(`(no discovered models for ${name}; native default will be used)\n`)
             } else if (found.length === 1) {
@@ -1020,6 +1023,7 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[]): Promi
                 const idx = await menuSelect(
                     `Default model for ${name}`,
                     found.map((m) => ({ label: m.alias, hint: m.connection ?? undefined })),
+                    found.findIndex((m) => m.alias === existing),
                 )
                 models[name] = (found[idx] as { alias: string }).alias
             }
@@ -1043,7 +1047,7 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[]): Promi
 }
 
 /** Line-based fallback for when stderr is not a TTY (raw-mode widgets need it). */
-async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[]): Promise<InitAnswers> {
+async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[], config: PaidanConfig): Promise<InitAnswers> {
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
     try {
         process.stderr.write('Endpoints:\n')
@@ -1058,25 +1062,32 @@ async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[]): Prom
         }
         let enabled: string[] = []
         if (detectedEps.length > 0) {
-            const picked = await pickMulti(rl, 'Enable endpoints', detectedEps.length)
+            const preEnabled = config.endpoints.enabled
+            const fallback = preEnabled
+                ? detectedEps.map((_, i) => i).filter((i) => preEnabled.includes((detectedEps[i] as InitEndpointInfo).name))
+                : detectedEps.map((_, i) => i)
+            const picked = await pickMulti(rl, 'Enable endpoints', detectedEps.length, fallback)
             enabled = picked.map((i) => (detectedEps[i] as InitEndpointInfo).name)
         }
         let defaultEndpoint: string | null = null
         let defaultModel: string | null = null
         const models: Record<string, string | null> = {}
         if (enabled.length > 0) {
-            defaultEndpoint = await pickOne(rl, 'Default endpoint', enabled, enabled[0] as string)
+            const preDefault = config.defaults.endpoint && enabled.includes(config.defaults.endpoint) ? config.defaults.endpoint : (enabled[0] as string)
+            defaultEndpoint = await pickOne(rl, 'Default endpoint', enabled, preDefault)
             // every enabled endpoint gets its own default model
             for (const name of enabled) {
                 const found = info.find((e) => e.name === name)?.models ?? []
                 const aliases = found.map((m) => m.alias)
+                const existing = config.defaults.models[name] ?? (name === config.defaults.endpoint ? config.defaults.model : null)
                 if (aliases.length === 0) {
                     process.stderr.write(`(no discovered models for ${name}; native default will be used)\n`)
                 } else if (aliases.length === 1) {
                     models[name] = aliases[0] as string
                     process.stderr.write(`Default model for ${name}: ${aliases[0] as string} (only discovered model)\n`)
                 } else {
-                    models[name] = await pickOne(rl, `Default model for ${name}`, aliases, aliases[0] as string)
+                    const fallback = existing && aliases.includes(existing) ? existing : (aliases[0] as string)
+                    models[name] = await pickOne(rl, `Default model for ${name}`, aliases, fallback)
                 }
             }
             defaultModel = models[defaultEndpoint] ?? null
@@ -1097,13 +1108,14 @@ async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[]): Prom
     }
 }
 
-/** Multi-select prompt: one question, space/comma-separated numbers; empty = all. */
-async function pickMulti(rl: readline.Interface, title: string, count: number): Promise<number[]> {
+/** Multi-select prompt: one question, space/comma-separated numbers; empty = fallback (default: all). */
+async function pickMulti(rl: readline.Interface, title: string, count: number, fallback?: number[]): Promise<number[]> {
     const all = Array.from({ length: count }, (_, i) => i)
+    const fb = fallback ?? all
     for (;;) {
-        const answer = await rl.question(`${title} [1-${count}, all, none] (default all): `)
+        const answer = await rl.question(`${title} [1-${count}, all, none] (default ${fb.length === count ? 'all' : fb.map((i) => i + 1).join(' ')}): `)
         try {
-            return parseMultiSelect(answer, count, all)
+            return parseMultiSelect(answer, count, fb)
         } catch (err) {
             process.stderr.write(`${(err as Error).message}\n`)
         }
