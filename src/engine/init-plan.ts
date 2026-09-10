@@ -94,6 +94,8 @@ export interface EndpointDefaultQuestions {
         | { kind: 'ask'; options: string[]; fallback: string; staleValue: string | null }
     /** label of the "leave it to the native home" choice: '(native default)' or '(native default, currently max)' when the read-only probe saw a value */
     nativeEffortLabel: string
+    /** sentence-fragment twin for skip notes: "native default" / "native default, currently max" (no nested parens) */
+    nativeEffortNote: string
     /** the native home's current model (from the read-only probe), shown on skip notes; null = unset/unprobed */
     nativeModel: string | null
 }
@@ -102,6 +104,11 @@ export const NATIVE_DEFAULT_LABEL = '(native default)'
 
 export function nativeEffortLabelFor(nativeEffort: string | null | undefined): string {
     return nativeEffort ? `(native default, currently ${nativeEffort})` : NATIVE_DEFAULT_LABEL
+}
+
+/** Sentence-fragment twin of the label, for skip notes: "native default" / "native default, currently max" (no nested parens). */
+export function nativeEffortNoteFor(nativeEffort: string | null | undefined): string {
+    return nativeEffort ? `native default, currently ${nativeEffort}` : 'native default'
 }
 
 export function planEndpointDefaultQuestions(ep: InitEndpointInfo, config: PaidanConfig): EndpointDefaultQuestions {
@@ -129,7 +136,7 @@ export function planEndpointDefaultQuestions(ep: InitEndpointInfo, config: Paida
     } else {
         effort = { kind: 'skip' }
     }
-    return { model, effort, nativeEffortLabel: nativeEffortLabelFor(ep.native?.effort), nativeModel: ep.native?.model ?? null }
+    return { model, effort, nativeEffortLabel: nativeEffortLabelFor(ep.native?.effort), nativeEffortNote: nativeEffortNoteFor(ep.native?.effort), nativeModel: ep.native?.model ?? null }
 }
 
 /** Answers are validated against reality: enabled ⊆ detected, default ∈ enabled, every model ∈ its own endpoint's models and only where the endpoint can take one headless, every effort ∈ its own endpoint's declared options. */

@@ -1016,20 +1016,23 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
             }
         }
     }
+    const effortReport = values.effort !== undefined
+        ? {
+            // --effort preference report: where it landed and where it could not
+            effort_preference: values.effort,
+            effort_applied_to: Object.keys(cfg.defaults.efforts),
+            effort_skipped: info
+                .filter((e) => e.detected && e.effort_options && !e.effort_options.includes(values.effort as string))
+                .map((e) => `${e.name} (top option: ${(e.effort_options ?? []).at(-1) ?? '?'})`),
+        }
+        : {}
     emitOk({
         config_path: ctx.configPath,
         written: true,
         enabled: answers.enabled,
         defaults: cfg.defaults,
         endpoints: info.map((e) => ({ name: e.name, detected: e.detected, version: e.version, models: e.models.length })),
-        // --effort preference report: where it landed and where it could not
-        effort_preference: values.effort ?? null,
-        effort_applied_to: Object.keys(cfg.defaults.efforts),
-        effort_skipped: values.effort !== undefined
-            ? info
-                .filter((e) => e.detected && e.effort_options && !e.effort_options.includes(values.effort as string))
-                .map((e) => `${e.name} (top option: ${(e.effort_options ?? []).at(-1) ?? '?'})`)
-            : [],
+        ...effortReport,
         skills,
     })
     return 0
@@ -1092,7 +1095,7 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config
                 models[name] = q.model.options[idx] as string
             }
             if (q.effort.kind === 'skip') {
-                process.stderr.write(`(no effort selection for ${name}; ${q.nativeEffortLabel})\n`)
+                process.stderr.write(`(no effort selection for ${name}; ${q.nativeEffortNote})\n`)
             } else {
                 if (q.effort.staleValue) {
                     process.stderr.write(`(configured effort "${q.effort.staleValue}" for ${name} is no longer in its options; it will be replaced unless you pick one)\n`)
@@ -1168,7 +1171,7 @@ async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[], confi
                     models[name] = await pickOne(rl, `Default model for ${name}`, q.model.options, q.model.fallback)
                 }
                 if (q.effort.kind === 'skip') {
-                    process.stderr.write(`(no effort selection for ${name}; ${q.nativeEffortLabel})\n`)
+                    process.stderr.write(`(no effort selection for ${name}; ${q.nativeEffortNote})\n`)
                 } else {
                     if (q.effort.staleValue) {
                         process.stderr.write(`(configured effort "${q.effort.staleValue}" for ${name} is no longer in its options; it will be replaced unless you pick one)\n`)
