@@ -117,6 +117,15 @@
     "notes": "`agy models` (headless-safe, verified 2026-09-10) prints TSV <id>\\t<Display Name>; 14 ids under the google-oauth (OS keyring) connection: gemini-3.8/3.7/3.6-flash-{high,medium,low}, gemini-3.1-pro-{high,low}, claude-sonnet-4-6, claude-opus-4-6-thinking, gpt-oss-120b-medium. The catalog varies with auth method: modelProvider=gemini + GEMINI_API_KEY dual-config is a documented second connection (probe report 2026-09-09 §4) but UNVERIFIED here (no key on this machine; paidan never does cross-connection fallback). Selection = config.json defaults.model -> --model; absent, agy's native default (antigravity-cli/settings.json model display-name key) applies."
   },
   "parser": "agy-print",
+  "native_preflight": {
+    "file": "{home}/.gemini/antigravity-cli/settings.json",
+    "require_allow": [
+      "read_file(*)",
+      "write_file(*)",
+      "command(*)"
+    ],
+    "notes": "Read-only check of the user-maintained native permission rules (2026-09-10 calibration: unscoped forms are the only ones that match on Windows 1.2.0). read_file(*) gates view_file (fs.read); command(*) gates run_command (shell.exec, which deliverable writes actually ride); write_file(*) is listed because the 1.1.28-era workspace-write story referenced it, though 1.2.0 confines write_to_file to brain/<conversation>/ artifacts regardless. Missing rules surface as a submit warning and a doctor status; paidan never writes this file (invariant 4)."
+  },
   "parser_notes": "stdout NDJSON: init (conversation_id, cwd, permission_mode) -> step_update (agent_response text_delta accumulation; tool ERROR events carry permission TOOL_ERRORs) -> exactly one terminal result (status, response, conversation_id cross-checked against init, usage input/output/cache_read tokens, denied_actions). finalText = result.response, falling back to accumulated agent_response deltas with a warning when no result event arrives. Non-JSON lines, mid-line EOF and conflicting conversation ids degrade the parser. detectRefusals reads the stderr jetski auto-deny line and the 1.1.28 print-timeout marker (partial output + exit 0 + SUCCESS). Evidence: live 1.1.28 captures 2026-09-10 (tmp/agy-native-probe/out/) + suite adapter operations/governance/harnesses/runtime/adapters/agy.mjs.",
   "capabilities": {
     "background_native": false,

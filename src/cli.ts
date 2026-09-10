@@ -60,6 +60,7 @@ import {
     buildArgs,
     type EndpointManifest,
 } from './endpoints/registry.js'
+import { checkNativePreflight } from './endpoints/native-preflight.js'
 import { finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn, type SpawnPlan } from './endpoints/spawn.js'
 
 const execFileAsync = promisify(execFile)
@@ -184,6 +185,18 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
             'PERMISSION_UNSUPPORTED',
             `endpoint "${manifest.name}" cannot enforce mode "${mode}"; unsupported: ${perm.missing.join(', ')}`,
         )
+    }
+    // native settings preflight (read-only, soft): missing allow rules warn, never refuse
+    if (manifest.native_preflight) {
+        const pre = await checkNativePreflight(manifest.native_preflight)
+        if (pre.status === 'missing') {
+            perm.warnings.push(
+                `native preflight: ${pre.file} lacks allow rules: ${pre.missing.join(', ')};` +
+                ' the endpoint may auto-deny natively (fix its native settings — paidan never writes them)',
+            )
+        } else if (pre.status === 'unreadable') {
+            perm.warnings.push(`native preflight: ${pre.detail}; native allow rules unverified`)
+        }
     }
     const cwd = nodePath.resolve(values.cwd ?? process.cwd())
     let runTimeoutFlag: number | null = null
@@ -546,6 +559,9 @@ async function verbDoctor(ctx: Ctx): Promise<void> {
                 permission[key] = (value as { status: unknown }).status
             }
         }
+        const nativePreflight = manifest.native_preflight
+            ? await checkNativePreflight(manifest.native_preflight)
+            : null
         endpoints.push({
             name: manifest.name,
             bin: manifest.detect.bin,
@@ -559,6 +575,7 @@ async function verbDoctor(ctx: Ctx): Promise<void> {
                 : `set endpoints.overrides.${manifest.name}.bin in ${ctx.configPath} to the native binary or JS bundle, or install a PATH shim`,
             models_cache: modelsCacheInfo,
             permission,
+            native_preflight: nativePreflight,
             parser: manifest.parser,
             capabilities: manifest.capabilities ?? {},
         })

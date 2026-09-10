@@ -66,6 +66,11 @@ export interface EndpointManifest {
         connections?: unknown[]
     }
     parser: string
+    /** read-only native-settings check: required allow rules in a {home}/{env:} templated file */
+    native_preflight?: {
+        file: string
+        require_allow: string[]
+    }
     capabilities?: {
         background_native?: boolean
         cancel_native?: boolean
@@ -256,6 +261,21 @@ export function validateManifest(value: unknown, source: string): EndpointManife
 
     if (typeof m.parser !== 'string' || m.parser.length === 0) {
         throw new ManifestError(`${source}: missing parser`)
+    }
+    if (m.native_preflight !== undefined) {
+        if (!isPlainObject(m.native_preflight)) {
+            throw new ManifestError(`${source}: native_preflight must be an object`)
+        }
+        const pf = m.native_preflight
+        if (typeof pf.file !== 'string'
+            || !/^\{(home|env:[A-Za-z0-9_()\s]+)\}/.test(pf.file) || pf.file.includes('..')) {
+            throw new ManifestError(
+                `${source}: native_preflight.file must start with a {home} or {env:NAME} token and contain no ".."`,
+            )
+        }
+        if (!isStringArray(pf.require_allow)) {
+            throw new ManifestError(`${source}: native_preflight.require_allow must be a string array`)
+        }
     }
     if (m.capabilities !== undefined) {
         if (!isPlainObject(m.capabilities)) {

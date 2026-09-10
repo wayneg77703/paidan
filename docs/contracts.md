@@ -120,9 +120,12 @@ Judgment order (terminal.js): deliverable evidence → endpoint refusal signals 
   "resume": { "kind": "flag", "args": ["--resume", "{session}"], "cross_process": true, "notes": "..." },
   "models": { "command": ["{bin}", "..."], "parse": "kimi-models", "connections": [] },
   "parser": "kimi-print",
+  "native_preflight": { "file": "{home}/.tool/settings.json", "require_allow": ["read_file(*)"] },
   "capabilities": { "background_native": false, "cancel_native": false, "max_run_sec": 1800 }
 }
 ```
+
+`native_preflight` (optional) declares a native settings file and the allow rules an endpoint needs (`{"file": "{home}/.../settings.json", "require_allow": [...]}`; `file` follows the `known_paths` template rules). The engine only ever reads it: `doctor` reports `ok | {missing: [...]} | unreadable` per endpoint, and `run` records a request warning when rules are missing — never a refusal, never a write (invariant 4).
 
 `capabilities.max_run_sec` (optional number|null) is documentation-only: the endpoint's own total-time cap (omp's native 30m → `1800`; dsh has none → `null`, the engine cap backstops). The enforcing timeout is always the engine's `run_timeout_sec` (§2).
 
@@ -144,7 +147,7 @@ Parser modules are convention-loaded: `parser: "<name>"` resolves to `src/endpoi
 
 `run | get [--wait] | cancel | list | models [--refresh] | doctor | probe | init [--yes]`
 
-- `doctor`: endpoint detection results, versions, permission map status, config/data dir paths, db status, models-cache ages. This is the compatibility-matrix generator.
+- `doctor`: endpoint detection results, versions, permission map status, native_preflight outcome, config/data dir paths, db status, models-cache ages. This is the compatibility-matrix generator.
 - `probe`: per endpoint, P1 write / P2 read-only refusal / P3 resume contract probes against the installed agent; refreshes `verified_at` fields on success (local calendar date).
 - `models`: cache-first against `<dataDir>/models-cache/<endpoint>.json` (`{schema_version, endpoint, fetched_at, version, source, models, notes}`); `--refresh` forces a live query and writes through. A failed refresh serves the last successful cache with `stale: true`; a successful empty list overwrites (never borrows the old cache).
 - `init`: first-run wizard. Interactive on a TTY (enable per endpoint, pick default endpoint/model, writes config.json; existing config is backed up first). Non-TTY callers get `INIT_INTERACTIVE_REQUIRED` plus current state JSON; `--yes` enables all detected endpoints with the first discovered model as default. The decision logic lives in `engine/init-plan.ts` (UI-free) so a console GUI reuses it. After the config write, init offers to install the paidan skill (`skills/paidan/SKILL.md`, payload listed in `skills/hosts.json`) into each detected host's user-scope skills dir — per-host checkbox on a TTY, all detected hosts under `--yes`; installs are atomic copies reported as created/updated/unchanged, and only ever happen on explicit selection (invariant 4: no silent writes to an agent's native home).
