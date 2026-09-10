@@ -35,7 +35,7 @@ test('--yes defaults: enable detected only, default = first detected + its first
 })
 
 test('buildInitConfig rejects impossible answers', () => {
-    assert.throws(() => buildInitConfig(INFO, { enabled: ['nope'], default_endpoint: null, default_model: null }), /unknown endpoint/)
+    assert.throws(() => buildInitConfig(INFO, { enabled: ['nope'], default_endpoint: null, default_model: null }), /not detected/)
     assert.throws(() => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'kimi-code', default_model: null }), /not enabled/)
     assert.throws(
         () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', default_model: 'not-a-model' }),
@@ -156,4 +156,27 @@ test('CLI init --yes twice preserves endpoints.overrides written between runs', 
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }
+})
+
+test('buildInitConfig refuses to enable an endpoint that was not detected', () => {
+    assert.throws(
+        () => buildInitConfig(INFO, { enabled: ['zcode'], default_endpoint: null, default_model: null, skill_hosts: [] }),
+        /not detected/,
+    )
+    // detected subset still validates
+    const cfg = buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', default_model: 'gpt-5', skill_hosts: [] })
+    assert.deepEqual(cfg.endpoints.enabled, ['codex'])
+})
+
+test('parseMultiSelect: empty=fallback, all/none, numbers with dedupe+sort, invalid rejected', async () => {
+    const { parseMultiSelect } = await import('../dist/engine/init-plan.js')
+    assert.deepEqual(parseMultiSelect('', 3, [0, 2]), [0, 2])
+    assert.deepEqual(parseMultiSelect('all', 3, []), [0, 1, 2])
+    assert.deepEqual(parseMultiSelect('A', 3, []), [0, 1, 2])
+    assert.deepEqual(parseMultiSelect('none', 3, [0]), [])
+    assert.deepEqual(parseMultiSelect('n', 3, [0]), [])
+    assert.deepEqual(parseMultiSelect('3 1 3', 3, []), [0, 2])
+    assert.deepEqual(parseMultiSelect('2, 3', 3, []), [1, 2])
+    assert.throws(() => parseMultiSelect('4', 3, []), /invalid selection/)
+    assert.throws(() => parseMultiSelect('x', 3, []), /invalid selection/)
 })

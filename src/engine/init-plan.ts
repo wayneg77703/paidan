@@ -7,6 +7,8 @@ export interface InitEndpointInfo {
     detected: boolean
     version: string | null
     models: Array<{ alias: string; connection: string | null }>
+    /** spawn-resolution repair hint when not detected (last resolver note) */
+    repair?: string | null
 }
 
 export interface InitAnswers {
@@ -34,11 +36,25 @@ export function defaultInitAnswers(info: InitEndpointInfo[], detectedHosts: stri
     }
 }
 
-/** Answers are validated against reality: enabled ⊆ known, default ∈ enabled, model ∈ its models. */
+/** Parse a multi-select answer: "" = fallback, all/a, none/n, or 1-based numbers separated by space/comma. Returns sorted 0-based indexes. */
+export function parseMultiSelect(input: string, count: number, fallback: number[]): number[] {
+    const t = input.trim().toLowerCase()
+    if (t === '') return fallback
+    if (t === 'all' || t === 'a') return Array.from({ length: count }, (_, i) => i)
+    if (t === 'none' || t === 'n') return []
+    const parts = t.split(/[\s,]+/)
+    const nums = parts.map((p) => Number(p))
+    if (nums.some((n) => !Number.isInteger(n) || n < 1 || n > count)) {
+        throw new Error(`invalid selection "${input}"; use numbers 1-${count}, all, or none`)
+    }
+    return [...new Set(nums.map((n) => n - 1))].sort((a, b) => a - b)
+}
+
+/** Answers are validated against reality: enabled ⊆ detected, default ∈ enabled, model ∈ its models. */
 export function buildInitConfig(info: InitEndpointInfo[], answers: InitAnswers): InitConfig {
-    const known = new Set(info.map((e) => e.name))
+    const detected = new Map(info.filter((e) => e.detected).map((e) => [e.name, e]))
     for (const name of answers.enabled) {
-        if (!known.has(name)) throw new Error(`cannot enable unknown endpoint "${name}"`)
+        if (!detected.has(name)) throw new Error(`cannot enable endpoint "${name}": not detected on this machine`)
     }
     if (answers.default_endpoint !== null) {
         if (!answers.enabled.includes(answers.default_endpoint)) {

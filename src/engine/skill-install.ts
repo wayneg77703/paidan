@@ -27,6 +27,8 @@ export interface HostInfo {
     detected: boolean
     /** final install target: <skills_dir>/<dir_name>/SKILL.md */
     target: string
+    /** the target already holds a copy (any content) */
+    installed: boolean
     notes?: string
 }
 
@@ -73,12 +75,18 @@ export async function detectHosts(
             throw new SkillInstallError(`hosts.json: ${host.name} skills_dir must start with {home}`)
         }
         const skillsDir = nodePath.normalize(host.skills_dir.replace('{home}', home))
+        const target = nodePath.join(skillsDir, registry.skill.dir_name, 'SKILL.md')
         const detected = (await isDirectory(skillsDir)) || (await isDirectory(nodePath.dirname(skillsDir)))
+        let installed = false
+        try {
+            installed = (await fs.stat(target)).isFile()
+        } catch { /* absent */ }
         out.push({
             name: host.name,
             skills_dir: skillsDir,
             detected,
-            target: nodePath.join(skillsDir, registry.skill.dir_name, 'SKILL.md'),
+            target,
+            installed,
             ...(host.notes ? { notes: host.notes } : {}),
         })
     }

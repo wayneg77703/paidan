@@ -23,6 +23,7 @@ import {
     buildInitConfig,
     initConfigToJson,
     mergeInitConfig,
+    parseMultiSelect,
     type InitAnswers,
     type InitEndpointInfo,
 } from './engine/init-plan.js'
@@ -892,7 +893,7 @@ async function gatherEndpointInfo(ctx: Ctx): Promise<InitEndpointInfo[]> {
                 // discovery is best-effort during init; notes stay with the cache
             }
         }
-        out.push({ name: manifest.name, detected, version, models })
+        out.push({ name: manifest.name, detected, version, models, repair: detected ? null : (spawnRes.notes.at(-1) ?? null) })
     }
     return out
 }
@@ -963,14 +964,20 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
 async function promptInitAnswers(info: InitEndpointInfo[], hosts: HostInfo[]): Promise<InitAnswers> {
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
     try {
-        process.stderr.write('paidan init — endpoint detection complete. Human output is on stderr; stdout stays JSON.\n')
-        const enabled: string[] = []
+        process.stderr.write('paidan init — detection complete. Human output is on stderr; stdout stays JSON.\n\nEndpoints:\n')
+        const detectedEps: InitEndpointInfo[] = []
         for (const ep of info) {
-            const label = ep.detected ? `detected ${ep.version ?? 'unknown version'}` : 'NOT detected'
-            const answer = await rl.question(`Enable ${ep.name} (${label})? [y/N] `)
-            if (answer.trim().toLowerCase() === 'y' || answer.trim().toLowerCase() === 'yes') {
-                enabled.push(ep.name)
+            if (ep.detected) {
+                detectedEps.push(ep)
+                process.stderr.write(`  ${detectedEps.length}) ${ep.name}  detected ${ep.version ?? 'unknown version'}${ep.models.length > 0 ? ` (${ep.models.length} models)` : ''}\n`)
+            } else {
+                process.stderr.write(`     ${ep.name}  NOT detected — skipped${ep.repair ? `. Repair: ${ep.repair}` : ''}\n`)
             }
+        }
+        let enabled: string[] = []
+        if (detectedEps.length > 0) {
+            const picked = await pickMulti(rl, 'Enable endpoints', detectedEps.length)
+            enabled = picked.map((i) => (detectedEps[i] as InitEndpointInfo).name)
         }
         let defaultEndpoint: string | null = null
         let defaultModel: string | null = null
@@ -987,17 +994,29 @@ async function promptInitAnswers(info: InitEndpointInfo[], hosts: HostInfo[]): P
         const skillHosts: string[] = []
         const detectedHosts = hosts.filter((h) => h.detected)
         if (detectedHosts.length > 0) {
-            process.stderr.write('Host skill install — the paidan skill file is copied into each host you select.\n')
-            for (const host of detectedHosts) {
-                const answer = await rl.question(`Install paidan skill into ${host.name} (${host.skills_dir})? [y/N] `)
-                if (answer.trim().toLowerCase() === 'y' || answer.trim().toLowerCase() === 'yes') {
-                    skillHosts.push(host.name)
-                }
-            }
+            process.stderr.write('\nHosts for the paidan skill (copied into each selected host):\n')
+            detectedHosts.forEach((h, i) => {
+                process.stderr.write(`  ${i + 1}) ${h.name} (${h.skills_dir}${h.installed ? ' — already installed' : ''})\n`)
+            })
+            const picked = await pickMulti(rl, 'Install skill into hosts', detectedHosts.length)
+            skillHosts.push(...picked.map((i) => (detectedHosts[i] as HostInfo).name))
         }
         return { enabled, default_endpoint: defaultEndpoint, default_model: defaultModel, skill_hosts: skillHosts }
     } finally {
         rl.close()
+    }
+}
+
+/** Multi-select prompt: one question, space/comma-separated numbers; empty = all. */
+async function pickMulti(rl: readline.Interface, title: string, count: number): Promise<number[]> {
+    const all = Array.from({ length: count }, (_, i) => i)
+    for (;;) {
+        const answer = await rl.question(`${title} [1-${count}, all, none] (default all): `)
+        try {
+            return parseMultiSelect(answer, count, all)
+        } catch (err) {
+            process.stderr.write(`${(err as Error).message}\n`)
+        }
     }
 }
 
