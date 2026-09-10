@@ -143,12 +143,11 @@ async function sumWireFile(
 }
 
 /**
- * Sum the session ledger into a UsageSummary (source endpoint-ledger).
- * Returns null usage — never fabricated — when the session dir is missing,
- * no usage.record rows exist, or any row is invalid.
- * Resume runs: with a pre-spawn cursor only bytes after it are summed; cursor
- * null means the session did not exist pre-spawn (fresh semantics); no cursor
- * at all is honestly unavailable.
+ * Sum the session ledger into a UsageSummary (source endpoint-ledger). Null —
+ * never fabricated — when the session dir is missing, no usage.record rows
+ * exist, or any row is invalid. Resume runs: with a pre-spawn cursor only bytes
+ * after it count; cursor null = session absent pre-spawn (fresh semantics);
+ * no cursor at all = honestly unavailable.
  */
 export async function readKimiLedgerUsage(
     sessionHandle: string,

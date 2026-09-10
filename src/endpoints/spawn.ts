@@ -1,17 +1,9 @@
-// Layered endpoint spawn resolution. Node >= 20.12 on Windows refuses to spawn
-// .cmd/.bat without a shell (EINVAL), and several agent CLIs install only npm
-// script shims on PATH. Resolution order:
-//   1. machine-config override (config.json endpoints.overrides.<name>.bin)
-//   2. PATH scan (resolveBin; .EXE beats .CMD in the same directory)
-//      - .cmd/.bat shim hit -> try the manifest's npm layout from the shim dir
-//      - .js/.cjs/.mjs hit   -> spawn via process.execPath
-//   3. manifest npm layout under the standard npm global roots (works even
-//      when the shim was removed from PATH)
-//   4. manifest detect.known_paths: well-known per-platform install locations
-//      as {home}/{env:NAME} templates (repo stays free of machine-absolute paths)
-//   5. cmd.exe /d /s /c fallback with caret-escaped argv (verbatim arguments)
-// npm_entry/npm_exe are package-relative templates (e.g.
-// "@openai/codex/node_modules/.../bin/codex.exe"), never machine-absolute.
+// Layered endpoint spawn resolution (Windows EINVAL-safe; details contracts §5):
+//   1. machine-config override (endpoints.overrides.<name>.bin; JS bundles via process.execPath)
+//   2. PATH scan (.EXE beats .CMD in one directory) -> npm layout from the shim dir
+//   3. npm layout under the standard npm global roots (npm_exe native beats npm_entry JS)
+//   4. detect.known_paths ({home}/{env:NAME} templates; repo stays machine-path-free)
+//   5. cmd.exe /d /s /c with caret-escaped verbatim argv (CR/LF and empty args rejected)
 
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
@@ -209,11 +201,9 @@ export function needsVerbatimArgs(plan: SpawnPlan): boolean {
 const CMD_SPECIAL_RE = /[\s&|<>^%"()]/g
 
 /**
- * cmd.exe command-line escaping without entering quote mode: every metachar
- * (including space, %, ", &) is caret-escaped, so the token stays one argument
- * and %VAR% never expands. CR/LF and empty strings cannot be represented
- * safely (command-splitting / token-loss risk) and are rejected — the repair
- * path is a native binary or a config override.
+ * cmd.exe escaping without quote mode: every metachar (space, %, ", &) is
+ * caret-escaped so the token stays one argument and %VAR% never expands.
+ * CR/LF and empty strings are unrepresentable and rejected.
  */
 export function quoteCmdArg(arg: string): string {
     if (arg.length === 0) {

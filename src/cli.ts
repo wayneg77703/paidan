@@ -350,10 +350,9 @@ async function verbGet(ctx: Ctx, args: string[]): Promise<void> {
 }
 
 /**
- * Direct endpoint kill gated on PID-reuse identity: a pid whose current start
- * token differs from the worker's record is someone else's process — never
- * taskkill it. Query failure degrades to pid liveness (and the note says so).
- * Returns a note for the caller when something noteworthy happened.
+ * Direct endpoint kill gated on PID-reuse identity (contracts §5): a start-token
+ * mismatch is someone else's process — never taskkill it. Query failure degrades
+ * to pid liveness with a note. Returns that note for the caller, or null.
  */
 async function terminateRecordedEndpoint(
     endpointPid: number,

@@ -32,13 +32,11 @@ export interface EndpointManifest {
     command: {
         argv: string[]
         prompt_delivery: 'stdin' | 'argv' | 'file'
-        /** full alternative argv template used instead of argv on resume runs
-         *  ({session}/{prompt} replaced; mode_args/cwd_arg are NOT spliced) */
+        /** alternative argv template for resume runs ({session}/{prompt} replaced; mode_args/cwd_arg NOT spliced) */
         resume_argv?: string[]
         /** per-preset argv fragments spliced in front of the template tail */
         mode_args?: Partial<Record<PermissionPreset, string[]>>
-        /** argv fragment with {cwd} -> request.cwd; spliced AFTER mode_args so a
-         *  subcommand carried in mode_args (codex exec, opencode run) stays left of it */
+        /** {cwd} -> request.cwd; spliced AFTER mode_args so a subcommand in mode_args stays left of it */
         cwd_arg?: string[] | null
         /** per-preset env fragments applied on top of env for that mode */
         mode_env?: Partial<Record<PermissionPreset, Record<string, string>>>
@@ -298,11 +296,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
     return v !== null && typeof v === 'object' && !Array.isArray(v)
 }
 
-/**
- * Capabilities each preset requires; checked against the manifest's capability
- * map at submit time. unsupported -> reject naming the capability; soft and
- * unverified -> warnings recorded on the request.
- */
+/** Capabilities each preset requires at submit time (contracts §2). */
 export const PRESET_REQUIREMENTS: Readonly<Record<PermissionPreset, readonly string[]>> = {
     'read-only': ['fs.read'],
     'workspace-write': ['fs.read', 'fs.write'],
@@ -315,11 +309,7 @@ export interface PermissionCheck {
     warnings: string[]
 }
 
-/**
- * Preset for contract probes (P1/P3 share one tier): the most conservative
- * supported preset, preferring workspace-write, then unattended, then
- * read-only. null when the endpoint supports no preset (P1/P3 then skip).
- */
+/** Probe tier (P1/P3 share one): most conservative supported preset; null = none (P1/P3 skip). */
 export function pickProbePreset(manifest: EndpointManifest): PermissionPreset | null {
     for (const preset of ['workspace-write', 'unattended', 'read-only'] as const) {
         if (manifest.permission.presets[preset] === 'supported') return preset
@@ -378,12 +368,7 @@ export function checkPermission(manifest: EndpointManifest, mode: ModeSelection)
     return { ok: missing.length === 0, missing, warnings }
 }
 
-/**
- * command.prompt_cwd_hint: endpoints whose tools ignore the spawn cwd (agy
- * 1.2.0 run_command starts in its own scratch dir) need the cwd stated inside
- * the task text. The delivered text gets one fixed line appended; request.json
- * keeps the original (the fingerprint already pins cwd).
- */
+/** command.prompt_cwd_hint (contracts §6): append one fixed cwd/absolute-paths line to the delivered task text. */
 export function withPromptCwdHint(
     manifest: EndpointManifest,
     taskText: string,
@@ -396,32 +381,19 @@ export function withPromptCwdHint(
     }
 }
 
-/**
- * Windows CreateProcess caps the command line at 32767 chars; argv-delivered
- * prompts died at 26 KiB in practice (omp lesson). The guard measures the
- * would-be command line (bin + space-joined args) in UTF-8 bytes and rejects
- * at submit time; manifest command.prompt_max_bytes overrides the default.
- */
+/** argv-delivery submit guard (contracts §6): Windows caps the command line at 32767 chars; 26 KiB prompts have died in practice. */
 export const DEFAULT_PROMPT_MAX_BYTES = 24000
 
 export function measureArgvBytes(parts: readonly string[]): number {
     return parts.reduce((n, a) => n + Buffer.byteLength(a, 'utf8') + 1, 0)
 }
 
-
 /**
- * Build the endpoint argument list (without the bin itself; the spawn plan
- * resolves the command separately). Optional segments (resume / model /
- * add-dir / per-preset mode flags / cwd pin) are spliced in front of the
- * template tail, so flags never land after the prompt value. Splice order:
- * resume, model, add-dirs, mode_args, cwd_arg.
- *
- * Resume: when the manifest declares command.resume_argv, that template fully
- * replaces command.argv and only model_arg is spliced (mode_args and add_dirs
- * do not translate across a resume — e.g. codex exec resume accepts -m but
- * neither -s nor --add-dir). Otherwise resume.args flags are spliced and
- * mode_args are re-passed (claude semantics: a resumed -p invocation re-tiers
- * from the new invocation, so flags must be re-passed).
+ * Build the endpoint argument list (without {bin}; the spawn plan resolves the
+ * command). Splice order in front of the template tail: resume, model,
+ * add-dirs, mode_args, cwd_arg — flags never land after the prompt value.
+ * Resume semantics (resume_argv replacement vs resume.args splice + re-tiered
+ * mode_args) per contracts §6.
  */
 export function buildArgs(manifest: EndpointManifest, request: RunRequest): string[] {
     if (request.resume_session && manifest.command.resume_argv) {
@@ -437,8 +409,7 @@ export function buildArgs(manifest: EndpointManifest, request: RunRequest): stri
         const argv = manifest.command.resume_argv.map((a) =>
             a.replaceAll('{session}', request.resume_session as string).replaceAll('{prompt}', request.task_text),
         )
-        // argv[0] is the {bin} placeholder; the caller spawns the resolved bin.
-        return [...insert, ...argv.slice(1)]
+        return [...insert, ...argv.slice(1)] // argv[0] is the {bin} placeholder; the caller spawns the resolved bin
     }
 
     const insert: string[] = []
@@ -477,14 +448,8 @@ export function buildArgs(manifest: EndpointManifest, request: RunRequest): stri
 }
 
 /**
- * Child env: inherit the caller env, then apply manifest command.env and (for
- * the run's mode) command.mode_env[mode] on top. Value sentinels:
- *   "{native_default}" — never set the variable (endpoint runs against its
- *     native config home; paidan never stages or copies config)
- *   "{unset}" — delete an inherited variable (e.g. opencode unsets PWD, which
- *     would otherwise re-anchor the project root away from the spawn cwd)
- * Keys starting with "_" are documentation fields, never exported (a manifest
- * "_env_notes" key must not become a child-process variable).
+ * Child env: caller env, then command.env, then (for a preset run) command.mode_env[preset].
+ * Sentinels "{native_default}"/"{unset}" and "_" documentation keys per contracts §6.
  */
 export function buildEnv(
     manifest: EndpointManifest,
@@ -519,11 +484,7 @@ export interface EndpointParserBundle {
 
 const PARSER_NAME_RE = /^[a-z0-9][a-z0-9-]*$/
 
-/**
- * Convention-based parser loading: manifest.parser "<name>" maps to
- * src/endpoints/<name>.ts exporting createParser + detectRefusals
- * (+ optional discoverModels). Adding an endpoint never touches this file.
- */
+/** Convention: manifest.parser "<name>" -> src/endpoints/<name>.ts with createParser + detectRefusals. */
 export async function loadParserModule(parserName: string): Promise<EndpointParserModule> {
     if (!PARSER_NAME_RE.test(parserName)) {
         throw new ManifestError(`invalid parser name ${JSON.stringify(parserName)}`)

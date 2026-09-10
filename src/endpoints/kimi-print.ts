@@ -20,7 +20,7 @@ export interface KimiParseResult {
     finalText: string
     sessionId: string | null
     resumeHint: string | null
-    /** print stdout carries no usage rows; ledger observation is a P1 gap */
+    /** print stdout carries no usage rows; the worker reads the native ledger (kimi-ledger.ts) */
     usage: UsageSummary | null
     /** kimi's refusal evidence is stderr-carried (detectKimiRefusals); none in-band */
     refusals: string[]

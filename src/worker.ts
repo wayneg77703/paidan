@@ -344,8 +344,6 @@ async function main(): Promise<number> {
                 parser: { type: manifest.parser, degraded: parsed.degraded },
                 notes,
             },
-            // usage: parser-reported (provider) or native-ledger observation
-            // (endpoint-ledger); absent stays unavailable
             usage: usage ?? { input_tokens: null, output_tokens: null, cached_input_tokens: null, cost: null, source: 'unavailable' },
             session_handle: parsed.sessionId,
         })

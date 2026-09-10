@@ -136,10 +136,8 @@ async function waitUntilDead(pid: number, timeoutMs: number): Promise<boolean> {
 }
 
 /**
- * Resolve a bare bin name against PATH. On Windows, .EXE is tried before the
- * rest of PATHEXT in each directory: Node >= 20.12 cannot spawn .cmd/.bat
- * without a shell (EINVAL), so a native binary must win over a script shim
- * sitting in the same directory.
+ * Resolve a bare bin name against PATH; on Windows .EXE beats the rest of
+ * PATHEXT in each directory (Node >= 20.12 cannot spawn .cmd/.bat, EINVAL).
  */
 export async function resolveBin(bin: string, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
     if (nodePath.isAbsolute(bin) || bin.includes('/') || bin.includes('\\')) {
