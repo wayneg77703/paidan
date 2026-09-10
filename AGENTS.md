@@ -44,3 +44,15 @@ Layering rule: engine never imports from endpoints except through the manifest r
 ## Version drift policy
 
 Behavior conclusions always carry a version + date. After upgrading an agent CLI, run `paidan probe --endpoint <name>` and refresh `verified_at` fields. A parser that meets unknown output must degrade to terminal state `unknown`, not crash.
+
+## Recalibration SOP (endpoint upgrades)
+
+The goal is not permission governance for its own sake — it is an honest, current record of how each agent behaves when delegated, plus code/manifests that match the installed version. This loop is designed to be driven by an AI agent end to end; the agy 1.2.0 calibration (2026-09-10) is the reference execution.
+
+1. **Detect drift**: `paidan doctor` — any endpoint version newer than its manifest `version` fields is drift.
+2. **Probe**: `paidan probe --endpoint <name>` (P1 write / P2 read-only refusal / P3 resume). All pass → probe already refreshed `verified_at`; stop here.
+3. **Diagnose evidence-first**: read the failed run's `result.json` (refusals / notes / final_text) from the run store, then reproduce directly with the endpoint's own binary in a tmp cwd. Never change paidan code for an upstream behavior change without a direct repro.
+4. **Hypothesis-matrix the native surface**: for permission/config drift, live-test the small matrix of plausible rule/flag forms (e.g. unscoped / scoped glob / exact dir / drive-letter) and record every variant's verdict. Only forms observed working may be recorded as working.
+5. **Repair with consent**: changing an agent's native home requires explicit user approval; back up beside the original (`.bak-<date>-<tag>`), change minimally, keep unrelated keys byte-identical.
+6. **Record honestly**: update manifest entries with the new `version` + `verified_at` and the true status (`supported | soft | unsupported`); put capability losses in `via` and the README endpoint row (EN+ZH). Commit with the probe/repro evidence in the message.
+7. **Regress before closing**: `npm test` green plus one real delegation end-to-end.
