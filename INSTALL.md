@@ -93,10 +93,12 @@ paidan init        # checkboxes: space toggles, enter confirms
 **B. Agent-driven (you collected the answers in step 3)**
 
 ```bash
-paidan init --yes  # enables all detected endpoints, first discovered model per
-                   # model_selectable endpoint, native effort everywhere,
-                   # installs the skill into all detected hosts — a sane
-                   # baseline you now adjust
+paidan init --yes  # enables all detected endpoints and leaves every
+                   # model/effort at the endpoint's native default (the agent's
+                   # own home carries them); installs the skill into all
+                   # detected hosts — a baseline you now adjust. Add
+                   # --effort <level> to apply that level to every endpoint
+                   # whose options include it.
 ```
 
 Then edit the machine config (`state.config_path`; `%APPDATA%\paidan\config.json`

@@ -24,7 +24,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import type { UsageSummary } from '../engine/types.js'
-import type { DiscoverModelsResult, EndpointStreamParser } from './parser-api.js'
+import type { DiscoverModelsResult, EndpointStreamParser, NativeDefaults } from './parser-api.js'
 
 export interface CodexParseResult {
     finalText: string
@@ -161,33 +161,47 @@ export function detectCodexRefusals(stderrText: string, _exitCode: number | null
 }
 
 /**
- * v0 model discovery: heuristic read of the native $CODEX_HOME/config.toml
- * top-level `model = "..."` key (codex has no CLI model-list surface). Honest
- * and read-only; an absent key means codex uses its built-in default.
+ * Official model lineup (learn.chatgpt.com/docs/models, checked 2026-09-11).
+ * codex has no CLI model-list surface (app-server model/list is experimental),
+ * so discovery = the native config's `model` key (listed first) + this static
+ * docs-sourced set. gpt-5.4/-mini retired 2026-08-31, gpt-5.2/gpt-5.3-codex
+ * deprecated — deliberately absent. spark is Pro-plan only; a plan without it
+ * fails honestly at the endpoint.
  */
+const OFFICIAL_CODEX_MODELS = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.3-codex-spark']
+
 export function discoverCodexModels(configToml: string | null, hasAuthJson: boolean): DiscoverModelsResult {
     const notes: string[] = []
-    if (configToml === null) {
-        notes.push('native codex config.toml not found; install/login codex first')
-        return { models: [], notes }
-    }
-    let model: string | null = null
-    for (const line of configToml.split(/\r?\n/)) {
-        if (/^\s*\[/.test(line)) break // top-level keys only; sections are provider/MCP config
-        const m = /^\s*model\s*=\s*"([^"]+)"/.exec(line)
-        if (m && m[1]) {
-            model = m[1]
-            break
-        }
-    }
     const connection = hasAuthJson ? 'chatgpt-login' : null
-    if (model === null) {
-        notes.push('no top-level `model` key in native config.toml; codex uses its built-in default model')
-        return { models: [], notes }
+    const models: { alias: string; connection: string | null }[] = []
+    const seen = new Set<string>()
+    if (configToml !== null) {
+        for (const line of configToml.split(/\r?\n/)) {
+            if (/^\s*\[/.test(line)) break // top-level keys only; sections are provider/MCP config
+            const m = /^\s*model\s*=\s*"([^"]+)"/.exec(line)
+            if (m && m[1]) {
+                if (!seen.has(m[1])) {
+                    seen.add(m[1])
+                    models.push({ alias: m[1], connection })
+                }
+                break
+            }
+        }
+        if (models.length > 0) notes.push('native config.toml default model listed first')
+    } else {
+        notes.push('native codex config.toml not found; official lineup only')
     }
-    notes.push('default model from native $CODEX_HOME/config.toml; codex has no CLI model-list surface (app-server model/list is experimental)')
+    for (const alias of OFFICIAL_CODEX_MODELS) {
+        if (seen.has(alias)) continue
+        seen.add(alias)
+        models.push({ alias, connection })
+    }
+    notes.push(
+        'official lineup from learn.chatgpt.com/docs/models (checked 2026-09-11): gpt-5.4 family retired 2026-08-31, gpt-5.2/gpt-5.3-codex deprecated and not listed',
+        'gpt-5.3-codex-spark is Pro-plan only; an unsupported plan fails at the endpoint (no cross-connection fallback)',
+    )
     if (connection === null) notes.push('no auth.json found; login state unknown')
-    return { models: [{ alias: model, connection }], notes }
+    return { models, notes }
 }
 
 // ---- Convention exports (parser-api.ts): the registry loads these by name ----
@@ -208,4 +222,34 @@ export async function discoverModels(): Promise<DiscoverModelsResult> {
     }
     const hasAuthJson = await fs.stat(nodePath.join(codexHome, 'auth.json')).then(() => true, () => false)
     return discoverCodexModels(toml, hasAuthJson)
+}
+
+/** Read-only native-defaults probe: top-level `model` and `model_reasoning_effort` keys of the native config.toml. */
+export function readCodexNativeDefaults(configToml: string | null): NativeDefaults {
+    if (configToml === null) return { model: null, effort: null, notes: ['native codex config.toml not found'] }
+    let model: string | null = null
+    let effort: string | null = null
+    for (const line of configToml.split(/\r?\n/)) {
+        if (/^\s*\[/.test(line)) break // top-level keys only
+        if (model === null) {
+            const m = /^\s*model\s*=\s*"([^"]+)"/.exec(line)
+            if (m && m[1]) model = m[1]
+        }
+        if (effort === null) {
+            const m = /^\s*model_reasoning_effort\s*=\s*"([^"]+)"/.exec(line)
+            if (m && m[1]) effort = m[1]
+        }
+    }
+    return { model, effort }
+}
+
+export async function readNativeDefaults(): Promise<NativeDefaults> {
+    const codexHome = process.env.CODEX_HOME ?? nodePath.join(os.homedir(), '.codex')
+    let toml: string | null = null
+    try {
+        toml = await fs.readFile(nodePath.join(codexHome, 'config.toml'), 'utf8')
+    } catch {
+        toml = null
+    }
+    return readCodexNativeDefaults(toml)
 }

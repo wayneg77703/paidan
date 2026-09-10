@@ -93,6 +93,21 @@
     "connections": [],
     "notes": "v0: heuristic scan of the user's native kimi config.toml for connection/model aliases (managed:kimi-code oauth + kimi-for-coding inline-key are two separate connections). Selection = config.json defaults; no cross-connection fallback."
   },
+  "effort": {
+    "options": [
+      "low",
+      "high",
+      "max"
+    ],
+    "env": {
+      "KIMI_MODEL_THINKING_EFFORT": "{effort}"
+    },
+    "default": null,
+    "status": "supported",
+    "verified_at": "2026-09-11",
+    "version": "0.42.0",
+    "notes": "Thinking-effort selection has NO CLI flag in 0.42.0 (--effort dies at arg parsing); the env var is the only config-file-free delivery channel. KIMI_MODEL_THINKING_EFFORT forces thinking.effort and overrides the native config.toml top-level effort key; precedence -m > env > config (official env-vars/overrides docs). Verified 2026-09-11: effort=max PONG via env, effort=bogus -> provider 400 (the value provably reaches the API). options = the k3 line support_efforts (low/high/max) read from the native config; medium/xhigh exist in the official level set but k3 does not declare them and stay out. The native config.toml already carries effort = max, so leaving paidan effort unset inherits max from the native home."
+  },
   "parser": "kimi-print",
   "parser_notes": "stream-json JSONL on stdout: assistant text rows {role:\"assistant\", content}; session hint {role:\"meta\", type:\"session.resume_hint\", session_id, command}. Non-JSON stdout line or mid-line EOF degrades the parser (terminal judgment then cannot be exit-code-based). Evidence: kimi-job-runner/src/kimi-output.ts:88-114.",
   "capabilities": {

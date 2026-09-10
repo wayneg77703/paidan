@@ -12,8 +12,11 @@
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import * as fs from 'node:fs/promises'
+import * as os from 'node:os'
+import * as nodePath from 'node:path'
 import type { UsageSummary } from '../engine/types.js'
-import type { DiscoverModelsResult, EndpointStreamParser, ModelEntry } from './parser-api.js'
+import type { DiscoverModelsResult, EndpointStreamParser, ModelEntry, NativeDefaults } from './parser-api.js'
 import { EndpointRegistry } from './registry.js'
 import { finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn } from './spawn.js'
 
@@ -195,5 +198,24 @@ export async function discoverModels(): Promise<DiscoverModelsResult> {
         return parseAgyModelsOutput(r.stdout)
     } catch (err) {
         return { models: [], notes: [`agy models failed: ${err instanceof Error ? err.message : String(err)}`] }
+    }
+}
+
+/** Read-only native-defaults probe: the `model` key of the native antigravity-cli settings (the display name carries the thinking tier, e.g. "Gemini 3.8 Flash (High)"). */
+export async function readNativeDefaults(): Promise<NativeDefaults> {
+    const home = process.env.PAIDAN_HOST_HOME ?? process.env.USERPROFILE ?? os.homedir()
+    let raw: string | null = null
+    try {
+        raw = await fs.readFile(nodePath.join(home, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8')
+    } catch {
+        raw = null
+    }
+    if (raw === null) return { model: null, effort: null, notes: ['native antigravity-cli settings.json not found'] }
+    try {
+        const o = JSON.parse(raw) as Record<string, unknown>
+        const model = typeof o.model === 'string' && o.model.length > 0 ? o.model : null
+        return { model, effort: null }
+    } catch {
+        return { model: null, effort: null, notes: ['native antigravity-cli settings.json is not valid JSON'] }
     }
 }

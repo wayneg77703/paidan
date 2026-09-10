@@ -65,10 +65,13 @@ export interface EndpointManifest {
         parse?: string
         connections?: unknown[]
     }
-    /** effort/intensity selection: arg is spliced with {effort} whenever a value is configured (absent = no effort selection for this endpoint) */
+    /** effort/intensity selection: delivered via argv (arg) and/or env; a value is spliced whenever one is configured (absent = no effort selection for this endpoint) */
     effort?: {
         options: string[]
-        arg: string[]
+        /** argv splice template containing {effort}; env-only blocks may omit it */
+        arg?: string[]
+        /** env-delivered form (values contain {effort}); applied on top of command.env/mode_env — e.g. kimi KIMI_MODEL_THINKING_EFFORT, which has no CLI flag */
+        env?: Record<string, string>
         default?: string | null
         status?: string
         verified_at?: string
@@ -232,8 +235,23 @@ export function validateManifest(value: unknown, source: string): EndpointManife
                 throw new ManifestError(`${source}: effort option ${JSON.stringify(opt)} would not survive argv substitution`)
             }
         }
-        if (!isStringArray(eff.arg) || !eff.arg.some((a) => a.includes('{effort}'))) {
+        const hasArg = eff.arg !== undefined
+        const hasEnv = eff.env !== undefined
+        if (hasArg && (!isStringArray(eff.arg) || !eff.arg.some((a) => a.includes('{effort}')))) {
             throw new ManifestError(`${source}: effort.arg must be a string array containing {effort}`)
+        }
+        if (hasEnv) {
+            if (!isPlainObject(eff.env)) {
+                throw new ManifestError(`${source}: effort.env must be an object`)
+            }
+            for (const [key, value] of Object.entries(eff.env)) {
+                if (typeof value !== 'string' || !value.includes('{effort}')) {
+                    throw new ManifestError(`${source}: effort.env["${key}"] must be a string containing {effort}`)
+                }
+            }
+        }
+        if (!hasArg && !hasEnv) {
+            throw new ManifestError(`${source}: effort must deliver via arg and/or env (at least one form containing {effort})`)
         }
         if (eff.default !== undefined && eff.default !== null && !eff.options.includes(eff.default as string)) {
             throw new ManifestError(`${source}: effort.default must be one of effort.options`)
@@ -498,13 +516,14 @@ export async function discoverAndCacheModels(manifest: EndpointManifest, cache: 
     return entry
 }
 
-/** Validate an effort value against the endpoint's declared block and return the argv splice. */
+/** Validate an effort value against the endpoint's declared block and return the argv splice (empty for env-delivered blocks). */
 function effortArgs(manifest: EndpointManifest, effort: string): string[] {
     const block = manifest.effort
     if (!block) throw new ManifestError(`endpoint ${manifest.name} has no effort selection`)
     if (!block.options.includes(effort)) {
         throw new ManifestError(`effort "${effort}" is not one of ${manifest.name}'s options: ${block.options.join(', ')}`)
     }
+    if (!block.arg) return [] // env-delivered effort (buildEnv applies the fragment)
     return block.arg.map((a) => a.replaceAll('{effort}', effort))
 }
 
@@ -573,13 +592,15 @@ export function buildArgs(manifest: EndpointManifest, request: RunRequest): stri
 }
 
 /**
- * Child env: caller env, then command.env, then (for a preset run) command.mode_env[preset].
- * Sentinels "{native_default}"/"{unset}" and "_" documentation keys per contracts §6.
+ * Child env: caller env, then command.env, then (for a preset run) command.mode_env[preset],
+ * then (when a value is configured) the effort block's env form. Sentinels
+ * "{native_default}"/"{unset}" and "_" documentation keys per contracts §6.
  */
 export function buildEnv(
     manifest: EndpointManifest,
     base: NodeJS.ProcessEnv = process.env,
     mode: ModeSelection | null = null,
+    effort: string | null = null,
 ): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = { ...base }
     const apply = (fragment: Record<string, string>) => {
@@ -597,6 +618,11 @@ export function buildEnv(
     // partial mode_env coverage is normal: only tiers needing an env override declare it
     const modeEnv = typeof mode === 'string' ? manifest.command.mode_env?.[mode] : undefined
     if (modeEnv) apply(modeEnv)
+    if (effort !== null && manifest.effort?.env) {
+        const fragment: Record<string, string> = {}
+        for (const [key, value] of Object.entries(manifest.effort.env)) fragment[key] = value.replaceAll('{effort}', effort)
+        apply(fragment)
+    }
     return env
 }
 

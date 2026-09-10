@@ -42,14 +42,14 @@
     "fs.read": {
       "status": "supported",
       "via": "workspace-write sandbox tier (native default) allows local reads; suite contract capabilities.local_read=true",
-      "verified_at": "2026-09-10",
-      "version": "0.1.2-rc.1"
+      "verified_at": "2026-09-11",
+      "version": "0.1.5-rc.1"
     },
     "fs.write": {
       "status": "supported",
       "via": "workspace-write sandbox tier (dsh-base cordis.patch.yml sandbox-policy default when DSH_PERMISSION_MODE is unset): writes confined to the workspace + temp roots (probe report 2026-09-09 §2); live paidan write run verified 2026-09-10",
-      "verified_at": "2026-09-10",
-      "version": "0.1.2-rc.1"
+      "verified_at": "2026-09-11",
+      "version": "0.1.5-rc.1"
     },
     "shell.exec": {
       "status": "supported",

@@ -10,7 +10,7 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 
 ## 标准调用循环
 
-1. 派发：任务正文写入 UTF-8 文件后运行 `paidan run --endpoint <name> --cwd <绝对路径> --task-file <任务文件>`；短任务可用 `--task <文本>`。返回即完成派发，**立即保存 `run_id`**。长正文一律用 `--task-file`（argv 投递有长度上限教训）。可选：`--mode <预设>`、`--model <别名>`、`--effort <档位>`（仅声明了 effort 块的端点：claude-code/omp/opencode，档位表见各端点 manifest 或 `paidan doctor`）、`--add-dir <路径>`（可多次）、`--deliverable <相对路径>`（可多次，声明交付物供终态证据核对）。
+1. 派发：任务正文写入 UTF-8 文件后运行 `paidan run --endpoint <name> --cwd <绝对路径> --task-file <任务文件>`；短任务可用 `--task <文本>`。返回即完成派发，**立即保存 `run_id`**。长正文一律用 `--task-file`（argv 投递有长度上限教训）。可选：`--mode <预设>`、`--model <别名>`、`--effort <档位>`（仅声明了 effort 块的端点：claude-code/omp/opencode/codex/kimi-code，档位表见各端点 manifest 或 `paidan doctor`）、`--add-dir <路径>`（可多次）、`--deliverable <相对路径>`（可多次，声明交付物供终态证据核对）。
 2. 收取：`paidan get <run_id> --wait` 前台阻塞到终态；可加 `--timeout <秒>` 防宿主工具超时。底层 run 是持久的，宿主超时后重新 `get --wait` 即可继续收取，**不重派**。
 3. 取消：仅用户明确要求停止时 `paidan cancel <run_id>`。
 4. 查找历史：`paidan list [--state completed,failed] [--limit N]`。
@@ -47,8 +47,8 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 
 - 永不把凭据搬进任务正文、参数或配置；端点用各 agent 自己的原生配置与调用方 env 运行，paidan 不代理、不暂存凭据。
 - paidan 不写任何 agent 的原生 home；缺原生设置时按 `doctor` 的 `repair_hint` 报告，不擅自改用户配置。
-- 模型/连接失败（配额、认证等）不跨连接 fallback：拒绝并报告，不自动换模型、换端点、升权。
-- 不传 `--model` 时生效值为 `--model ?? config defaults.models.<端点> ?? defaults.model ?? 端点原生默认`（不跨连接）；dsh/zcode 这类端点没有 headless 模型选择（模型归其原生配置管），给它们配了模型会被 `MODEL_UNSUPPORTED` 拒绝。需要核对时用 `paidan models --endpoint <name>` 查询。
+- 模型/连接失败（配额、认证等）时**永不静默切换路径**：拒绝并报告，不自动换模型、换端点、换账期、升权。注意区分：失败时刻的自动 fallback 被禁止；用户/宿主**显式**选择换模型换档位（每次委派时明示）是正常操作，不属于此条。端点自身的 fallback 机制（如 claude 原生 `--fallback-model`、网关侧切换）归端点与用户配置管，paidan 不知情也不拦截。
+- 不传 `--model` 时生效值为 `--model ?? config defaults.models.<端点> ?? defaults.model ?? 端点原生默认`（不跨连接）；dsh/zcode 这类端点没有 headless 模型选择（模型归其原生配置管），给它们配了模型会被 `MODEL_UNSUPPORTED` 拒绝。需要核对时用 `paidan models --endpoint <name>` 查询；各端点原生 home 当前实际用什么模型/强度，`paidan doctor` 的 `native_defaults` 只读可见。
 
 ## 错误处理
 

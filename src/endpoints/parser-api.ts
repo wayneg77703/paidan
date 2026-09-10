@@ -35,10 +35,25 @@ export interface DiscoverModelsResult {
     notes: string[]
 }
 
+export interface NativeDefaults {
+    /** the native config's current default model; null = unset (built-in default) */
+    model?: string | null
+    /** the native config's current effort/thinking level; null = unset */
+    effort?: string | null
+    notes?: string[]
+}
+
 export interface EndpointParserModule {
     createParser(): EndpointStreamParser
     detectRefusals(stderrText: string, exitCode: number | null): string[]
     discoverModels?(): Promise<DiscoverModelsResult>
+    /**
+     * Optional read-only probe of the endpoint's native home: what model/effort
+     * the agent's own configuration currently carries. Displayed by init/doctor
+     * as the "native default" reality (invariant 4: read-only, never written).
+     * Absent = this endpoint has no probed native surface.
+     */
+    readNativeDefaults?(): Promise<NativeDefaults>
     /**
      * Optional post-terminal ledger observation (e.g. kimi's native session
      * wire.jsonl). Called only when the stream parser produced no usage.

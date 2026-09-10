@@ -22,7 +22,7 @@ CLI 的 stdout 恒为 JSON。没有 daemon：每个 run 由一个 detached worke
 
 ## 宿主接入
 
-宿主 AI agent 通过 CLI 驱动 paidan——没有插件体系。`paidan init` 向导是全交互的：启用端点与安装 skill 的宿主都是复选框多选（空格勾选、回车确认；skill 文件见 [`skills/paidan/SKILL.md`](skills/paidan/SKILL.md)），默认端点用方向键菜单单选，**每个能 headless 接模型的启用端点**各自选默认模型（dsh/zcode 这类模型归原生配置管的端点只给提示不参与；选择存为 `defaults.models.<端点>`——**向导绝不写全局 `defaults.model`**，那会毒害这两类端点）。**每个受支持的 agent 都既是被调方也能当宿主**——[`skills/hosts.json`](skills/hosts.json) 登记了全部八个 agent 的用户级技能目录（kimi-code、claude-code、zcode、codex、dsh、opencode、agy、omp），且载荷 frontmatter 按各家规范适配。也可以手工复制（Kimi Code：复制到用户级 `~/.kimi-code/skills/paidan/` 目录）。它教会宿主七个动词、权限预设语义和「证据优先」的终态判读规则。
+宿主 AI agent 通过 CLI 驱动 paidan——没有插件体系。`paidan init` 向导是全交互的：启用端点与安装 skill 的宿主都是复选框多选（空格勾选、回车确认；skill 文件见 [`skills/paidan/SKILL.md`](skills/paidan/SKILL.md)），默认端点用方向键菜单单选，**每个能 headless 接模型的启用端点**各自选默认模型（dsh/zcode 这类模型归原生配置管的端点只给提示不参与；选择存为 `defaults.models.<端点>`——**向导绝不写全局 `defaults.model`**，那会毒害这两类端点）。**每个受支持的 agent 都既是被调方也能当宿主**——[`skills/hosts.json`](skills/hosts.json) 登记了全部八个 agent 的用户级技能目录（kimi-code、claude-code、zcode、codex、dsh、opencode、agy、omp），且载荷 frontmatter 按各家规范适配。也可以手工复制（Kimi Code：复制到用户级 `~/.kimi-code/skills/paidan/` 目录）。它教会宿主七个动词、权限预设语义和「证据优先」的终态判读规则。`paidan init --yes` 走零覆盖路径——模型/强度全部留在端点原生默认（各原生 home 当前实际值经 `paidan doctor` 的 `native_defaults` 只读可见）；`--yes --effort <档>` 把该档应用到所有声明了它的端点。
 
 ## 它是什么 / 不是什么
 
@@ -52,8 +52,8 @@ paidan 是本机派单台（"派单" = dispatching an order）。它做三件事
 
 | 端点 | 预设（ro/ww/ua） | 用户可见的意外点 |
 |---|---|---|
-| kimi-code | – / ✅ / ✅ | 完全没有 headless 只读档（`-p` 固定 auto 权限；探针实证）。usage 来自原生会话账本（`endpoint-ledger`）。 |
-| codex | ✅ / ✅ / ✅ | resume 恢复原会话的 sandbox 档（`exec resume` 不收 `-s`/`--add-dir`）。 |
+| kimi-code | – / ✅ / ✅ | 完全没有 headless 只读档（`-p` 固定 auto 权限；探针实证）。usage 来自原生会话账本（`endpoint-ledger`）。强度（low/high/max）走环境变量——0.42.0 无 CLI flag；`KIMI_MODEL_THINKING_EFFORT` 覆盖原生 config 键。 |
+| codex | ✅ / ✅ / ✅ | resume 恢复原会话的 sandbox 档（`exec resume` 不收 `-s`/`--add-dir`）。强度走 `-c model_reasoning_effort`（minimal–xhigh；不设时用原生 config 值）。 |
 | claude-code | ✅ / ✅ / ✅ | read-only = 默认档 + `--permission-prompts none`；shell.exec 需要 bypassPermissions（unattended）。 |
 | zcode | – / – / ✅ | 设计上仅 yolo（非 yolo 档 headless 下永远等待）。桌面版不装 PATH 二进制——默认安装目录由 `detect.known_paths` 自动探测；自定义安装位置则设 `endpoints.overrides.zcode.bin`，或自制 shim。 |
 | opencode | ✅ / ✅ / ✅ | 项目根会被继承的 `PWD` 锚定——paidan 钉 `run --dir <cwd>` 并 unset `PWD`。v0 不支持 `add_dirs`（需要 computed-env 权限投影）。 |

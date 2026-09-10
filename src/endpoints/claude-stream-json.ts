@@ -12,8 +12,11 @@
 //    not stderr lines — detectRefusals therefore has no evidenced signature.
 // Unknown output degrades (degraded=true), it never crashes.
 
+import * as fs from 'node:fs/promises'
+import * as os from 'node:os'
+import * as nodePath from 'node:path'
 import type { UsageSummary } from '../engine/types.js'
-import type { EndpointStreamParser } from './parser-api.js'
+import type { DiscoverModelsResult, EndpointStreamParser, NativeDefaults } from './parser-api.js'
 
 export interface ClaudeParseResult {
     finalText: string
@@ -162,8 +165,65 @@ export function detectRefusals(_stderrText: string, _exitCode: number | null): s
 }
 
 // ---- Convention exports (parser-api.ts): the registry loads these by name ----
-// No discoverModels: claude has no model-enumeration command (see manifest
-// models.notes); aliases sonnet/opus/haiku are selected via --model only.
+/**
+ * Static docs-sourced alias list: claude has NO model-enumeration command
+ * (2.1.260: `claude model list` / `claude models` are not subcommands — they
+ * fall through to a chat prompt). Aliases come from the official model-config
+ * page (checked 2026-09-11) and track the latest model per tier; pin a full
+ * name (e.g. claude-opus-5) by hand in config.json if you need a fixed version.
+ * Gateway availability varies (this machine's gateway 403s fable, live
+ * 2026-09-10); a picked-but-unavailable alias fails honestly at the endpoint.
+ */
+export async function discoverModels(): Promise<DiscoverModelsResult> {
+    return {
+        models: [
+            { alias: 'sonnet', connection: null },
+            { alias: 'opus', connection: null },
+            { alias: 'haiku', connection: null },
+            { alias: 'fable', connection: null },
+        ],
+        notes: [
+            'static list from the official model-config docs (claude has no enumeration command); aliases resolve to the latest model per tier',
+            'opusplan/best strategy aliases and the [1m] context suffix exist but stay out of the picker; set defaults.models.claude-code by hand for those',
+        ],
+    }
+}
+
+/** Read-only native-defaults probe: the `model` key of ~/.claude/settings.json (env.ANTHROPIC_MODEL is noted when present). */
+export function readClaudeNativeDefaults(settingsJson: string | null): NativeDefaults {
+    if (settingsJson === null) return { model: null, effort: null, notes: ['native claude settings.json not found'] }
+    let parsed: unknown
+    try {
+        parsed = JSON.parse(settingsJson)
+    } catch {
+        return { model: null, effort: null, notes: ['native claude settings.json is not valid JSON'] }
+    }
+    const notes: string[] = []
+    let model: string | null = null
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const o = parsed as Record<string, unknown>
+        if (typeof o.model === 'string' && o.model.length > 0) model = o.model
+        const env = o.env
+        if (env && typeof env === 'object' && !Array.isArray(env)) {
+            const anthropicModel = (env as Record<string, unknown>).ANTHROPIC_MODEL
+            if (typeof anthropicModel === 'string' && anthropicModel.length > 0) {
+                notes.push(`settings env ANTHROPIC_MODEL=${anthropicModel}`)
+            }
+        }
+    }
+    return { model, effort: null, notes }
+}
+
+export async function readNativeDefaults(): Promise<NativeDefaults> {
+    const claudeHome = process.env.CLAUDE_CONFIG_DIR ?? nodePath.join(os.homedir(), '.claude')
+    let raw: string | null = null
+    try {
+        raw = await fs.readFile(nodePath.join(claudeHome, 'settings.json'), 'utf8')
+    } catch {
+        raw = null
+    }
+    return readClaudeNativeDefaults(raw)
+}
 
 export function createParser(): ClaudeStreamJsonParser {
     return createClaudeStreamJsonParser()

@@ -23,7 +23,6 @@ import {
     buildInitConfig,
     initConfigToJson,
     mergeInitConfig,
-    NATIVE_DEFAULT_LABEL,
     parseMultiSelect,
     planEndpointDefaultQuestions,
     type InitAnswers,
@@ -58,6 +57,7 @@ import {
     DEFAULT_PROMPT_MAX_BYTES,
     discoverAndCacheModels,
     EndpointRegistry,
+    loadParserModule,
     ManifestError,
     refreshManifestVerifiedAt,
     measureArgvBytes,
@@ -67,6 +67,7 @@ import {
     buildArgs,
     type EndpointManifest,
 } from './endpoints/registry.js'
+import type { NativeDefaults } from './endpoints/parser-api.js'
 import { checkNativePreflight } from './endpoints/native-preflight.js'
 import { cmdShimRefusalMessage, finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn, type SpawnPlan } from './endpoints/spawn.js'
 import { checkboxSelect, menuSelect, PromptAbort, rawSelectSupported } from './tty-select.js'
@@ -664,6 +665,9 @@ async function verbDoctor(ctx: Ctx): Promise<void> {
             models_cache: modelsCacheInfo,
             permission,
             native_preflight: nativePreflight,
+            // read-only: what the endpoint's own home currently carries (the
+            // "native default" reality — paidan never writes it)
+            native_defaults: await readEndpointNativeDefaults(manifest),
             parser: manifest.parser,
             capabilities: manifest.capabilities ?? {},
         })
@@ -894,6 +898,17 @@ async function gatherHostInfo(): Promise<{ hosts: HostInfo[]; source: string | n
     }
 }
 
+/** Read-only native-defaults probe (the model/effort the endpoint's own home currently carries); null = no probed surface. */
+async function readEndpointNativeDefaults(manifest: EndpointManifest): Promise<NativeDefaults | null> {
+    try {
+        const mod = await loadParserModule(manifest.parser)
+        if (!mod.readNativeDefaults) return null
+        return await mod.readNativeDefaults()
+    } catch {
+        return null
+    }
+}
+
 /** Detection + model discovery for every manifest; live discovery writes the models cache through. */
 async function gatherEndpointInfo(ctx: Ctx): Promise<InitEndpointInfo[]> {
     const cache = new ModelsCache(ctx.dataDir)
@@ -917,6 +932,7 @@ async function gatherEndpointInfo(ctx: Ctx): Promise<InitEndpointInfo[]> {
             models,
             model_selectable: manifest.command.model_arg !== undefined,
             effort_options: manifest.effort?.options ?? null,
+            native: await readEndpointNativeDefaults(manifest),
             repair: detected ? null : (spawnRes.notes.at(-1) ?? null),
         })
     }
@@ -927,7 +943,10 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
     const { values } = parseArgs({
         args,
         strict: true,
-        options: { yes: { type: 'boolean', default: false } },
+        options: {
+            yes: { type: 'boolean', default: false },
+            effort: { type: 'string' },
+        },
     })
     const info = await gatherEndpointInfo(ctx)
     const hostInfo = await gatherHostInfo()
@@ -942,7 +961,7 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
                 config_exists: existsSync(ctx.configPath),
                 endpoints: info,
                 hosts: hostInfo.hosts.map((h) => ({ name: h.name, detected: h.detected, skills_dir: h.skills_dir })),
-                non_interactive: 'paidan init --yes enables all detected endpoints, sets each headless-selectable endpoint\'s first discovered model as its default (native effort everywhere), and installs the paidan skill into every detected host',
+                non_interactive: 'paidan init --yes enables all detected endpoints and leaves every model/effort at the endpoint\'s native default (the agent\'s own home carries them; --yes --effort <level> additionally applies that level to every endpoint whose options include it); the skill is installed into every detected host',
             },
         }) + '\n')
         return 1
@@ -950,7 +969,7 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
 
     let answers: InitAnswers
     if (values.yes) {
-        answers = defaultInitAnswers(info, hostInfo.hosts.filter((h) => h.detected).map((h) => h.name))
+        answers = defaultInitAnswers(info, hostInfo.hosts.filter((h) => h.detected).map((h) => h.name), values.effort)
     } else {
         try {
             answers = await promptInitAnswers(info, hostInfo.hosts, ctx.config)
@@ -1003,6 +1022,14 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
         enabled: answers.enabled,
         defaults: cfg.defaults,
         endpoints: info.map((e) => ({ name: e.name, detected: e.detected, version: e.version, models: e.models.length })),
+        // --effort preference report: where it landed and where it could not
+        effort_preference: values.effort ?? null,
+        effort_applied_to: Object.keys(cfg.defaults.efforts),
+        effort_skipped: values.effort !== undefined
+            ? info
+                .filter((e) => e.detected && e.effort_options && !e.effort_options.includes(values.effort as string))
+                .map((e) => `${e.name} (top option: ${(e.effort_options ?? []).at(-1) ?? '?'})`)
+            : [],
         skills,
     })
     return 0
@@ -1047,7 +1074,7 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config
             const epInfo = info.find((e) => e.name === name) as InitEndpointInfo
             const q = planEndpointDefaultQuestions(epInfo, config)
             if (q.model.kind === 'skip-no-selection') {
-                process.stderr.write(`(no headless model selection for ${name}; its native config owns the model)\n`)
+                process.stderr.write(`(no headless model selection for ${name}; its native config owns the model${q.nativeModel ? ` (currently ${q.nativeModel})` : ''})\n`)
             } else if (q.model.kind === 'skip-none') {
                 process.stderr.write(`(no discovered models for ${name}; native default will be used)\n`)
             } else if (q.model.kind === 'auto') {
@@ -1065,7 +1092,7 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config
                 models[name] = q.model.options[idx] as string
             }
             if (q.effort.kind === 'skip') {
-                process.stderr.write(`(no effort selection for ${name}; native default)\n`)
+                process.stderr.write(`(no effort selection for ${name}; ${q.nativeEffortLabel})\n`)
             } else {
                 if (q.effort.staleValue) {
                     process.stderr.write(`(configured effort "${q.effort.staleValue}" for ${name} is no longer in its options; it will be replaced unless you pick one)\n`)
@@ -1076,7 +1103,7 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config
                     q.effort.options.indexOf(q.effort.fallback),
                 )
                 const choice = q.effort.options[idx] as string
-                if (choice !== NATIVE_DEFAULT_LABEL) efforts[name] = choice
+                if (choice !== q.nativeEffortLabel) efforts[name] = choice
             }
         }
     }
@@ -1131,7 +1158,7 @@ async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[], confi
                 const epInfo = info.find((e) => e.name === name) as InitEndpointInfo
                 const q = planEndpointDefaultQuestions(epInfo, config)
                 if (q.model.kind === 'skip-no-selection') {
-                    process.stderr.write(`(no headless model selection for ${name}; its native config owns the model)\n`)
+                    process.stderr.write(`(no headless model selection for ${name}; its native config owns the model${q.nativeModel ? ` (currently ${q.nativeModel})` : ''})\n`)
                 } else if (q.model.kind === 'skip-none') {
                     process.stderr.write(`(no discovered models for ${name}; native default will be used)\n`)
                 } else if (q.model.kind === 'auto') {
@@ -1141,13 +1168,13 @@ async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[], confi
                     models[name] = await pickOne(rl, `Default model for ${name}`, q.model.options, q.model.fallback)
                 }
                 if (q.effort.kind === 'skip') {
-                    process.stderr.write(`(no effort selection for ${name}; native default)\n`)
+                    process.stderr.write(`(no effort selection for ${name}; ${q.nativeEffortLabel})\n`)
                 } else {
                     if (q.effort.staleValue) {
                         process.stderr.write(`(configured effort "${q.effort.staleValue}" for ${name} is no longer in its options; it will be replaced unless you pick one)\n`)
                     }
                     const choice = await pickOne(rl, `Default effort for ${name}`, q.effort.options, q.effort.fallback)
-                    if (choice !== NATIVE_DEFAULT_LABEL) efforts[name] = choice
+                    if (choice !== q.nativeEffortLabel) efforts[name] = choice
                 }
             }
         }

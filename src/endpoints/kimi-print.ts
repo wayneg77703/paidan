@@ -13,7 +13,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import type { UsageSummary } from '../engine/types.js'
-import type { DiscoverModelsResult, EndpointStreamParser, LedgerReadResult } from './parser-api.js'
+import type { DiscoverModelsResult, EndpointStreamParser, LedgerReadResult, NativeDefaults } from './parser-api.js'
 import { captureKimiLedgerCursor, readKimiLedgerUsage, type KimiLedgerCursor } from './kimi-ledger.js'
 
 export interface KimiParseResult {
@@ -160,6 +160,41 @@ export async function discoverModels(): Promise<DiscoverModelsResult> {
         toml = null
     }
     return discoverKimiModels(toml)
+}
+
+/** Read-only native-defaults probe: top-level `default_model` + the `[thinking]` section's `effort` (kimi's effort key lives there, not at the top level). */
+export function readKimiNativeDefaults(configToml: string | null): NativeDefaults {
+    if (configToml === null) return { model: null, effort: null, notes: ['native kimi config.toml not found'] }
+    let model: string | null = null
+    let effort: string | null = null
+    let section = ''
+    for (const line of configToml.split(/\r?\n/)) {
+        const secMatch = /^\s*\[(.+)\]\s*$/.exec(line)
+        if (secMatch) {
+            section = secMatch[1]?.trim() ?? ''
+            continue
+        }
+        if (section === '' && model === null) {
+            const m = /^\s*default_model\s*=\s*"([^"]+)"/.exec(line)
+            if (m && m[1]) model = m[1]
+        }
+        if (section === 'thinking' && effort === null) {
+            const m = /^\s*effort\s*=\s*"([^"]+)"/.exec(line)
+            if (m && m[1]) effort = m[1]
+        }
+    }
+    return { model, effort }
+}
+
+export async function readNativeDefaults(): Promise<NativeDefaults> {
+    const kimiHome = process.env.KIMI_CODE_HOME ?? nodePath.join(os.homedir(), '.kimi-code')
+    let toml: string | null = null
+    try {
+        toml = await fs.readFile(nodePath.join(kimiHome, 'config.toml'), 'utf8')
+    } catch {
+        toml = null
+    }
+    return readKimiNativeDefaults(toml)
 }
 
 /** Post-terminal ledger observation; stream parser never yields usage for kimi. */

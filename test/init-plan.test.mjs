@@ -68,18 +68,33 @@ test('buildInitConfig: per-endpoint efforts are validated against declared optio
     assert.deepEqual(merged.defaults, { endpoint: 'claude-code', effort: 'high', run_timeout_sec: 900 })
 })
 
-test('--yes defaults: enable detected only, default = first detected; per-endpoint first models', () => {
+test('--yes defaults: enable detected only, default = first detected; models stay native (no override layer)', () => {
     const answers = defaultInitAnswers(INFO)
     assert.deepEqual(answers.enabled, ['claude-code', 'codex', 'kimi-code'])
     assert.equal(answers.default_endpoint, 'claude-code')
-    assert.deepEqual(answers.models, { codex: 'gpt-5', 'kimi-code': 'kimi-for-coding/k3' })
+    // pure reuse: --yes never writes default models — the endpoints' native
+    // homes carry them; a paidan-side first-discovered default silently
+    // changes native behavior
+    assert.deepEqual(answers.models, {})
     const cfg = buildInitConfig(INFO, answers)
     assert.deepEqual(cfg.endpoints.enabled, ['claude-code', 'codex', 'kimi-code'])
     const json = initConfigToJson(cfg)
     assert.deepEqual(json, {
         endpoints: { enabled: ['claude-code', 'codex', 'kimi-code'] },
-        defaults: { endpoint: 'claude-code', models: { codex: 'gpt-5', 'kimi-code': 'kimi-for-coding/k3' } },
+        defaults: { endpoint: 'claude-code' },
     })
+})
+
+test('--yes --effort <level>: applied only to endpoints whose declared options include it', () => {
+    const answers = defaultInitAnswers(INFO, [], 'high')
+    assert.deepEqual(answers.models, {})
+    // claude-code declares low..max -> applied; codex/kimi-code declare nothing -> stay native
+    assert.deepEqual(answers.efforts, { 'claude-code': 'high' })
+    // a level no endpoint carries applies nowhere (honest no-op, reported by the CLI shell)
+    const none = defaultInitAnswers(INFO, [], 'ultra')
+    assert.deepEqual(none.efforts, {})
+    const cfg = buildInitConfig(INFO, answers)
+    assert.deepEqual(cfg.defaults.efforts, { 'claude-code': 'high' })
 })
 
 test('buildInitConfig rejects impossible answers', () => {

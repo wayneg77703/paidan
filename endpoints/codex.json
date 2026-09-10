@@ -123,6 +123,24 @@
     "connections": [],
     "notes": "v0: heuristic read of the native $CODEX_HOME/config.toml top-level `model` key (codex has no CLI model-list surface; `app-server model/list` is experimental). Connection label chatgpt-login when ~/.codex/auth.json exists (probe report 2026-09-09 §4: one active ChatGPT-login connection on this machine; the CODEX_API_KEY path is unconfigured). Selection = config.json defaults.model or the codex native default; no cross-connection fallback."
   },
+  "effort": {
+    "options": [
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "arg": [
+      "-c",
+      "model_reasoning_effort={effort}"
+    ],
+    "default": null,
+    "status": "supported",
+    "verified_at": "2026-09-11",
+    "version": "0.154.0",
+    "notes": "Delivered as a config override: codex exec -c model_reasoning_effort=<level> (the value parses as TOML; a bare word is a literal string). options = the official config-reference set minimal|low|medium|high|xhigh (xhigh is Responses-API-only per the docs). The local config.toml additionally enables max/ultra and ultra was live-verified 2026-09-11 (PONG, exit 0), but both are quota-heavy and stay out of the picker options; edit this manifest if you want them selectable. The native config.toml top-level model_reasoning_effort = high applies when paidan leaves effort unset."
+  },
   "parser": "codex-exec",
   "parser_notes": "codex exec --json emits NDJSON on stdout: thread.started{thread_id} (session handle), turn.started, item.started/item.updated/item.completed (item.type agent_message carries assistant text in item.text; item.type error is a soft in-band error), turn.completed{usage{input_tokens,cached_input_tokens,output_tokens,...}} (usage source provider), turn.failed and top-level error on failure. finalText = last agent_message (codex's own -o last-message semantics; paidan v0 has no run-dir -o templating). Non-JSON stdout lines, mid-line EOF and unknown TOP-LEVEL event types set degraded (unknown item types are ignored — item families drift fast). Evidence: suite adapter operations/governance/harnesses/runtime/adapters/codex.mjs analyzeEvents/extractCodexUsage + live 0.154.0 runs 2026-09-10.",
   "capabilities": {

@@ -156,7 +156,7 @@ async function main(): Promise<number> {
 
         const child = spawn(plan.command, spawnArgs, {
             cwd: request.cwd,
-            env: buildEnv(manifest, process.env, request.mode),
+            env: buildEnv(manifest, process.env, request.mode, request.effort),
             windowsHide: true,
             detached: process.platform !== 'win32',
             stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],

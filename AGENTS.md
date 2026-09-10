@@ -27,7 +27,9 @@ src/endpoints/  per-endpoint parser code (registry.ts + spawn.ts own shared rule
                 stops being single-purpose)
                 spawn.ts owns layered endpoint spawn resolution (override → PATH → npm layout → cmd shim)
 endpoints/      per-endpoint data manifest (JSON): detection, command template, permission map,
-                prompt delivery, output parsing type, model discovery, capability flags (+verified_at)
+                prompt delivery, output parsing type, model discovery, capability flags (+verified_at),
+                optional effort block (argv `arg` and/or env `env` delivery — e.g. kimi has no CLI
+                flag and rides KIMI_MODEL_THINKING_EFFORT)
 src/cli.js→ts   argument parsing (node:util parseArgs), one handler per verb
 src/tty-select.ts  raw-mode checkbox/menu widgets for the init wizard (clack-style grammar;
                 reducers are pure and unit-tested, rendering is covered by fake-TTY shell tests)

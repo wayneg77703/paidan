@@ -13,7 +13,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import type { UsageSummary } from '../engine/types.js'
-import type { DiscoverModelsResult, EndpointStreamParser } from './parser-api.js'
+import type { DiscoverModelsResult, EndpointStreamParser, NativeDefaults } from './parser-api.js'
 
 const REQUIRED_ENVELOPE_FIELDS = ['sessionId', 'traceId', 'turnId', 'usage', 'projection', 'response'] as const
 const MAX_TURNS = 12
@@ -201,4 +201,23 @@ export async function discoverModels(): Promise<DiscoverModelsResult> {
         json = null
     }
     return discoverZcodeModels(json)
+}
+
+/** Read-only native-defaults probe: the `model` string of the native CLI config (a "builtin:<connection>/<model>" alias — the connection half is credential-bound, which is why paidan does not deliver zcode models). */
+export async function readNativeDefaults(): Promise<NativeDefaults> {
+    const nativeRoot = process.env.USERPROFILE ?? os.homedir()
+    let raw: string | null = null
+    try {
+        raw = await fs.readFile(nodePath.join(nativeRoot, '.zcode', 'cli', 'config.json'), 'utf8')
+    } catch {
+        raw = null
+    }
+    if (raw === null) return { model: null, effort: null, notes: ['native zcode cli/config.json not found'] }
+    try {
+        const o = JSON.parse(raw) as Record<string, unknown>
+        const model = typeof o.model === 'string' && o.model.length > 0 ? o.model : null
+        return { model, effort: null }
+    } catch {
+        return { model: null, effort: null, notes: ['native zcode cli/config.json is not valid JSON'] }
+    }
 }

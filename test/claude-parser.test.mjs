@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createParser, detectRefusals } from '../dist/endpoints/claude-stream-json.js'
+import { createParser, detectRefusals, discoverModels, readClaudeNativeDefaults } from '../dist/endpoints/claude-stream-json.js'
 
 const INIT = '{"type":"system","subtype":"init","cwd":"D:/work","session_id":"11111111-2222-3333-4444-555555555555","tools":["Read","Write","Bash"],"model":"claude-opus-5","permissionMode":"acceptEdits"}'
 
@@ -124,4 +124,22 @@ test('unknown event types and blank lines are ignored', () => {
     assert.equal(r.degraded, false)
     assert.equal(r.usage, null)
     assert.ok(!r.warnings.some((w) => w.includes('total_cost_usd')))
+})
+
+test('discoverModels: static docs-sourced alias list (claude has no enumeration command)', async () => {
+    const { models, notes } = await discoverModels()
+    assert.deepEqual(models.map((m) => m.alias), ['sonnet', 'opus', 'haiku', 'fable'])
+    assert.ok(models.every((m) => m.connection === null))
+    assert.ok(notes.some((n) => n.includes('no enumeration command')))
+})
+
+test('readClaudeNativeDefaults: settings.json model key + ANTHROPIC_MODEL note', () => {
+    const d = readClaudeNativeDefaults(JSON.stringify({ model: 'opus', env: { ANTHROPIC_MODEL: 'claude-opus-5', ANTHROPIC_BASE_URL: 'https://gw' } }))
+    assert.equal(d.model, 'opus')
+    assert.ok((d.notes ?? []).some((n) => n.includes('claude-opus-5')))
+    assert.equal(readClaudeNativeDefaults('{}').model, null)
+    assert.equal(readClaudeNativeDefaults('not json').model, null)
+    const none = readClaudeNativeDefaults(null)
+    assert.equal(none.model, null)
+    assert.ok((none.notes ?? []).length > 0)
 })

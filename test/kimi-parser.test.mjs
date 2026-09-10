@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createKimiPrintParser, detectKimiRefusals, discoverKimiModels } from '../dist/endpoints/kimi-print.js'
+import { createKimiPrintParser, detectKimiRefusals, discoverKimiModels, readKimiNativeDefaults } from '../dist/endpoints/kimi-print.js'
 
 const FIXTURE_NORMAL = [
     '{"role":"assistant","content":"Hello, "}',
@@ -73,4 +73,17 @@ test('model discovery scans native config.toml aliases honestly', () => {
     assert.ok(notes.length > 0)
     const none = discoverKimiModels(null)
     assert.deepEqual(none.models, [])
+})
+
+test('readKimiNativeDefaults: top-level default_model + [thinking] section effort', () => {
+    const toml = 'default_model = "kimi-code/k3"\ntelemetry = false\n[thinking]\neffort = "max"\n[provider.x]\ndefault_model = "scoped"\neffort = "low"\n'
+    const d = readKimiNativeDefaults(toml)
+    assert.equal(d.model, 'kimi-code/k3')
+    assert.equal(d.effort, 'max')
+    const partial = readKimiNativeDefaults('default_model = "kimi-code/k3"\n[provider.x]\n')
+    assert.equal(partial.model, 'kimi-code/k3')
+    assert.equal(partial.effort, null)
+    const none = readKimiNativeDefaults(null)
+    assert.equal(none.model, null)
+    assert.ok((none.notes ?? []).length > 0)
 })

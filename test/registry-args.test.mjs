@@ -251,3 +251,55 @@ test('buildArgs: effort without a manifest block is rejected; unknown values are
     assert.throws(() => buildArgs(noBlock, request({ effort: 'high' })), /has no effort selection/)
     assert.throws(() => buildArgs(claudeLike(), request({ effort: 'ultra' })), /not one of claude-code's options: low, medium, high, xhigh, max/)
 })
+
+// ---- effort block: env-delivered form (endpoints with no CLI flag, e.g. kimi) ----
+
+function kimiEffortLike() {
+    return {
+        schema_version: '1.0.0',
+        name: 'kimi-code',
+        detect: { bin: 'kimi' },
+        command: {
+            argv: ['{bin}', '-p', '{prompt}', '--output-format', 'stream-json'],
+            prompt_delivery: 'argv',
+            model_arg: ['-m', '{model}'],
+            env: { KIMI_CODE_HOME: '{native_default}' },
+        },
+        // 0.42.0 has no --effort flag; the env var is the only config-file-free channel
+        effort: { options: ['low', 'high', 'max'], env: { KIMI_MODEL_THINKING_EFFORT: '{effort}' } },
+        permission: { presets: { 'workspace-write': 'supported' } },
+        resume: { kind: 'flag', args: ['-S', '{session}'] },
+        parser: 'kimi-print',
+    }
+}
+
+test('buildEnv: effort env form applies the substituted fragment on top of command.env', async () => {
+    const { buildEnv } = await import('../dist/endpoints/registry.js')
+    const env = buildEnv(kimiEffortLike(), { PATH: 'x', KIMI_CODE_HOME: 'native' }, null, 'max')
+    assert.equal(env.KIMI_MODEL_THINKING_EFFORT, 'max')
+    assert.equal(env.KIMI_CODE_HOME, 'native') // {native_default} sentinel leaves the caller value
+    // no configured effort -> the variable is never set
+    const env2 = buildEnv(kimiEffortLike(), { PATH: 'x' }, null, null)
+    assert.equal('KIMI_MODEL_THINKING_EFFORT' in env2, false)
+    // env-only effort contributes nothing to argv (options are still validated)
+    const argv = buildArgs(kimiEffortLike(), request({ effort: 'max', task_text: 'go' }))
+    assert.ok(!argv.some((a) => a.includes('max')))
+    assert.throws(() => buildArgs(kimiEffortLike(), request({ effort: 'medium' })), /not one of kimi-code's options/)
+})
+
+test('validateManifest: env-only effort is legal; no delivery form / bad env value are rejected', async () => {
+    const { validateManifest } = await import('../dist/endpoints/registry.js')
+    const base = kimiEffortLike()
+    const envOnly = { ...base, effort: { options: ['low', 'high', 'max'], env: { KIMI_MODEL_THINKING_EFFORT: '{effort}' } } }
+    validateManifest(envOnly, 'kimi-code.json') // must not throw
+    const bothForms = { ...base, effort: { options: ['low'], arg: ['--e', '{effort}'], env: { V: '{effort}' } } }
+    validateManifest(bothForms, 'kimi-code.json')
+    assert.throws(
+        () => validateManifest({ ...base, effort: { options: ['low'] } }, 'kimi-code.json'),
+        /at least one form containing \{effort\}/,
+    )
+    assert.throws(
+        () => validateManifest({ ...base, effort: { options: ['low'], env: { V: 'static' } } }, 'kimi-code.json'),
+        /effort\.env\["V"\] must be a string containing \{effort\}/,
+    )
+})

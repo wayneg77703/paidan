@@ -14,6 +14,8 @@ export interface InitEndpointInfo {
     model_selectable?: boolean
     /** declared effort options from the manifest (null = no effort selection for this endpoint) */
     effort_options?: string[] | null
+    /** read-only native-home probe: the model/effort the endpoint's own config currently carries (null = no probed surface; unset keys = null) */
+    native?: { model?: string | null; effort?: string | null; notes?: string[] } | null
     /** spawn-resolution repair hint when not detected (last resolver note) */
     repair?: string | null
 }
@@ -34,19 +36,30 @@ export interface InitConfig {
     defaults: { endpoint: string | null; models: Record<string, string>; efforts: Record<string, string> }
 }
 
-/** --yes semantics: enable every detected endpoint; default = first detected; each detected endpoint's first discovered model becomes its default (only where the endpoint can take one headless); efforts stay at the native default; install the skill into every detected host. */
-export function defaultInitAnswers(info: InitEndpointInfo[], detectedHosts: string[] = []): InitAnswers {
+/**
+ * --yes semantics: enable every detected endpoint, default = first detected,
+ * and leave every model/effort at the endpoint's native default — the agent's
+ * own home already carries those values, and a paidan-side first-discovered
+ * default is an override layer that silently changes native behavior (a wizard
+ * 'first model' once masked a hand-tuned native opus). An `effort` preference
+ * applies the value to every detected endpoint whose declared options include
+ * it (endpoints without that level stay native). The skill installs into every
+ * detected host.
+ */
+export function defaultInitAnswers(info: InitEndpointInfo[], detectedHosts: string[] = [], effortPreference?: string): InitAnswers {
     const enabled = info.filter((e) => e.detected).map((e) => e.name)
     const first = info.find((e) => e.detected)
-    const models: Record<string, string | null> = {}
-    for (const e of info) {
-        if (e.detected && e.model_selectable !== false && e.models.length > 0) models[e.name] = e.models[0]?.alias ?? null
+    const efforts: Record<string, string | null> = {}
+    if (effortPreference !== undefined) {
+        for (const e of info) {
+            if (e.detected && e.effort_options?.includes(effortPreference)) efforts[e.name] = effortPreference
+        }
     }
     return {
         enabled,
         default_endpoint: first?.name ?? null,
-        models,
-        efforts: {},
+        models: {},
+        efforts,
         skill_hosts: detectedHosts,
     }
 }
@@ -79,9 +92,17 @@ export interface EndpointDefaultQuestions {
     effort:
         | { kind: 'skip' } // endpoint declares no effort block; native default
         | { kind: 'ask'; options: string[]; fallback: string; staleValue: string | null }
+    /** label of the "leave it to the native home" choice: '(native default)' or '(native default, currently max)' when the read-only probe saw a value */
+    nativeEffortLabel: string
+    /** the native home's current model (from the read-only probe), shown on skip notes; null = unset/unprobed */
+    nativeModel: string | null
 }
 
 export const NATIVE_DEFAULT_LABEL = '(native default)'
+
+export function nativeEffortLabelFor(nativeEffort: string | null | undefined): string {
+    return nativeEffort ? `(native default, currently ${nativeEffort})` : NATIVE_DEFAULT_LABEL
+}
 
 export function planEndpointDefaultQuestions(ep: InitEndpointInfo, config: PaidanConfig): EndpointDefaultQuestions {
     const name = ep.name
@@ -103,12 +124,12 @@ export function planEndpointDefaultQuestions(ep: InitEndpointInfo, config: Paida
     if (effOpts && effOpts.length > 0) {
         const existingEff = config.defaults.efforts[name] ?? config.defaults.effort
         const staleValue = existingEff && !effOpts.includes(existingEff) ? existingEff : null
-        const fallback = existingEff && effOpts.includes(existingEff) ? existingEff : NATIVE_DEFAULT_LABEL
-        effort = { kind: 'ask', options: [NATIVE_DEFAULT_LABEL, ...effOpts], fallback, staleValue }
+        const fallback = existingEff && effOpts.includes(existingEff) ? existingEff : nativeEffortLabelFor(ep.native?.effort)
+        effort = { kind: 'ask', options: [nativeEffortLabelFor(ep.native?.effort), ...effOpts], fallback, staleValue }
     } else {
         effort = { kind: 'skip' }
     }
-    return { model, effort }
+    return { model, effort, nativeEffortLabel: nativeEffortLabelFor(ep.native?.effort), nativeModel: ep.native?.model ?? null }
 }
 
 /** Answers are validated against reality: enabled ⊆ detected, default ∈ enabled, every model ∈ its own endpoint's models and only where the endpoint can take one headless, every effort ∈ its own endpoint's declared options. */

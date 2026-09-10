@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createCodexExecParser, detectCodexRefusals, discoverCodexModels } from '../dist/endpoints/codex-exec.js'
+import { createCodexExecParser, detectCodexRefusals, discoverCodexModels, readCodexNativeDefaults } from '../dist/endpoints/codex-exec.js'
 
 const THREAD = '{"type":"thread.started","thread_id":"01a087fe-9732-7520-b210-75d94a4cd4b9"}'
 const TURN_START = '{"type":"turn.started"}'
@@ -136,13 +136,37 @@ test('detectRefusals: untrusted-directory pre-flight refusal; benign stderr stay
     assert.deepEqual(detectCodexRefusals('', null), [])
 })
 
-test('model discovery reads the native config.toml top-level model key honestly', () => {
+test('model discovery: config default first, then the docs-sourced official lineup', () => {
     const toml = 'model = "gpt-6-astra"\napproval_policy = "on-request"\n[mcp_servers.node_repl]\nmodel = "not-top-level"\n'
     const { models, notes } = discoverCodexModels(toml, true)
-    assert.deepEqual(models, [{ alias: 'gpt-6-astra', connection: 'chatgpt-login' }])
+    // config default listed first, official five follow, no duplicates
+    assert.deepEqual(models, [
+        { alias: 'gpt-6-astra', connection: 'chatgpt-login' },
+        { alias: 'gpt-5.6-sol', connection: 'chatgpt-login' },
+        { alias: 'gpt-5.6-terra', connection: 'chatgpt-login' },
+        { alias: 'gpt-5.6-luna', connection: 'chatgpt-login' },
+        { alias: 'gpt-5.3-codex-spark', connection: 'chatgpt-login' },
+    ])
     assert.ok(notes.length > 0)
+    // no config -> official lineup still available, with a note
     const none = discoverCodexModels(null, false)
-    assert.deepEqual(none.models, [])
-    const noKey = discoverCodexModels('[mcp_servers.x]\nmodel = "scoped"\n', false)
-    assert.deepEqual(noKey.models, [])
+    assert.equal(none.models.length, 5)
+    assert.equal(none.models[0].alias, 'gpt-6-astra')
+    // a config model outside the lineup lands first; section models are ignored
+    const custom = discoverCodexModels('model = "gpt-5.9-custom"\n[mcp_servers.x]\nmodel = "scoped"\n', false)
+    assert.equal(custom.models[0].alias, 'gpt-5.9-custom')
+    assert.equal(custom.models.length, 6)
+})
+
+test('readCodexNativeDefaults: top-level model/model_reasoning_effort only', () => {
+    const toml = 'model = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n[mcp_servers.x]\nmodel = "scoped"\n'
+    const d = readCodexNativeDefaults(toml)
+    assert.equal(d.model, 'gpt-6-astra')
+    assert.equal(d.effort, 'high')
+    const partial = readCodexNativeDefaults('model = "gpt-5.6-sol"\n')
+    assert.equal(partial.model, 'gpt-5.6-sol')
+    assert.equal(partial.effort, null)
+    const none = readCodexNativeDefaults(null)
+    assert.equal(none.model, null)
+    assert.ok((none.notes ?? []).length > 0)
 })
