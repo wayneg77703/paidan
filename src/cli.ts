@@ -42,6 +42,7 @@ import { launchWorker, terminateEndpointTree } from './engine/supervisor.js'
 import { UsageDb } from './engine/usage-db.js'
 import {
     PERMISSION_PRESETS,
+    type ModeSelection,
     type PermissionPreset,
     type RunRequest,
     type RunResult,
@@ -56,6 +57,7 @@ import {
     ManifestError,
     measureArgvBytes,
     pickProbePreset,
+    parseCapabilitySet,
     withPromptCwdHint,
     buildArgs,
     type EndpointManifest,
@@ -158,6 +160,7 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
             task: { type: 'string' },
             'task-file': { type: 'string' },
             mode: { type: 'string' },
+            capabilities: { type: 'string' },
             model: { type: 'string' },
             effort: { type: 'string' },
             resume: { type: 'string' },
@@ -175,15 +178,38 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
     if (taskText === null || taskText.trim() === '') {
         throw new CliError('TASK_REQUIRED', 'run requires --task <text> or --task-file <path>')
     }
-    const mode = (values.mode ?? 'workspace-write') as PermissionPreset
-    if (!(PERMISSION_PRESETS as readonly string[]).includes(mode)) {
-        throw new CliError('MODE_INVALID', `mode must be one of ${PERMISSION_PRESETS.join(' | ')}`)
+    if (values.mode !== undefined && values.capabilities !== undefined) {
+        throw new CliError('ARGS_INVALID', '--mode and --capabilities are mutually exclusive')
+    }
+    let mode: ModeSelection
+    if (values.capabilities !== undefined) {
+        let parsed: unknown
+        try {
+            parsed = JSON.parse(values.capabilities)
+        } catch {
+            throw new CliError('ARGS_INVALID', '--capabilities must be a JSON object like {"fs.write":true,"shell.exec":true}')
+        }
+        const set = parseCapabilitySet(parsed)
+        if (!set) {
+            throw new CliError(
+                'ARGS_INVALID',
+                '--capabilities must map capability names to true/false/options objects, with at least one required capability',
+            )
+        }
+        mode = set
+    } else {
+        const preset = (values.mode ?? 'workspace-write') as PermissionPreset
+        if (!(PERMISSION_PRESETS as readonly string[]).includes(preset)) {
+            throw new CliError('MODE_INVALID', `mode must be one of ${PERMISSION_PRESETS.join(' | ')}`)
+        }
+        mode = preset
     }
     const perm = checkPermission(manifest, mode)
     if (!perm.ok) {
         throw new CliError(
             'PERMISSION_UNSUPPORTED',
-            `endpoint "${manifest.name}" cannot enforce mode "${mode}"; unsupported: ${perm.missing.join(', ')}`,
+            `endpoint "${manifest.name}" cannot enforce mode ${typeof mode === 'string' ? `"${mode}"` : JSON.stringify(mode)};` +
+            ` unsupported: ${perm.missing.join(', ')}`,
         )
     }
     // native settings preflight (read-only, soft): missing allow rules warn, never refuse

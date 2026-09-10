@@ -37,7 +37,7 @@ Root: `<dataDir>/runs/<run_id>/` (default `<APPDATA>/paidan/runs`).
 }
 ```
 
-`mode` is one of the presets `read-only | workspace-write | unattended`, or an explicit capability set `{"fs.read": {"roots": [...]}, ...}`. Submit-time rule: any required capability mapped `unsupported` in the endpoint manifest → reject with an error naming the missing capability; `soft` → warning recorded in request.warnings.
+`mode` is one of the presets `read-only | workspace-write | unattended`, or an explicit capability set `{"fs.read": {"roots": [...]}, ...}` (CLI: `--capabilities '{"shell.exec":true,"fs.write":true}'`, mutually exclusive with `--mode`). A capability whose value is `true` or an options object is required; `false`/`null` keys are not. Submit-time rule: any required capability mapped `unsupported` in the endpoint manifest → reject with `PERMISSION_UNSUPPORTED` naming the missing capabilities; `soft` → warning recorded in request.warnings. An explicit set runs the endpoint WITHOUT its preset tier flags (`command.mode_args`/`mode_env` stay unspliced — the engine cannot map an arbitrary set onto native tiers); `cwd_arg` still applies. The fingerprint canonicalizes sets (deep key sort), so key order never duplicates a run.
 
 `run_timeout_sec` is the engine wall-clock cap for the run: the effective value is `--run-timeout` ?? config `defaults.run_timeout_sec` ?? 1800, resolved at submit and stored here; `0` disables the cap. On expiry the worker kills the endpoint tree through the cancel termination path and the terminal state is `failed` with an evidence note `run timeout after Ns`.
 
@@ -146,6 +146,8 @@ Parser modules are convention-loaded: `parser: "<name>"` resolves to `src/endpoi
 ## 7. CLI verbs (output always JSON)
 
 `run | get [--wait] | cancel | list | models [--refresh] | doctor | probe | init [--yes]`
+
+`run` selects the permission tier with `--mode <preset>` (default `workspace-write`) or `--capabilities '<json>'` (explicit set; mutually exclusive with `--mode`, see §2), bounds wall time with `--run-timeout <秒>` (`0` disables, see §2), and refuses over-long argv prompts with `TASK_TOO_LONG` (§6 `prompt_max_bytes`).
 
 - `doctor`: endpoint detection results, versions, permission map status, native_preflight outcome, config/data dir paths, db status, models-cache ages. This is the compatibility-matrix generator.
 - `probe`: per endpoint, P1 write / P2 read-only refusal / P3 resume contract probes against the installed agent; refreshes `verified_at` fields on success (local calendar date).

@@ -4,7 +4,7 @@
 import * as fs from 'node:fs/promises'
 import * as nodePath from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { PermissionPreset, RunRequest } from '../engine/types.js'
+import type { CapabilitySet, ModeSelection, PermissionPreset, RunRequest } from '../engine/types.js'
 import type { EndpointParserModule, EndpointStreamParser } from './parser-api.js'
 
 export interface CapabilityStatus {
@@ -327,16 +327,26 @@ export function pickProbePreset(manifest: EndpointManifest): PermissionPreset | 
     return null
 }
 
-export function checkPermission(manifest: EndpointManifest, mode: PermissionPreset): PermissionCheck {
+/** Validate a --capabilities JSON value: plain object, values true/false/object, ≥1 required key. */
+export function parseCapabilitySet(value: unknown): CapabilitySet | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    let required = 0
+    for (const [cap, req] of Object.entries(value as Record<string, unknown>)) {
+        if (cap.trim() === '') return null
+        if (req === false || req === null) continue
+        if (req === true || (typeof req === 'object' && !Array.isArray(req))) {
+            required++
+            continue
+        }
+        return null
+    }
+    return required > 0 ? (value as CapabilitySet) : null
+}
+
+export function checkPermission(manifest: EndpointManifest, mode: ModeSelection): PermissionCheck {
     const missing: string[] = []
     const warnings: string[] = []
-    const presetStatus = manifest.permission.presets[mode]
-    if (presetStatus === 'unsupported') {
-        missing.push(`preset:${mode}`)
-    } else if (presetStatus === 'soft' || presetStatus === 'unverified' || presetStatus === undefined) {
-        warnings.push(`preset ${mode} is ${presetStatus ?? 'undeclared'} on endpoint ${manifest.name}`)
-    }
-    for (const cap of PRESET_REQUIREMENTS[mode]) {
+    const checkCap = (cap: string) => {
         const entry = manifest.permission[cap] as CapabilityStatus | undefined
         const status = entry?.status
         if (status === 'unsupported') {
@@ -347,6 +357,23 @@ export function checkPermission(manifest: EndpointManifest, mode: PermissionPres
                 (entry?.verified_at ? `, verified_at ${entry.verified_at}` : ''),
             )
         }
+    }
+    if (typeof mode !== 'string') {
+        // explicit capability set: the truthy keys are the requirements; no preset
+        // tier status applies (and no mode_args/mode_env tier flags are spliced)
+        for (const [cap, req] of Object.entries(mode)) {
+            if (req) checkCap(cap)
+        }
+        return { ok: missing.length === 0, missing, warnings }
+    }
+    const presetStatus = manifest.permission.presets[mode]
+    if (presetStatus === 'unsupported') {
+        missing.push(`preset:${mode}`)
+    } else if (presetStatus === 'soft' || presetStatus === 'unverified' || presetStatus === undefined) {
+        warnings.push(`preset ${mode} is ${presetStatus ?? 'undeclared'} on endpoint ${manifest.name}`)
+    }
+    for (const cap of PRESET_REQUIREMENTS[mode]) {
+        checkCap(cap)
     }
     return { ok: missing.length === 0, missing, warnings }
 }
@@ -432,10 +459,12 @@ export function buildArgs(manifest: EndpointManifest, request: RunRequest): stri
         if (!addDirArg) throw new ManifestError(`endpoint ${manifest.name} does not support add_dirs`)
         insert.push(...addDirArg.map((a) => a.replaceAll('{dir}', dir)))
     }
-    // per-preset flags (e.g. codex -s <sandbox>, claude --permission-mode)
-    const modeArgs = manifest.command.mode_args?.[request.mode]
-    if (modeArgs === undefined && manifest.command.mode_args !== undefined) {
-        throw new ManifestError(`endpoint ${manifest.name} has no mode_args for preset "${request.mode}"`)
+    // per-preset flags (e.g. codex -s <sandbox>, claude --permission-mode);
+    // an explicit capability set has no tier — mode_args/mode_env stay unspliced
+    const preset = typeof request.mode === 'string' ? request.mode : null
+    const modeArgs = preset ? manifest.command.mode_args?.[preset] : undefined
+    if (preset && modeArgs === undefined && manifest.command.mode_args !== undefined) {
+        throw new ManifestError(`endpoint ${manifest.name} has no mode_args for preset "${preset}"`)
     }
     if (modeArgs) insert.push(...modeArgs)
     // cwd pin (e.g. opencode --dir): after mode_args so a subcommand riding in
@@ -460,7 +489,7 @@ export function buildArgs(manifest: EndpointManifest, request: RunRequest): stri
 export function buildEnv(
     manifest: EndpointManifest,
     base: NodeJS.ProcessEnv = process.env,
-    mode: PermissionPreset | null = null,
+    mode: ModeSelection | null = null,
 ): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = { ...base }
     const apply = (fragment: Record<string, string>) => {
@@ -476,7 +505,7 @@ export function buildEnv(
     }
     apply(manifest.command.env ?? {})
     // partial mode_env coverage is normal: only tiers needing an env override declare it
-    const modeEnv = mode ? manifest.command.mode_env?.[mode] : undefined
+    const modeEnv = typeof mode === 'string' ? manifest.command.mode_env?.[mode] : undefined
     if (modeEnv) apply(modeEnv)
     return env
 }

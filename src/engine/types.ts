@@ -17,6 +17,29 @@ export type TerminalState = (typeof TERMINAL_STATES)[number]
 export const PERMISSION_PRESETS = ['read-only', 'workspace-write', 'unattended'] as const
 export type PermissionPreset = (typeof PERMISSION_PRESETS)[number]
 
+/**
+ * Explicit capability set (contracts §2): keys are capability names; a truthy
+ * value (true or an options object like {"roots": [...]}) marks the capability
+ * as required. Runs with a set splice no preset tier flags (mode_args/mode_env).
+ */
+export type CapabilitySet = Record<string, boolean | Record<string, unknown>>
+export type ModeSelection = PermissionPreset | CapabilitySet
+
+/** Stable canonical form for fingerprints: presets as-is; sets key-sorted deep. */
+export function canonicalMode(mode: ModeSelection): string {
+    if (typeof mode === 'string') return mode
+    const sortDeep = (v: unknown): unknown => {
+        if (Array.isArray(v)) return v.map(sortDeep)
+        if (v !== null && typeof v === 'object') {
+            return Object.fromEntries(
+                Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, val]) => [k, sortDeep(val)]),
+            )
+        }
+        return v
+    }
+    return JSON.stringify(sortDeep(mode))
+}
+
 export interface DeliverableSpec {
     path: string
     expected: string | null
@@ -31,7 +54,7 @@ export interface RunRequest {
     add_dirs: string[]
     task_file: string | null
     task_text: string
-    mode: PermissionPreset
+    mode: ModeSelection
     model: string | null
     effort: string | null
     resume_session: string | null

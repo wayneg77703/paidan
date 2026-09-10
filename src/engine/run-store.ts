@@ -7,13 +7,14 @@ import * as fs from 'node:fs/promises'
 import * as nodePath from 'node:path'
 import type {
     DeliverableSpec,
-    PermissionPreset,
+    ModeSelection,
     RunEvent,
     RunRequest,
     RunResult,
     RunState,
     RunStateRecord,
 } from './types.js'
+import { canonicalMode } from './types.js'
 import { isTerminal } from './state-machine.js'
 import { DEFAULT_TTL_DAYS } from './config.js'
 
@@ -29,7 +30,7 @@ export interface CreateRunInput {
     add_dirs: string[]
     task_file: string | null
     task_text: string
-    mode: PermissionPreset
+    mode: ModeSelection
     model: string | null
     effort: string | null
     resume_session: string | null
@@ -48,9 +49,9 @@ export function sha256Hex(text: string | Buffer): string {
     return createHash('sha256').update(text).digest('hex')
 }
 
-/** contracts.md §1: sha256(endpoint + cwd + task text + mode) */
-export function requestFingerprint(endpoint: string, cwd: string, taskText: string, mode: string): string {
-    return `sha256:${sha256Hex(`paidan/1\0${endpoint}\0${nodePath.resolve(cwd)}\0${taskText}\0${mode}`)}`
+/** contracts.md §1: sha256(endpoint + cwd + task text + mode); capability sets hash by canonical form */
+export function requestFingerprint(endpoint: string, cwd: string, taskText: string, mode: ModeSelection): string {
+    return `sha256:${sha256Hex(`paidan/1\0${endpoint}\0${nodePath.resolve(cwd)}\0${taskText}\0${canonicalMode(mode)}`)}`
 }
 
 export function newRunId(now: Date = new Date()): string {
