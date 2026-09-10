@@ -58,11 +58,11 @@
       "status": "supported",
       "via": "view_file requires a native read_file allow rule (request-review default auto-denies it headless, verified 2026-09-10); on Windows 1.1.28 only the unscoped form read_file(*) matched — every scoped path form tested (drive-stripped dir, dir/*, full-drive, backslash) failed to authorize view_file, an upstream limitation to revisit on upgrades. grep_search/list_dir work unlisted. Production native settings carry read_file(*).",
       "verified_at": "2026-09-10",
-      "version": "1.1.28"
+      "version": "1.2.0"
     },
     "fs.write": {
-      "status": "soft",
-      "via": "workspace-write = --mode accept-edits + native rules allow write_file(<root>) / ask write_file(*): in-scope write succeeded (t3-in), out-of-scope write auto-denied with denied_actions (t3-out); explicit deny write_file(*) beats accept-edits auto-approval (t2b, 'Matches user-configured deny rule'). read-only = --mode plan: write_file auto-denied headless even rule-free (t2a). Rule paths use the official normalization (drive letter stripped, backslashes -> slashes; verified semantically identical under native read). DRIFT 2026-09-10: agy self-updated 1.1.28 -> 1.2.0 and scoped write_file allow rules stopped matching (probe P1 fail + direct repro in %TEMP%/paidan-probe-drift1: headless auto-deny despite allow write_file(/Users/a/AppData/Local/Temp/paidan-probe*)); P2 refusal evidence and P3 resume still pass on 1.2.0. Restore options: unscoped allow write_file(*) in ~/.gemini/antigravity-cli/settings.json (weakens out-of-scope auto-deny) or upstream fix; paidan never patches native settings (invariant 4).",
+      "status": "supported",
+      "via": "workspace-write = --mode accept-edits + native allow write_file(*). CALIBRATED 2026-09-10 on agy 1.2.0 (self-update from 1.1.28): scoped write_file allow rules stopped matching on Windows — 4-variant live test (unscoped glob / drive-letter glob / exact dir / drive-letter exact) showed ONLY unscoped write_file(*) authorizes writes; 1.1.28-era scoped rules (drive-stripped official normalization) are inert under 1.2.0, same limitation class as read_file. Consequence: on Windows 1.2.0 write governance is whole-disk within accept-edits; the old out-of-scope auto-deny (t3-out) is no longer expressible via scoped rules. read-only = --mode plan still auto-denies all writes headless even rule-free (t2a; P2 probe pass on 1.2.0). deny write_file(*) beats accept-edits auto-approval (t2b, 1.1.28). Native settings are user-maintained; paidan never writes them (invariant 4).",
       "verified_at": "2026-09-10",
       "version": "1.2.0"
     },
@@ -87,7 +87,7 @@
       "workspace-write": "supported",
       "unattended": "supported"
     },
-    "presets_notes": "Mapping: read-only=--mode plan (write/exec auto-deny headless, in-band evidence), workspace-write=--mode accept-edits (+ native write_file scoping rules), unattended=--mode accept-edits (+ native command(*) rule for shell.exec). Enforcement of write scoping and shell is carried by the user's native ~/.gemini/antigravity-cli/settings.json permissions — user-maintained native config that paidan never writes; runs in a cwd with no covering write_file rule fail closed into denied_actions evidence (never silent). Caveat: native rules govern the write_file TOOL per path but cannot path-confine run_command shell egress (shell.exec=soft); unattended submits therefore carry a soft warning.",
+    "presets_notes": "Mapping: read-only=--mode plan (write/exec auto-deny headless, in-band evidence), workspace-write=--mode accept-edits (+ native allow write_file(*)), unattended=--mode accept-edits (+ native command(*) rule for shell.exec). Enforcement is carried by the user's native ~/.gemini/antigravity-cli/settings.json permissions — user-maintained native config that paidan never writes. Windows 1.2.0 caveat: write_file rules only match unscoped (*), so workspace-write is whole-disk within the file tool (scoped path rules are inert); run_command shell egress was never path-confined (shell.exec=soft). Unattended submits therefore carry a soft warning.",
     "denial_evidence": {
       "status": "supported",
       "via": "three in-band channels, all live-verified 2026-09-10: (1) result.denied_actions[] e.g. {action:write_file,display_name:WriteToFile} for ask/plan auto-denies; (2) step_update state=ERROR tool_info.error TOOL_ERROR messages ('permission check failed ... Matches user-configured deny rule', 'user denied permission ...') for explicit rules; (3) stderr 'jetski: no output produced — a tool required the \"<action>\" permission ... auto-denied'. Empty response with SUCCESS is a legal terminal shape and stays evidence, not automatic failure",

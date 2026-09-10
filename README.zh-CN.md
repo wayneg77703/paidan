@@ -57,7 +57,7 @@ paidan 是本机派单台（"派单" = dispatching an order）。它做三件事
 | opencode | ✅ / ✅ / ✅ | 项目根会被继承的 `PWD` 锚定——paidan 钉 `run --dir <cwd>` 并 unset `PWD`。v0 不支持 `add_dirs`（需要 computed-env 权限投影）。 |
 | omp | ✅ / ✅ / ✅ | workspace-write 档**没有 shell.exec**（bash/eval fail closed）；shell 需 unattended（yolo）。 |
 | dsh | ✅ / ✅ / – | 无 PATH shim——约定位置（`~/.dsh/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js`）由 `detect.known_paths` 自动探测；否则设 `endpoints.overrides.dsh.bin`。无 resume（headless 不返回会话句柄）。read-only 走 `mode_env`（DSH_PERMISSION_MODE），因为任何额外 argv 片段都会并进 prompt。 |
-| agy | ✅ / ✅ / ✅ | shell.exec 为 **soft**：shell 腿在路径治理之外（suite 记录的 `run_command` 异位启动），需原生 `command(*)` 放行规则。fs.read 需原生 `read_file` 放行规则——且在 Windows 上目前仅无作用域的 `read_file(*)` 形式生效（上游限制）。没有 `--sandbox` 标志；强制由原生 `~/.gemini` 权限设置承载，paidan 永不改写（不变量 4）。**漂移观察**：agy 1.2.0（自更新）破坏了有作用域的 `write_file(<路径>)` 放行规则匹配——workspace-write 目前需要无作用域 `write_file(*)` 放行或等上游修复（2026-09-10 探针抓获）。 |
+| agy | ✅ / ✅ / ✅ | shell.exec 为 **soft**：shell 腿在路径治理之外（suite 记录的 `run_command` 异位启动），需原生 `command(*)` 放行规则。fs.read 需原生 `read_file` 放行规则——且在 Windows 上目前仅无作用域的 `read_file(*)` 形式生效（上游限制）。没有 `--sandbox` 标志；强制由原生 `~/.gemini` 权限设置承载，paidan 永不改写（不变量 4）。**漂移观察**：agy 1.2.0（自更新）起有作用域的 `write_file(<路径>)` 放行规则不再匹配——Windows 下写治理只能走无作用域 `write_file(*)`（2026-09-10 已校准，探针 P1-P3 恢复全过）；作用域粒度待上游修复。 |
 
 图例：✅ 支持 · – 不支持 · soft = 声称支持但强制力存疑（提交时出 warning）。
 
