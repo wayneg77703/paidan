@@ -16,6 +16,8 @@ paidan cancel <run_id>
 paidan models --endpoint kimi-code            # 缓存优先；--refresh 重新查询
 ```
 
+要**通过 AI agent** 在新机器上安装（agent 读取机器状态、向你列出选项、代为完成安装）？把 [`INSTALL.md`](INSTALL.md) 交给它。
+
 CLI 的 stdout 恒为 JSON。没有 daemon：每个 run 由一个 detached worker 进程监督，磁盘上的 run store 是唯一事实源。
 
 ## 宿主接入

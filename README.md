@@ -16,6 +16,8 @@ paidan cancel <run_id>
 paidan models --endpoint kimi-code            # cache-first; --refresh re-queries
 ```
 
+Setting up a fresh machine **through an AI agent** (the agent reads the machine state, asks you the options, and completes the install)? Hand the agent [`INSTALL.md`](INSTALL.md).
+
 All CLI output is JSON. There is no daemon: each run is supervised by a detached worker process, and the on-disk run store is the single source of truth.
 
 ## Host integration
