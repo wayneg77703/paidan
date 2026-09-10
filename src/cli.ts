@@ -42,16 +42,21 @@ import { UsageDb } from './engine/usage-db.js'
 import {
     PERMISSION_PRESETS,
     type PermissionPreset,
+    type RunRequest,
     type RunResult,
     type RunState,
     type RunStateRecord,
 } from './engine/types.js'
 import {
     checkPermission,
+    DEFAULT_PROMPT_MAX_BYTES,
     EndpointRegistry,
     loadParserModule,
     ManifestError,
+    measureArgvBytes,
     pickProbePreset,
+    withPromptCwdHint,
+    buildArgs,
     type EndpointManifest,
 } from './endpoints/registry.js'
 import { finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn, type SpawnPlan } from './endpoints/spawn.js'
@@ -187,6 +192,50 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
             throw new CliError('ARGS_INVALID', '--run-timeout must be a non-negative number of seconds (0 disables)')
         }
     }
+    const runTimeoutSec = effectiveRunTimeoutSec(runTimeoutFlag, ctx.config)
+    // argv-delivery guard: the prompt rides the command line, which Windows caps
+    // at 32767 chars — measure the final argv and refuse at submit time.
+    // --task-file does NOT help here: it only changes how paidan reads the task.
+    if (manifest.command.prompt_delivery === 'argv') {
+        const hint = withPromptCwdHint(manifest, taskText, cwd)
+        const draft: RunRequest = {
+            schema_version: '1.0.0',
+            run_id: 'run_00000000_00000000',
+            fingerprint: '',
+            endpoint: manifest.name,
+            cwd,
+            add_dirs: (values['add-dir'] ?? []).map((d) => nodePath.resolve(d)),
+            task_file: taskFile,
+            task_text: hint.text,
+            mode,
+            model: values.model ?? ctx.config.defaults.model,
+            effort: values.effort ?? null,
+            resume_session: values.resume ?? null,
+            run_timeout_sec: runTimeoutSec,
+            deliverables: [],
+            created_at: '',
+            warnings: [],
+        }
+        let argv: string[]
+        try {
+            argv = buildArgs(manifest, draft)
+        } catch (err) {
+            if (err instanceof ManifestError) throw new CliError('MANIFEST_INVALID', err.message)
+            throw err
+        }
+        const bytes = measureArgvBytes([manifest.detect.bin, ...argv])
+        const limit = manifest.command.prompt_max_bytes ?? DEFAULT_PROMPT_MAX_BYTES
+        if (bytes > limit) {
+            throw new CliError(
+                'TASK_TOO_LONG',
+                `endpoint "${manifest.name}" delivers the prompt via argv; the final argv would be ${bytes} bytes,` +
+                ` over the ${limit}-byte guard (Windows caps the command line at 32767 chars;` +
+                ' manifest command.prompt_max_bytes overrides).' +
+                ' Shorten the task or pick an endpoint with stdin/file prompt delivery.' +
+                ' (--task-file only changes how paidan reads the task, not how it is delivered to the endpoint.)',
+            )
+        }
+    }
     const created = await ctx.store.create({
         endpoint: manifest.name,
         cwd,
@@ -197,7 +246,7 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
         model: values.model ?? ctx.config.defaults.model,
         effort: values.effort ?? null,
         resume_session: values.resume ?? null,
-        run_timeout_sec: effectiveRunTimeoutSec(runTimeoutFlag, ctx.config),
+        run_timeout_sec: runTimeoutSec,
         deliverables: (values.deliverable ?? []).map((p) => ({ path: p, expected: null })),
         warnings: perm.warnings,
     })

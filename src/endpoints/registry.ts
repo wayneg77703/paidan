@@ -47,6 +47,8 @@ export interface EndpointManifest {
         env?: Record<string, string>
         /** append a fixed cwd/absolute-paths hint line to the delivered task text (all delivery forms, resume included) */
         prompt_cwd_hint?: boolean
+        /** argv-delivery guard: submit is rejected when the final argv exceeds this many bytes (default 24000) */
+        prompt_max_bytes?: number
     }
     permission: {
         presets: Partial<Record<PermissionPreset, CapabilityStatus['status']>>
@@ -192,6 +194,10 @@ export function validateManifest(value: unknown, source: string): EndpointManife
     }
     if (command.prompt_cwd_hint !== undefined && typeof command.prompt_cwd_hint !== 'boolean') {
         throw new ManifestError(`${source}: command.prompt_cwd_hint must be a boolean`)
+    }
+    if (command.prompt_max_bytes !== undefined
+        && (typeof command.prompt_max_bytes !== 'number' || !Number.isFinite(command.prompt_max_bytes) || command.prompt_max_bytes <= 0)) {
+        throw new ManifestError(`${source}: command.prompt_max_bytes must be a positive number`)
     }
     for (const key of ['model_arg', 'add_dir_arg'] as const) {
         if (command[key] !== undefined && !isStringArray(command[key])) {
@@ -342,6 +348,19 @@ export function withPromptCwdHint(
         appended: true,
     }
 }
+
+/**
+ * Windows CreateProcess caps the command line at 32767 chars; argv-delivered
+ * prompts died at 26 KiB in practice (omp lesson). The guard measures the
+ * would-be command line (bin + space-joined args) in UTF-8 bytes and rejects
+ * at submit time; manifest command.prompt_max_bytes overrides the default.
+ */
+export const DEFAULT_PROMPT_MAX_BYTES = 24000
+
+export function measureArgvBytes(parts: readonly string[]): number {
+    return parts.reduce((n, a) => n + Buffer.byteLength(a, 'utf8') + 1, 0)
+}
+
 
 /**
  * Build the endpoint argument list (without the bin itself; the spawn plan
