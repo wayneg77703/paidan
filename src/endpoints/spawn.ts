@@ -7,16 +7,19 @@
 //      - .js/.cjs/.mjs hit   -> spawn via process.execPath
 //   3. manifest npm layout under the standard npm global roots (works even
 //      when the shim was removed from PATH)
-//   4. cmd.exe /d /s /c fallback with caret-escaped argv (verbatim arguments)
+//   4. manifest detect.known_paths: well-known per-platform install locations
+//      as {home}/{env:NAME} templates (repo stays free of machine-absolute paths)
+//   5. cmd.exe /d /s /c fallback with caret-escaped argv (verbatim arguments)
 // npm_entry/npm_exe are package-relative templates (e.g.
 // "@openai/codex/node_modules/.../bin/codex.exe"), never machine-absolute.
 
 import * as fs from 'node:fs/promises'
+import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import { resolveBin } from '../engine/supervisor.js'
 import type { EndpointManifest } from './registry.js'
 
-export type SpawnSource = 'config-override' | 'path' | 'npm-exe' | 'npm-entry' | 'cmd-shim'
+export type SpawnSource = 'config-override' | 'path' | 'npm-exe' | 'npm-entry' | 'known-path' | 'cmd-shim'
 
 export interface SpawnPlan {
     /** what to spawn: the binary itself, process.execPath (node-wrapped), or cmd.exe */
@@ -50,6 +53,25 @@ async function isFile(p: string): Promise<boolean> {
     } catch {
         return false
     }
+}
+
+const KNOWN_PATH_TOKEN_RE = /\{home\}|\{env:([A-Za-z0-9_()\s]+)\}/g
+
+/**
+ * Expand a detect.known_paths template. `{home}` = the user's home directory;
+ * `{env:NAME}` = an environment variable (unset/empty => candidate skipped).
+ * Returns a normalized absolute path, or null when a token cannot expand.
+ */
+export function expandKnownPath(template: string, env: NodeJS.ProcessEnv, home: string): string | null {
+    let failed = false
+    const out = template.replace(KNOWN_PATH_TOKEN_RE, (whole, envName: string | undefined) => {
+        if (whole === '{home}') return home
+        const value = envName ? env[envName] : undefined
+        if (!value) failed = true
+        return value ?? ''
+    })
+    if (failed) return null
+    return nodePath.normalize(out)
 }
 
 function planForPath(resolved: string, from: SpawnSource, notes: string[]): SpawnPlan {
@@ -144,8 +166,17 @@ export async function planEndpointSpawn(
     const npmPlan = await planFromNpmLayout(manifest, npmModuleRoots(env), notes)
     if (npmPlan) return { plan: npmPlan, notes }
 
+    // 4. well-known install locations from the manifest (template-expanded)
+    for (const template of manifest.detect.known_paths ?? []) {
+        const candidate = expandKnownPath(template, env, os.homedir())
+        if (candidate && (await isFile(candidate))) {
+            notes.push(`resolved via known install location: ${template}`)
+            return { plan: planForPath(candidate, 'known-path', notes), notes }
+        }
+    }
+
     notes.push(
-        `"${manifest.detect.bin}" is not on PATH and no npm layout matched` +
+        `"${manifest.detect.bin}" is not on PATH and no npm layout or known install location matched` +
         `; repair: set endpoints.overrides.${manifest.name}.bin in config.json to the native binary` +
         ' or JS bundle (machine paths live in machine config, never in the repo), or install a PATH shim',
     )

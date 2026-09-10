@@ -80,7 +80,7 @@ Judgment order (terminal.js): deliverable evidence → endpoint refusal signals 
 ## 5. Supervisor & reconcile
 
 - Submit spawns a **detached worker** (`node dist/worker.js <run_id>`); the worker spawns the endpoint process and owns events/state/result. CLI never babysits.
-- Endpoint spawn resolution (Windows EINVAL-safe) is layered: machine-config override (`endpoints.overrides.<name>.bin`, may point at a JS bundle — spawned via `process.execPath`) → PATH scan (`.EXE` preferred over `.CMD` in one directory) → manifest npm layout (`detect.npm_exe` native binary preferred, then `detect.npm_entry` JS entry via node) under the shim's `node_modules` or the standard npm global roots → last resort `cmd.exe /d /s /c` with caret-escaped verbatim argv (CR/LF and empty arguments are rejected outright). Doctor, probe and the worker share this one resolution path.
+- Endpoint spawn resolution (Windows EINVAL-safe) is layered: machine-config override (`endpoints.overrides.<name>.bin`, may point at a JS bundle — spawned via `process.execPath`) → PATH scan (`.EXE` preferred over `.CMD` in one directory) → manifest npm layout (`detect.npm_exe` native binary preferred, then `detect.npm_entry` JS entry via node) under the shim's `node_modules` or the standard npm global roots → manifest well-known install locations (`detect.known_paths`, `{home}`/`{env:NAME}` templates so the repo stays free of machine-absolute literals) → last resort `cmd.exe /d /s /c` with caret-escaped verbatim argv (CR/LF and empty arguments are rejected outright). Doctor, probe and the worker share this one resolution path.
 - Cancel: explicit only. v0 transition: `taskkill /PID <pid> /T /F` on Windows, process-group kill elsewhere; Windows Job Object-based reaping is the planned replacement (documented gap, not a bug).
 - Reconcile runs at CLI start: scan non-terminal states, worker pid dead → state `attention` with evidence note. Never auto-restart.
 
@@ -92,7 +92,8 @@ Judgment order (terminal.js): deliverable evidence → endpoint refusal signals 
   "name": "kimi-code",
   "family": "kimi",
   "detect": { "bin": "kimi", "version_args": ["--version"], "version_re": "kimi[^0-9]*([0-9.]+)",
-              "npm_exe": "@scope/pkg/.../bin/real.exe", "npm_entry": "@scope/pkg/cli.js" },
+              "npm_exe": "@scope/pkg/.../bin/real.exe", "npm_entry": "@scope/pkg/cli.js",
+              "known_paths": ["{env:ProgramFiles}/App/resources/cli.cjs", "{home}/.tool/bin/cli.js"] },
   "command": {
     "argv": ["{bin}", "-p", "{prompt}", "--output-format", "stream-json"],
     "prompt_delivery": "stdin | argv | file",
@@ -123,7 +124,7 @@ Judgment order (terminal.js): deliverable evidence → endpoint refusal signals 
 
 `command.env` value sentinels: `"{native_default}"` = never set the variable; `"{unset}"` = delete the inherited variable (opencode strips `PWD`, which otherwise re-anchors the project root). Keys starting with `_` are documentation and are never exported to the child process.
 
-`command.resume_argv` (optional) fully replaces `command.argv` on resume runs: `{session}`/`{prompt}` are substituted and `model_arg` is still spliced, but `mode_args`/`add_dir_arg` are not (a resumed session restores its original tier — e.g. `codex exec resume` accepts neither `-s` nor `--add-dir`). Without `resume_argv`, `resume.args` flags are spliced and `mode_args` are re-passed (claude semantics). `detect.npm_exe`/`npm_entry` are package-relative paths under the npm install tree (never machine-absolute), used when PATH exposes only a script shim.
+`command.resume_argv` (optional) fully replaces `command.argv` on resume runs: `{session}`/`{prompt}` are substituted and `model_arg` is still spliced, but `mode_args`/`add_dir_arg` are not (a resumed session restores its original tier — e.g. `codex exec resume` accepts neither `-s` nor `--add-dir`). Without `resume_argv`, `resume.args` flags are spliced and `mode_args` are re-passed (claude semantics). `detect.npm_exe`/`npm_entry` are package-relative paths under the npm install tree (never machine-absolute), used when PATH exposes only a script shim. `detect.known_paths` (optional) lists well-known per-platform install locations as templates that must start with `{home}` or `{env:NAME}` and contain no `..`; unset env tokens skip the candidate, and a hit resolves with `resolved_from: "known-path"`.
 
 Parser modules are convention-loaded: `parser: "<name>"` resolves to `src/endpoints/<name>.ts` exporting `createParser()` + `detectRefusals(stderrText, exitCode)` (+ optional `discoverModels()`). Parse results carry `refusals: string[]` for in-band refusal evidence (claude `permission_denials`, codex in-band error items); the worker merges them with `detectRefusals` output into `result.json` evidence — refusal is evidence, never automatic failure. Adding an endpoint = one manifest + one parser module + golden fixtures; no engine file changes.
 
@@ -134,7 +135,7 @@ Parser modules are convention-loaded: `parser: "<name>"` resolves to `src/endpoi
 - `doctor`: endpoint detection results, versions, permission map status, config/data dir paths, db status, models-cache ages. This is the compatibility-matrix generator.
 - `probe`: per endpoint, P1 write / P2 read-only refusal / P3 resume contract probes against the installed agent; refreshes `verified_at` fields on success (local calendar date).
 - `models`: cache-first against `<dataDir>/models-cache/<endpoint>.json` (`{schema_version, endpoint, fetched_at, version, source, models, notes}`); `--refresh` forces a live query and writes through. A failed refresh serves the last successful cache with `stale: true`; a successful empty list overwrites (never borrows the old cache).
-- `init`: first-run wizard. Interactive on a TTY (enable per endpoint, pick default endpoint/model, writes config.json; existing config is backed up first). Non-TTY callers get `INIT_INTERACTIVE_REQUIRED` plus current state JSON; `--yes` enables all detected endpoints with the first discovered model as default. The decision logic lives in `engine/init-plan.ts` (UI-free) so a console GUI reuses it.
+- `init`: first-run wizard. Interactive on a TTY (enable per endpoint, pick default endpoint/model, writes config.json; existing config is backed up first). Non-TTY callers get `INIT_INTERACTIVE_REQUIRED` plus current state JSON; `--yes` enables all detected endpoints with the first discovered model as default. The decision logic lives in `engine/init-plan.ts` (UI-free) so a console GUI reuses it. After the config write, init offers to install the paidan skill (`skills/paidan/SKILL.md`, payload listed in `skills/hosts.json`) into each detected host's user-scope skills dir — per-host checkbox on a TTY, all detected hosts under `--yes`; installs are atomic copies reported as created/updated/unchanged, and only ever happen on explicit selection (invariant 4: no silent writes to an agent's native home).
 
 ## 8. usage.db (node:sqlite)
 

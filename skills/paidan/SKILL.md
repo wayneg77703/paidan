@@ -1,7 +1,7 @@
 ---
 name: paidan
 description: 通过 paidan CLI 把任务委派给本机已安装的 AI CLI agent（kimi-code/codex/claude-code/zcode/opencode/omp/dsh/agy）。每个任务是一个持久 run：可等待、可取消、重启后可查证。新委派默认走本通道。
-whenToUse: 需要把任务委派给本机 AI CLI agent 时默认使用本通道（run/get/cancel/list/models/doctor/probe）；仅当用户明确点名 suite gateway 时才退回 external-agent-* 技能。
+whenToUse: 需要把任务委派给本机 AI CLI agent 时使用本通道（run/get/cancel/list/models/doctor/probe），这是本机委派的唯一受管通道。
 ---
 
 # Kimi → paidan（派单）

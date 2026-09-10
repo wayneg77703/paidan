@@ -12,7 +12,8 @@
   "files": [
     "dist",
     "endpoints",
-    "docs"
+    "docs",
+    "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -13,6 +13,8 @@ export interface InitAnswers {
     enabled: string[]
     default_endpoint: string | null
     default_model: string | null
+    /** hosts selected for the paidan skill install (validated against detected hosts) */
+    skill_hosts: string[]
 }
 
 export interface InitConfig {
@@ -20,14 +22,15 @@ export interface InitConfig {
     defaults: { endpoint: string | null; model: string | null }
 }
 
-/** --yes semantics: enable every detected endpoint; default = first detected; model = its first. */
-export function defaultInitAnswers(info: InitEndpointInfo[]): InitAnswers {
+/** --yes semantics: enable every detected endpoint; default = first detected; model = its first; install the skill into every detected host. */
+export function defaultInitAnswers(info: InitEndpointInfo[], detectedHosts: string[] = []): InitAnswers {
     const enabled = info.filter((e) => e.detected).map((e) => e.name)
     const first = info.find((e) => e.detected)
     return {
         enabled,
         default_endpoint: first?.name ?? null,
         default_model: first && first.models.length > 0 ? (first.models[0]?.alias ?? null) : null,
+        skill_hosts: detectedHosts,
     }
 }
 

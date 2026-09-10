@@ -7,6 +7,7 @@ import * as fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import * as readline from 'node:readline/promises'
 import { promisify } from 'node:util'
@@ -23,6 +24,14 @@ import {
     type InitAnswers,
     type InitEndpointInfo,
 } from './engine/init-plan.js'
+import {
+    detectHosts,
+    installSkill,
+    loadHostRegistry,
+    selectSkillHosts,
+    type HostInfo,
+    type SkillInstallResult,
+} from './engine/skill-install.js'
 import { reconcileRuns, pidAlive } from './engine/reconcile.js'
 import { ModelsCache, type CachedModels } from './engine/models-cache.js'
 import { RunStore, writeJsonAtomic } from './engine/run-store.js'
@@ -708,6 +717,21 @@ async function refreshManifestVerifiedAt(
 
 // ---------- init wizard ----------
 
+/** Package root (dist/cli.js -> ..); the skill payload and host registry live under skills/. */
+const pkgRoot = fileURLToPath(new URL('..', import.meta.url))
+
+/** Host-skill detection for the wizard; a missing registry degrades to "no hosts" with a note. */
+async function gatherHostInfo(): Promise<{ hosts: HostInfo[]; source: string | null }> {
+    try {
+        const registry = await loadHostRegistry(pkgRoot)
+        // PAIDAN_HOST_HOME is a test hook (keeps tests off real agent homes); production = os.homedir()
+        const home = process.env.PAIDAN_HOST_HOME || os.homedir()
+        return { hosts: await detectHosts(registry, home), source: nodePath.join(pkgRoot, registry.skill.source) }
+    } catch {
+        return { hosts: [], source: null }
+    }
+}
+
 /** Detection + model discovery for every manifest; live discovery writes the models cache through. */
 async function gatherEndpointInfo(ctx: Ctx): Promise<InitEndpointInfo[]> {
     const cache = new ModelsCache(ctx.dataDir)
@@ -751,6 +775,7 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
         options: { yes: { type: 'boolean', default: false } },
     })
     const info = await gatherEndpointInfo(ctx)
+    const hostInfo = await gatherHostInfo()
 
     if (!process.stdin.isTTY && !values.yes) {
         // non-TTY callers (pipes, agents) get state + guidance, never a hanging prompt
@@ -761,7 +786,8 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
                 config_path: ctx.configPath,
                 config_exists: existsSync(ctx.configPath),
                 endpoints: info,
-                non_interactive: 'paidan init --yes enables all detected endpoints and picks the first discovered model as default',
+                hosts: hostInfo.hosts.map((h) => ({ name: h.name, detected: h.detected, skills_dir: h.skills_dir })),
+                non_interactive: 'paidan init --yes enables all detected endpoints, picks the first discovered model as default, and installs the paidan skill into every detected host',
             },
         }) + '\n')
         return 1
@@ -769,28 +795,37 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
 
     let answers: InitAnswers
     if (values.yes) {
-        answers = defaultInitAnswers(info)
+        answers = defaultInitAnswers(info, hostInfo.hosts.filter((h) => h.detected).map((h) => h.name))
     } else {
-        answers = await promptInitAnswers(info)
+        answers = await promptInitAnswers(info, hostInfo.hosts)
     }
     const cfg = buildInitConfig(info, answers)
+    const selectedHosts = selectSkillHosts(hostInfo.hosts, answers.skill_hosts)
 
     if (existsSync(ctx.configPath)) {
         // one cheap insurance copy before overwrite
         await fs.copyFile(ctx.configPath, `${ctx.configPath}.bak-${Date.now()}`).catch(() => {})
     }
     await writeJsonAtomic(ctx.configPath, initConfigToJson(cfg))
+
+    let skills: SkillInstallResult[] = []
+    if (selectedHosts.length > 0 && hostInfo.source) {
+        for (const host of selectedHosts) {
+            skills.push(await installSkill(host, hostInfo.source))
+        }
+    }
     emitOk({
         config_path: ctx.configPath,
         written: true,
         enabled: answers.enabled,
         defaults: cfg.defaults,
         endpoints: info.map((e) => ({ name: e.name, detected: e.detected, version: e.version, models: e.models.length })),
+        skills,
     })
     return 0
 }
 
-async function promptInitAnswers(info: InitEndpointInfo[]): Promise<InitAnswers> {
+async function promptInitAnswers(info: InitEndpointInfo[], hosts: HostInfo[]): Promise<InitAnswers> {
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
     try {
         process.stderr.write('paidan init — endpoint detection complete. Human output is on stderr; stdout stays JSON.\n')
@@ -802,17 +837,30 @@ async function promptInitAnswers(info: InitEndpointInfo[]): Promise<InitAnswers>
                 enabled.push(ep.name)
             }
         }
-        if (enabled.length === 0) return { enabled, default_endpoint: null, default_model: null }
-        const defaultEndpoint = await pickOne(rl, 'Default endpoint', enabled, enabled[0] as string)
-        const models = info.find((e) => e.name === defaultEndpoint)?.models ?? []
+        let defaultEndpoint: string | null = null
         let defaultModel: string | null = null
-        if (models.length > 0) {
-            const aliases = models.map((m) => m.alias)
-            defaultModel = await pickOne(rl, `Default model for ${defaultEndpoint}`, aliases, aliases[0] as string)
-        } else {
-            process.stderr.write(`(no discovered models for ${defaultEndpoint}; native default will be used)\n`)
+        if (enabled.length > 0) {
+            defaultEndpoint = await pickOne(rl, 'Default endpoint', enabled, enabled[0] as string)
+            const models = info.find((e) => e.name === defaultEndpoint)?.models ?? []
+            if (models.length > 0) {
+                const aliases = models.map((m) => m.alias)
+                defaultModel = await pickOne(rl, `Default model for ${defaultEndpoint}`, aliases, aliases[0] as string)
+            } else {
+                process.stderr.write(`(no discovered models for ${defaultEndpoint}; native default will be used)\n`)
+            }
         }
-        return { enabled, default_endpoint: defaultEndpoint, default_model: defaultModel }
+        const skillHosts: string[] = []
+        const detectedHosts = hosts.filter((h) => h.detected)
+        if (detectedHosts.length > 0) {
+            process.stderr.write('Host skill install — the paidan skill file is copied into each host you select.\n')
+            for (const host of detectedHosts) {
+                const answer = await rl.question(`Install paidan skill into ${host.name} (${host.skills_dir})? [y/N] `)
+                if (answer.trim().toLowerCase() === 'y' || answer.trim().toLowerCase() === 'yes') {
+                    skillHosts.push(host.name)
+                }
+            }
+        }
+        return { enabled, default_endpoint: defaultEndpoint, default_model: defaultModel, skill_hosts: skillHosts }
     } finally {
         rl.close()
     }

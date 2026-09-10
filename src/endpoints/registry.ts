@@ -26,6 +26,8 @@ export interface EndpointManifest {
         npm_entry?: string
         /** package-relative native binary in the npm install tree (preferred over npm_entry) */
         npm_exe?: string
+        /** well-known install locations as {home}/{env:NAME}-leading templates (no machine-absolute literals) */
+        known_paths?: string[]
     }
     command: {
         argv: string[]
@@ -155,6 +157,19 @@ export function validateManifest(value: unknown, source: string): EndpointManife
         if (v === undefined) continue
         if (typeof v !== 'string' || v.length === 0 || nodePath.isAbsolute(v) || /^[A-Za-z]:/.test(v) || v.includes('..')) {
             throw new ManifestError(`${source}: detect.${key} must be a package-relative path (no absolute paths, no "..")`)
+        }
+    }
+    if (detect.known_paths !== undefined) {
+        if (!isStringArray(detect.known_paths)) {
+            throw new ManifestError(`${source}: detect.known_paths must be a string array`)
+        }
+        for (const template of detect.known_paths) {
+            // templates expand at runtime; the repo must stay free of machine-absolute literals
+            if (!/^\{(home|env:[A-Za-z0-9_()\s]+)\}/.test(template) || template.includes('..')) {
+                throw new ManifestError(
+                    `${source}: detect.known_paths entries must start with a {home} or {env:NAME} token and contain no ".."`,
+                )
+            }
         }
     }
 

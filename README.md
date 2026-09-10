@@ -1,5 +1,7 @@
 # paidan（派单）
 
+English · [简体中文](README.zh-CN.md)
+
 Delegate a task to an AI CLI agent already installed on your machine.
 Every task is a **durable run**: you can wait for it, cancel it, and verify its result after a reboot.
 
@@ -18,7 +20,7 @@ All CLI output is JSON. There is no daemon: each run is supervised by a detached
 
 ## Host integration
 
-A host AI agent drives paidan through the CLI — no plugin system. Give your host the skill file at [`skills/paidan/SKILL.md`](skills/paidan/SKILL.md) (for Kimi Code: copy it to the user-scope `~/.kimi-code/skills/paidan/` directory). It teaches the seven verbs, the permission-preset semantics, and the evidence-first terminal judgment rules.
+A host AI agent drives paidan through the CLI — no plugin system. `paidan init` offers to install the skill file ([`skills/paidan/SKILL.md`](skills/paidan/SKILL.md)) into every detected host, checkbox-style (`--yes` installs into all detected hosts; known hosts live in [`skills/hosts.json`](skills/hosts.json)). You can also copy it by hand (for Kimi Code: the user-scope `~/.kimi-code/skills/paidan/` directory). It teaches the seven verbs, the permission-preset semantics, and the evidence-first terminal judgment rules.
 
 ## What it is / is not
 
@@ -26,7 +28,7 @@ paidan is a local dispatch desk ("派单" = dispatching an order). It does three
 
 1. A **local tool** that hands tasks to AI CLI agents on this computer.
 2. Every task is a **persistent run** — waitable, cancellable, verifiable after restart.
-3. Configuration and discovery, with an optional console UI (planned).
+3. Configuration and discovery (`init` wizard, `doctor`, `models`).
 
 It deliberately does **not** do: orchestration / multi-agent pipelines, daemons, multi-tenancy, multi-machine scheduling, chat UI, plugin system (v1), credential custody (it never proxies or copies your credentials), telemetry (none, ever).
 
@@ -51,11 +53,11 @@ Permission presets (`read-only` / `workspace-write` / `unattended`) are convenie
 | kimi-code | – / ✅ / ✅ | no headless read-only tier at all (`-p` fixes auto permission; probe-verified). Usage comes from the native session ledger (`endpoint-ledger`). |
 | codex | ✅ / ✅ / ✅ | resume restores the session's original sandbox tier (`exec resume` takes no `-s`/`--add-dir`). |
 | claude-code | ✅ / ✅ / ✅ | read-only = default tier + `--permission-prompts none`; shell.exec needs bypassPermissions (unattended). |
-| zcode | – / – / ✅ | yolo-only by design (non-yolo tiers wait forever headless). Desktop installs no PATH binary — set `endpoints.overrides.zcode.bin` to the CLI bundle, or make a shim. |
+| zcode | – / – / ✅ | yolo-only by design (non-yolo tiers wait forever headless). Desktop installs no PATH binary — the default install dirs are auto-probed via `detect.known_paths`; for a custom install location set `endpoints.overrides.zcode.bin`, or make a shim. |
 | opencode | ✅ / ✅ / ✅ | project root anchors to the inherited `PWD` if present — paidan pins `run --dir <cwd>` and unsets `PWD`. `add_dirs` unsupported in v0 (needs a computed-env permission projection). |
 | omp | ✅ / ✅ / ✅ | workspace-write tier has **no shell.exec** (bash/eval fail closed); shell needs unattended (yolo). |
-| dsh | ✅ / ✅ / – | no PATH shim — set `endpoints.overrides.dsh.bin` to `<dsh home>/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js`. No resume (headless returns no session handle). read-only rides `mode_env` (DSH_PERMISSION_MODE) because any extra argv fragment would merge into the prompt. |
-| agy | ✅ / ✅ / ✅ | shell.exec is **soft**: the shell leg sits outside path governance (suite-recorded `run_command` off-location starts) and needs a native `command(*)` allow rule. fs.read needs a native `read_file` allow rule — and on Windows only the unscoped `read_file(*)` form currently takes effect (upstream limitation). No `--sandbox` flag exists; enforcement is carried by native `~/.gemini` permission settings, which paidan never patches (invariant 4). |
+| dsh | ✅ / ✅ / – | no PATH shim — the conventional profile-home launcher (`~/.dsh/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js`) is auto-probed via `detect.known_paths`; otherwise set `endpoints.overrides.dsh.bin`. No resume (headless returns no session handle). read-only rides `mode_env` (DSH_PERMISSION_MODE) because any extra argv fragment would merge into the prompt. |
+| agy | ✅ / ✅ / ✅ | shell.exec is **soft**: the shell leg sits outside path governance (suite-recorded `run_command` off-location starts) and needs a native `command(*)` allow rule. fs.read needs a native `read_file` allow rule — and on Windows only the unscoped `read_file(*)` form currently takes effect (upstream limitation). No `--sandbox` flag exists; enforcement is carried by native `~/.gemini` permission settings, which paidan never patches (invariant 4). **Drift watch:** agy 1.2.0 (self-update) broke scoped `write_file(<path>)` allow-rule matching — workspace-write currently needs an unscoped `write_file(*)` allow or an upstream fix (probe-caught 2026-09-10). |
 
 Legend: ✅ supported · – unsupported · soft = claims it, enforcement doubtful (submit warning).
 
@@ -67,7 +69,7 @@ Compatibility claims carry dates: agent CLIs drift, and `paidan doctor` / `paida
 
 ## Status
 
-Early (0.x). The engine works; kimi-code, codex, claude-code and zcode manifests pass their contract probes (zcode headless is yolo-only by design). More endpoints land as their manifests pass the contract probes. MIT licensed.
+Early (0.x). The engine works; all eight endpoint manifests are wired and pass their contract probes where the agent is installed (dsh has no resume to probe; zcode headless is yolo-only by design). An eight-endpoint real-delegation sweep passed on the author's machine (2026-09-10). MIT licensed.
 
 ## Platform support
 
@@ -77,5 +79,5 @@ Early (0.x). The engine works; kimi-code, codex, claude-code and zcode manifests
 | Linux | 🟡 designed, untested | config at `$XDG_CONFIG_HOME/paidan` (default `~/.config/paidan`); cancel = POSIX process-group signals |
 | macOS | 🟡 designed, untested | same POSIX path (`~/.config/paidan`, deliberately not `~/Library/Application Support` — one code path) |
 
-The platform-specific surface is intentionally tiny (config dir, binary resolution, process kill) and each has a POSIX branch; what is missing is real-machine verification. Unit tests and golden fixtures run everywhere; contract probes self-skip when an agent is not installed. A three-OS CI matrix lands before public release (P3). Requires Node ≥ 24 on every platform.
+The platform-specific surface is intentionally tiny (config dir, binary resolution, process kill) and each has a POSIX branch; what is missing is real-machine verification. Unit tests and golden fixtures run everywhere and are enforced by a three-OS CI matrix (Windows / Linux / macOS); contract probes self-skip when an agent is not installed. Requires Node ≥ 24 on every platform.
 

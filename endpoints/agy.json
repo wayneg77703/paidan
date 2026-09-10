@@ -61,10 +61,10 @@
       "version": "1.1.28"
     },
     "fs.write": {
-      "status": "supported",
-      "via": "workspace-write = --mode accept-edits + native rules allow write_file(<root>) / ask write_file(*): in-scope write succeeded (t3-in), out-of-scope write auto-denied with denied_actions (t3-out); explicit deny write_file(*) beats accept-edits auto-approval (t2b, 'Matches user-configured deny rule'). read-only = --mode plan: write_file auto-denied headless even rule-free (t2a). Rule paths use the official normalization (drive letter stripped, backslashes -> slashes; verified semantically identical under native read).",
+      "status": "soft",
+      "via": "workspace-write = --mode accept-edits + native rules allow write_file(<root>) / ask write_file(*): in-scope write succeeded (t3-in), out-of-scope write auto-denied with denied_actions (t3-out); explicit deny write_file(*) beats accept-edits auto-approval (t2b, 'Matches user-configured deny rule'). read-only = --mode plan: write_file auto-denied headless even rule-free (t2a). Rule paths use the official normalization (drive letter stripped, backslashes -> slashes; verified semantically identical under native read). DRIFT 2026-09-10: agy self-updated 1.1.28 -> 1.2.0 and scoped write_file allow rules stopped matching (probe P1 fail + direct repro in %TEMP%/paidan-probe-drift1: headless auto-deny despite allow write_file(/Users/a/AppData/Local/Temp/paidan-probe*)); P2 refusal evidence and P3 resume still pass on 1.2.0. Restore options: unscoped allow write_file(*) in ~/.gemini/antigravity-cli/settings.json (weakens out-of-scope auto-deny) or upstream fix; paidan never patches native settings (invariant 4).",
       "verified_at": "2026-09-10",
-      "version": "1.1.28"
+      "version": "1.2.0"
     },
     "shell.exec": {
       "status": "soft",
@@ -104,7 +104,7 @@
     "cross_process": true,
     "notes": "Session handle = conversation_id (UUID) from the init/result events. Cross-process resume via --conversation <id> verified 2026-09-10 (1.1.28): recalled prior content exactly, and resolution is machine-wide — the same id resumed from a DIFFERENT cwd too (supersedes the 2026-09-09 probe report's cwd-scoped assumption for explicit ids). --continue/-c picks the most recent conversation of the current cwd (verified). mode_args are re-spliced on resume (no resume_argv): --mode and --conversation coexist in one argv (suite adapter shape; a resumed run re-tiers from the new invocation). Concurrent resume of the same conversation was not probed; treat as forbidden (transcript interleaving, claude-analog).",
     "verified_at": "2026-09-10",
-    "version": "1.1.28"
+    "version": "1.2.0"
   },
   "models": {
     "command": [

@@ -159,3 +159,39 @@ test('unresolvable endpoint yields a repair hint naming the config override path
     assert.equal(res.plan, null)
     assert.ok(res.notes.some((n) => n.includes('endpoints.overrides.fake.bin')))
 })
+
+test('known_paths resolves a well-known install location via {env:} token (known-path)', async () => {
+    const dir = await tmpDir()
+    try {
+        await fs.mkdir(nodePath.join(dir, 'ZCode', 'resources', 'glm'), { recursive: true })
+        const bundle = nodePath.join(dir, 'ZCode', 'resources', 'glm', 'zcode.cjs')
+        await fs.writeFile(bundle, '// bundle\n')
+        const res = await planEndpointSpawn(
+            manifest({ known_paths: ['{env:PAIDAN_FAKE_PROGRAM_FILES}/ZCode/resources/glm/zcode.cjs'] }),
+            { env: { PATH: '', APPDATA: '', PAIDAN_FAKE_PROGRAM_FILES: dir } },
+        )
+        assert.ok(res.plan, 'expected a plan')
+        assert.equal(res.plan.resolved_from, 'known-path')
+        // a .cjs bundle is spawned through the current Node
+        assert.equal(res.plan.command, process.execPath)
+        assert.deepEqual(res.plan.prefixArgs, [bundle])
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})
+
+test('known_paths candidates are skipped when their env token is unset', async () => {
+    const res = await planEndpointSpawn(
+        manifest({ known_paths: ['{env:PAIDAN_DEFINITELY_UNSET}/ZCode/resources/glm/zcode.cjs'] }),
+        { env: { PATH: '', APPDATA: '' } },
+    )
+    assert.equal(res.plan, null)
+    assert.ok(res.notes.some((n) => n.includes('known install location')))
+})
+
+test('expandKnownPath handles {home}, {env:NAME}, parens in names, and normalization', async () => {
+    const { expandKnownPath } = await import('../dist/endpoints/spawn.js')
+    assert.equal(expandKnownPath('{home}/.dsh/bin.js', {}, '/home/u'), nodePath.normalize('/home/u/.dsh/bin.js'))
+    assert.equal(expandKnownPath('{env:ProgramFiles(x86)}/Z/x.cjs', { 'ProgramFiles(x86)': 'C:\PF86' }, '/h'), nodePath.normalize('C:\PF86/Z/x.cjs'))
+    assert.equal(expandKnownPath('{env:MISSING_VAR}/x', {}, '/h'), null)
+})

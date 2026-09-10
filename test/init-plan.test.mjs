@@ -52,7 +52,9 @@ test('nothing detected -> empty enabled, null defaults, valid config', () => {
 test('CLI init on a non-TTY refuses interaction and prints state JSON', async () => {
     const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-init-'))
     try {
-        const env = { ...process.env, PAIDAN_HOME: nodePath.join(root, 'home'), PAIDAN_DATA_DIR: nodePath.join(root, 'data') }
+        const env = { ...process.env, PAIDAN_HOME: nodePath.join(root, 'home'), PAIDAN_DATA_DIR: nodePath.join(root, 'data'), PAIDAN_HOST_HOME: nodePath.join(root, 'hosts') }
+        // one fixture host is "installed" (its skills dir exists)
+        await fs.mkdir(nodePath.join(root, 'hosts', '.kimi-code', 'skills'), { recursive: true })
         // execFile pipes stdin -> not a TTY
         const err = await execFileAsync(process.execPath, [CLI, 'init'], { env, timeout: 60_000 }).catch((e) => e)
         assert.equal(err.code, 1)
@@ -61,6 +63,11 @@ test('CLI init on a non-TTY refuses interaction and prints state JSON', async ()
         assert.equal(envelope.error.code, 'INIT_INTERACTIVE_REQUIRED')
         assert.ok(Array.isArray(envelope.state.endpoints))
         assert.equal(envelope.state.config_exists, false)
+        // host skill state rides the envelope
+        const hosts = envelope.state.hosts
+        assert.ok(Array.isArray(hosts))
+        assert.equal(hosts.find((h) => h.name === 'kimi-code')?.detected, true)
+        assert.equal(hosts.find((h) => h.name === 'zcode')?.detected, false)
         // nothing written
         assert.equal(existsSync(envelope.state.config_path), false)
     } finally {
@@ -71,7 +78,9 @@ test('CLI init on a non-TTY refuses interaction and prints state JSON', async ()
 test('CLI init --yes writes config.json with detected endpoints and defaults', async () => {
     const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-init-'))
     try {
-        const env = { ...process.env, PAIDAN_HOME: nodePath.join(root, 'home'), PAIDAN_DATA_DIR: nodePath.join(root, 'data') }
+        const hostHome = nodePath.join(root, 'hosts')
+        await fs.mkdir(nodePath.join(hostHome, '.kimi-code', 'skills'), { recursive: true })
+        const env = { ...process.env, PAIDAN_HOME: nodePath.join(root, 'home'), PAIDAN_DATA_DIR: nodePath.join(root, 'data'), PAIDAN_HOST_HOME: hostHome }
         const { stdout } = await execFileAsync(process.execPath, [CLI, 'init', '--yes'], { env, timeout: 120_000 })
         const envelope = JSON.parse(stdout.trim())
         assert.equal(envelope.ok, true)
@@ -82,10 +91,32 @@ test('CLI init --yes writes config.json with detected endpoints and defaults', a
         assert.ok(cfg.endpoints.enabled.length > 0)
         assert.ok(cfg.endpoints.enabled.includes('kimi-code'))
         assert.equal(cfg.defaults.endpoint, envelope.defaults.endpoint)
+        // --yes installs the skill into every detected host (fixture home only)
+        assert.ok(Array.isArray(envelope.skills))
+        assert.deepEqual(envelope.skills.map((s) => [s.host, s.status]), [['kimi-code', 'created']])
+        const installed = nodePath.join(hostHome, '.kimi-code', 'skills', 'paidan', 'SKILL.md')
+        const source = await fs.readFile(nodePath.join(repoRoot, 'skills', 'paidan', 'SKILL.md'), 'utf8')
+        assert.equal(await fs.readFile(installed, 'utf8'), source)
+        // a second --yes run is idempotent: unchanged, not duplicated
+        const again = JSON.parse((await execFileAsync(process.execPath, [CLI, 'init', '--yes'], { env, timeout: 120_000 })).stdout)
+        assert.deepEqual(again.skills.map((s) => [s.host, s.status]), [['kimi-code', 'unchanged']])
         // the written config must load cleanly through the real loader
         const doctor = JSON.parse((await execFileAsync(process.execPath, [CLI, 'doctor'], { env, timeout: 60_000 })).stdout)
         assert.equal(doctor.ok, true)
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }
+})
+
+test('--yes defaults install the skill into every detected host', () => {
+    const answers = defaultInitAnswers(INFO, ['kimi-code', 'zcode'])
+    assert.deepEqual(answers.skill_hosts, ['kimi-code', 'zcode'])
+    // skill selection is an action, never persisted into config.json
+    const json = initConfigToJson(buildInitConfig(INFO, answers))
+    assert.ok(!('skill_hosts' in json) && !('skills' in json))
+})
+
+test('skill_hosts defaults to empty when no hosts are detected', () => {
+    const answers = defaultInitAnswers(INFO)
+    assert.deepEqual(answers.skill_hosts, [])
 })
