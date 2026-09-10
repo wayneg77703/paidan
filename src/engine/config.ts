@@ -37,6 +37,15 @@ const TOP_LEVEL_KEYS = new Set(['dataDir', 'endpoints', 'defaults', 'ttlDays'])
 const ENDPOINTS_KEYS = new Set(['enabled', 'overrides'])
 const DEFAULTS_KEYS = new Set(['endpoint', 'model', 'models', 'run_timeout_sec'])
 const OVERRIDE_KEYS = new Set(['bin'])
+// dynamic keys land in plain objects; these three would hit the prototype
+// machinery instead of becoming entries (pollution or silent drops)
+const FORBIDDEN_DYNAMIC_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function assertSafeDynamicKey(name: string, where: string): void {
+    if (FORBIDDEN_DYNAMIC_KEYS.has(name)) {
+        throw new Error(`config key "${where}${name}" is not allowed (reserved prototype name)`)
+    }
+}
 
 /** Root for machine config and (by default) the data plane. PAIDAN_HOME overrides (tests, portability). */
 export function configHome(env: NodeJS.ProcessEnv = process.env): string {
@@ -125,6 +134,7 @@ export function loadConfig(configPath: string = defaultConfigPath()): PaidanConf
                 throw new Error('config key "endpoints.overrides" must be an object keyed by endpoint name')
             }
             for (const [name, ov] of Object.entries(ep.overrides as Record<string, unknown>)) {
+                assertSafeDynamicKey(name, 'endpoints.overrides.')
                 if (!ov || typeof ov !== 'object' || Array.isArray(ov)) {
                     throw new Error(`config key "endpoints.overrides.${name}" must be an object`)
                 }
@@ -162,6 +172,7 @@ export function loadConfig(configPath: string = defaultConfigPath()): PaidanConf
                 throw new Error('config key "defaults.models" must be an object keyed by endpoint name')
             }
             for (const [name, m] of Object.entries(df.models as Record<string, unknown>)) {
+                assertSafeDynamicKey(name, 'defaults.models.')
                 if (typeof m !== 'string' || m.length === 0) {
                     throw new Error(`config key "defaults.models.${name}" must be a non-empty string`)
                 }

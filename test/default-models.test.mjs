@@ -72,6 +72,15 @@ test('loadConfig: defaults.models parses; non-string entries and typos are hard 
         assert.throws(() => loadConfig(p), /defaults\.models/)
         await fs.writeFile(p, JSON.stringify({ defaults: { modelz: 'typo' } }))
         assert.throws(() => loadConfig(p), /unknown config key "defaults\.modelz"/)
+        // reserved prototype names in dynamic maps are rejected, never silently
+        // absorbed (JSON.parse yields them as own properties; written literally
+        // because object literals cannot express an own "__proto__" key)
+        await fs.writeFile(p, '{"defaults":{"models":{"__proto__":"x"}}}')
+        assert.throws(() => loadConfig(p), /defaults\.models\.__proto__.*not allowed/)
+        await fs.writeFile(p, '{"endpoints":{"overrides":{"__proto__":{"bin":"x"}}}}')
+        assert.throws(() => loadConfig(p), /endpoints\.overrides\.__proto__.*not allowed/)
+        await fs.writeFile(p, '{"defaults":{"models":{"constructor":{"bin":"x"}}}}')
+        assert.throws(() => loadConfig(p), /not allowed/)
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }

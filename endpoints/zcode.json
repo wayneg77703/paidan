@@ -14,7 +14,7 @@
       "{env:ProgramFiles(x86)}/ZCode/resources/glm/zcode.cjs",
       "{env:LOCALAPPDATA}/Programs/ZCode/resources/glm/zcode.cjs"
     ],
-    "detect_notes": "ZCode desktop (observed 3.11.1) ships the CLI only as a node bundle (resources/glm/zcode.cjs; `zcode doctor`: 'default artifact: node-bundle, sea: no'); it installs NO PATH-resolvable zcode binary on Windows (verified 2026-09-10: no zcode on user/machine PATH, and Node >= 20.12 cannot spawn a .cmd/.cjs shim without shell:true). known_paths covers the default system-wide (%ProgramFiles%) and per-user (%LOCALAPPDATA%\\Programs) install dirs; a custom drive/dir (this machine uses E:) still needs the machine config override. Repair paths (doctor reports both): set endpoints.overrides.zcode.bin in the machine config.json to the bundle path (a .cjs is spawned via process.execPath), or create a PATH shim that execs node with the bundle."
+    "detect_notes": "ZCode desktop (observed 3.11.1) ships the CLI only as a node bundle (resources/glm/zcode.cjs; `zcode doctor`: 'default artifact: node-bundle, sea: no'); it installs NO PATH-resolvable zcode binary on Windows (verified 2026-09-10: no zcode on user/machine PATH, and Node >= 20.12 cannot spawn a .cmd/.cjs shim without shell:true). known_paths covers the default system-wide (%ProgramFiles%) and per-user (%LOCALAPPDATA%\\Programs) install dirs; an install on a custom drive/dir still needs the machine config override. Repair paths (doctor reports both): set endpoints.overrides.zcode.bin in the machine config.json to the bundle path (a .cjs is spawned via process.execPath), or create a PATH shim that execs node with the bundle."
   },
   "command": {
     "argv": [

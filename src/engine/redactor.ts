@@ -1,5 +1,6 @@
 // Redaction before anything lands in events.jsonl / result.json.
-// Covers: Bearer tokens, sk- style keys, GitHub PATs, KEY/TOKEN/SECRET/PASSWORD
+// Covers: Bearer tokens, sk- style keys, GitHub/GitLab/Slack/AWS/Google
+// tokens, JWTs, URL userinfo credentials, KEY/TOKEN/SECRET/PASSWORD
 // assignments, the actual values of env vars whose names end in those words,
 // and the user's home directory path (machine paths stay out of shared output).
 
@@ -15,7 +16,15 @@ const SECRET_ENV_NAME_RE = /(?:KEY|TOKEN|SECRET|PASSWORD)$/i
 const PATTERNS: Array<[RegExp, (m: RegExpExecArray) => string]> = [
     [/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, () => 'Bearer [REDACTED]'],
     [/sk-[A-Za-z0-9_-]{8,}/g, () => 'sk-[REDACTED]'],
-    [/\b(?:ghp|gho|github_pat)_[A-Za-z0-9_]{8,}/g, () => '[REDACTED]'],
+    [/\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,}/g, () => '[REDACTED]'],
+    [/\bAKIA[0-9A-Z]{16}\b/g, () => '[REDACTED]'],
+    [/\bAIza[0-9A-Za-z_-]{35}\b/g, () => '[REDACTED]'],
+    [/\bxox[baprs]-[A-Za-z0-9-]{8,}/g, () => '[REDACTED]'],
+    [/\bglpat-[A-Za-z0-9_-]{20,}/g, () => '[REDACTED]'],
+    // JWT: three base64url segments; the header always starts with eyJ
+    [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, () => '[REDACTED]'],
+    // URL userinfo: keep scheme and host, erase the user:pass segment
+    [/:\/\/[^\s/:@]+:[^\s/@]+@/g, () => '://[REDACTED]@'],
     // assignment form: keep the variable name, erase the value (>=4 chars, to
     // avoid mangling ordinary prose)
     [/([A-Za-z_][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*)\s*[:=]\s*["']?[^"'\s,;]{4,}/gi, (m) => `${m[1]}=[REDACTED]`],

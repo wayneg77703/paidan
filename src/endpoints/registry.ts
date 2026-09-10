@@ -389,6 +389,29 @@ export function measureArgvBytes(parts: readonly string[]): number {
 }
 
 /**
+ * argv-substitution safety for {model}/{session} values: they land on the
+ * endpoint command line as single arguments, so whitespace, quotes and shell
+ * metacharacters are forbidden. The leading class also bars a '-' first char,
+ * so a value can never be mistaken for a flag by the endpoint.
+ */
+export const SAFE_SUBSTITUTION_VALUE_RE = /^[A-Za-z0-9_][A-Za-z0-9_.:/-]{0,127}$/
+
+export function assertSafeSubstitutionValue(value: string, kind: 'model' | 'session'): void {
+    if (!SAFE_SUBSTITUTION_VALUE_RE.test(value)) {
+        throw new ManifestError(
+            `unsafe ${kind} value ${JSON.stringify(value)}: must match ${SAFE_SUBSTITUTION_VALUE_RE.source}` +
+            ' (1-128 chars: letter/digit/underscore first, then letters/digits/_/.:/-)',
+        )
+    }
+}
+
+/** Drop discovered model aliases that could not survive argv substitution; returns the kept list and the drop count. */
+export function filterSafeAliases<T extends { alias: string }>(models: readonly T[]): { models: T[]; dropped: number } {
+    const kept = models.filter((m) => SAFE_SUBSTITUTION_VALUE_RE.test(m.alias))
+    return { models: kept, dropped: models.length - kept.length }
+}
+
+/**
  * Build the endpoint argument list (without {bin}; the spawn plan resolves the
  * command). Splice order in front of the template tail: resume, model,
  * add-dirs, mode_args, cwd_arg — flags never land after the prompt value.
@@ -396,6 +419,9 @@ export function measureArgvBytes(parts: readonly string[]): number {
  * mode_args) per contracts §6.
  */
 export function buildArgs(manifest: EndpointManifest, request: RunRequest): string[] {
+    // substituted values ride argv verbatim — validate before any replaceAll below
+    if (request.model !== null) assertSafeSubstitutionValue(request.model, 'model')
+    if (request.resume_session !== null) assertSafeSubstitutionValue(request.resume_session, 'session')
     if (request.resume_session && manifest.command.resume_argv) {
         if (request.add_dirs.length > 0) {
             throw new ManifestError(`endpoint ${manifest.name} does not support add_dirs on resume`)

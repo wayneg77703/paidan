@@ -2,7 +2,13 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildArgs, pickProbePreset, withPromptCwdHint } from '../dist/endpoints/registry.js'
+import {
+    assertSafeSubstitutionValue,
+    buildArgs,
+    filterSafeAliases,
+    pickProbePreset,
+    withPromptCwdHint,
+} from '../dist/endpoints/registry.js'
 
 function codexLike() {
     return {
@@ -158,4 +164,48 @@ test('prompt_cwd_hint text flows into argv on fresh and resume deliveries alike'
     assert.ok(fresh.includes(hint.text), 'fresh argv carries the hinted text')
     const resumed = buildArgs(manifest, { ...delivery, resume_session: 'session_abc' })
     assert.deepEqual(resumed, ['-S', 'session_abc', '-p', hint.text, '--output-format', 'stream-json'])
+})
+
+test('buildArgs rejects unsafe {model} substitution values before splicing', () => {
+    const m = codexLike()
+    // whitespace/quotes/metacharacters and a leading '-' (flag smuggling) are barred
+    for (const model of ['-m evil', 'bad model', 'x;rm -rf', 'x"quoted', '-leading-dash', '']) {
+        assert.throws(() => buildArgs(m, request({ model })), /unsafe model value/, JSON.stringify(model))
+    }
+})
+
+test('buildArgs rejects unsafe {session} substitution values before splicing', () => {
+    const m = codexLike()
+    for (const resume_session of ['sess; rm -rf', '-evil', 'has space', 'line\nbreak']) {
+        assert.throws(
+            () => buildArgs(m, request({ resume_session })),
+            /unsafe session value/,
+            JSON.stringify(resume_session),
+        )
+    }
+})
+
+test('provider-scoped models and ordinary session ids within the charset still pass', () => {
+    const args = buildArgs(codexLike(), request({ model: 'deepseek/deepseek-v4.flash:thinking', resume_session: 'thread-123' }))
+    assert.ok(args.includes('deepseek/deepseek-v4.flash:thinking'))
+    assert.ok(args.includes('thread-123'))
+})
+
+test('assertSafeSubstitutionValue: boundary length and leading charset', () => {
+    assert.equal(assertSafeSubstitutionValue('a'.repeat(128), 'model'), undefined)
+    assert.throws(() => assertSafeSubstitutionValue('a'.repeat(129), 'model'), /unsafe model value/)
+    assert.throws(() => assertSafeSubstitutionValue('', 'session'), /unsafe session value/)
+    assert.equal(assertSafeSubstitutionValue('_ok:1/2.3-x', 'session'), undefined)
+})
+
+test('filterSafeAliases drops argv-unsafe aliases and counts them', () => {
+    const { models, dropped } = filterSafeAliases([
+        { alias: 'gemini-3.8-high', connection: 'google' },
+        { alias: 'bad alias', connection: 'google' },
+        { alias: '-sneaky', connection: 'google' },
+        { alias: 'provider/model:v1', connection: null },
+    ])
+    assert.deepEqual(models.map((m) => m.alias), ['gemini-3.8-high', 'provider/model:v1'])
+    assert.equal(dropped, 2)
+    assert.deepEqual(filterSafeAliases([]), { models: [], dropped: 0 })
 })

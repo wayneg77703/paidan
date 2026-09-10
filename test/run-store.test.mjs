@@ -181,3 +181,43 @@ test('unsafe run_id is rejected', async () => {
         await fs.rm(dir, { recursive: true, force: true })
     }
 })
+
+test('concurrent create with the same fingerprint: exactly one creates, the other joins it', async () => {
+    const { dir, store } = await tmpStore()
+    try {
+        const [a, b] = await Promise.all([store.create(BASE_INPUT), store.create(BASE_INPUT)])
+        const winners = [a, b].filter((o) => o.created)
+        assert.equal(winners.length, 1, 'exactly one concurrent create may win')
+        assert.equal(a.request.run_id, b.request.run_id, 'the loser joins the winner\'s run')
+        // the mutex is released once state.json is on disk
+        const hex = requestFingerprint(BASE_INPUT.endpoint, BASE_INPUT.cwd, BASE_INPUT.task_text, BASE_INPUT.mode)
+            .replace(/^sha256:/, '')
+        await assert.rejects(fs.stat(nodePath.join(dir, 'locks', hex)), 'create lock released')
+        // after the run goes terminal a resubmit creates a fresh run (no lock residue)
+        const running = transitionRecord(winners[0].state, 'running', new Date().toISOString())
+        await store.writeState(transitionRecord(running, 'completed', new Date().toISOString()))
+        const third = await store.create(BASE_INPUT)
+        assert.equal(third.created, true)
+        assert.notEqual(third.request.run_id, a.request.run_id)
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})
+
+test('a stale create lock (creator crashed) is broken, not waited on', async () => {
+    const { dir, store } = await tmpStore()
+    try {
+        const hex = requestFingerprint(BASE_INPUT.endpoint, BASE_INPUT.cwd, BASE_INPUT.task_text, BASE_INPUT.mode)
+            .replace(/^sha256:/, '')
+        const lockPath = nodePath.join(dir, 'locks', hex)
+        await fs.mkdir(lockPath, { recursive: true })
+        await fs.writeFile(nodePath.join(lockPath, 'created_at'), new Date(Date.now() - 120_000).toISOString(), 'utf8')
+        const started = Date.now()
+        const outcome = await store.create(BASE_INPUT)
+        assert.equal(outcome.created, true)
+        assert.ok(Date.now() - started < 5_000, 'stale lock must be broken immediately, not polled for the full wait')
+        await assert.rejects(fs.stat(lockPath), 'create lock released after the create')
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})

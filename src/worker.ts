@@ -8,11 +8,11 @@ import * as fs from 'node:fs/promises'
 import * as nodePath from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { loadConfig, resolveDataDir, DEFAULT_RUN_TIMEOUT_SEC } from './engine/config.js'
-import { queryProcessStart } from './engine/process-identity.js'
+import { queryProcessStart, verifyProcessIdentity } from './engine/process-identity.js'
 import { createRedactor } from './engine/redactor.js'
 import { RunStore, sha256Hex } from './engine/run-store.js'
 import { isTerminal, transitionRecord } from './engine/state-machine.js'
-import { terminateEndpointTree } from './engine/supervisor.js'
+import { terminateEndpointTree, type TerminateTreeResult } from './engine/supervisor.js'
 import { judgeTerminal } from './engine/terminal.js'
 import type { DeliverableEvidence, RunEvent, RunRequest, RunResult, TerminalState } from './engine/types.js'
 import { UsageDb } from './engine/usage-db.js'
@@ -22,6 +22,9 @@ import { finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn } from './endpoint
 const STDERR_CAPTURE_LIMIT = 256 * 1024
 const STDOUT_EVENT_EVERY_LINES = 200
 const CANCEL_POLL_MS = 500
+// a stdout/stderr line that never sees '\n' must not grow without bound; past
+// this cap the buffered prefix is fed to the parser as one (degraded) line
+const MAX_STDIO_LINE_BYTES = 16 * 1024 * 1024
 
 const now = () => new Date().toISOString()
 
@@ -108,6 +111,22 @@ async function main(): Promise<number> {
         }
         const plan = spawnRes.plan
 
+        // cmd-shim backstop (same semantics as the CLI-side guard): cmd.exe
+        // re-splits the shim's %* on spaces, so argv prompt delivery would
+        // mangle the prompt. Refuse before anything is spawned.
+        if (plan.resolved_from === 'cmd-shim' && manifest.command.prompt_delivery === 'argv') {
+            const note =
+                'cmd.exe shim cannot preserve argument boundaries for argv prompt delivery' +
+                ' (npm .cmd shims pass %* and re-split on spaces); repair: set' +
+                ` endpoints.overrides.${manifest.name}.bin in config.json to the native binary` +
+                ' or JS bundle, or install a native exe on PATH'
+            await store.appendEvent(runId, redactor.redactJson({
+                ts: now(), type: 'spawn-refused', endpoint: manifest.name,
+                resolved_from: plan.resolved_from, prompt_delivery: manifest.command.prompt_delivery, note,
+            }) as RunEvent)
+            return fail('SPAWN_UNSUPPORTED', note)
+        }
+
         // resume runs with a native ledger: pin wire byte sizes pre-spawn so the
         // settlement sums only this run's delta (undefined = no cursor taken)
         let ledgerCursor: unknown
@@ -177,6 +196,13 @@ async function main(): Promise<number> {
         let stderrTail = ''
         let stdoutLines = 0
         let stdoutBytes = 0
+        // buffered line overflow: record honestly, feed the capped prefix to
+        // the parser (it will likely degrade — that is the honest path)
+        const stdioTruncated = async (stream: 'stdout' | 'stderr', bytes: number) => {
+            await store.appendEvent(runId, { ts: now(), type: 'stdio-truncated', stream, bytes }).catch(() => {})
+        }
+        const cappedPrefix = (buf: string): string =>
+            Buffer.from(buf, 'utf8').subarray(0, MAX_STDIO_LINE_BYTES).toString('utf8')
         const feedStdout = async (text: string) => {
             stdoutBuf += text
             let nl: number
@@ -190,6 +216,15 @@ async function main(): Promise<number> {
                     await store.appendEvent(runId, { ts: now(), type: 'stdout-meta', lines: stdoutLines, bytes: stdoutBytes })
                 }
             }
+            if (Buffer.byteLength(stdoutBuf, 'utf8') > MAX_STDIO_LINE_BYTES) {
+                const bytes = Buffer.byteLength(stdoutBuf, 'utf8')
+                const line = cappedPrefix(stdoutBuf)
+                stdoutBuf = ''
+                await stdioTruncated('stdout', bytes)
+                parser.acceptStdoutLine(line)
+                stdoutLines++
+                stdoutBytes += Buffer.byteLength(line, 'utf8')
+            }
         }
         const feedStderr = (text: string) => {
             stderrBuf += text
@@ -200,6 +235,21 @@ async function main(): Promise<number> {
                 stderrBuf = stderrBuf.slice(nl + 1)
                 parser.acceptStderrLine(line)
             }
+            if (Buffer.byteLength(stderrBuf, 'utf8') > MAX_STDIO_LINE_BYTES) {
+                const bytes = Buffer.byteLength(stderrBuf, 'utf8')
+                const line = cappedPrefix(stderrBuf)
+                stderrBuf = ''
+                void stdioTruncated('stderr', bytes)
+                parser.acceptStderrLine(line)
+            }
+        }
+        // the stream-end tail handed to parser.finish obeys the same cap
+        const boundedTail = async (buf: string, end: string, stream: 'stdout' | 'stderr'): Promise<string> => {
+            const tail = buf + end
+            const bytes = Buffer.byteLength(tail, 'utf8')
+            if (bytes <= MAX_STDIO_LINE_BYTES) return tail
+            await stdioTruncated(stream, bytes)
+            return cappedPrefix(tail)
         }
         const stdoutDone = pipeTo(child.stdout, (chunk) => feedStdout(stdoutDecoder.write(chunk)))
         const stderrDone = pipeTo(child.stderr, (chunk) => {
@@ -233,6 +283,29 @@ async function main(): Promise<number> {
             ts: now(), type: 'spawn', pid: endpointPid, argv: argvForLog, cwd: request.cwd, resolved_from: plan.resolved_from,
         }) as RunEvent)
 
+        // contracts §5: re-verify the endpoint's start token before any direct
+        // kill — a reused pid must never be taskkilled. 'mismatch' means the
+        // recorded endpoint is already gone (kill skipped, flow continues as
+        // if it had exited); 'unknown' (query unavailable or no recorded
+        // token) degrades to the pid-only behavior, with a note.
+        const terminateEndpointVerified = async (): Promise<TerminateTreeResult | null> => {
+            const verdict = await verifyProcessIdentity(endpointPid, endpointStart)
+            if (verdict === 'mismatch') {
+                await store.appendEvent(runId, {
+                    ts: now(), type: 'note',
+                    note: 'endpoint pid identity mismatch (pid reused); tree kill skipped',
+                }).catch(() => {})
+                return null
+            }
+            if (verdict === 'unknown') {
+                await store.appendEvent(runId, {
+                    ts: now(), type: 'note',
+                    note: 'endpoint identity re-query unavailable; tree kill degrades to pid liveness',
+                }).catch(() => {})
+            }
+            return terminateEndpointTree(endpointPid)
+        }
+
         // engine wall-clock cap: at the deadline kill the endpoint tree (same
         // termination path as cancel); the judgment below is then forced to
         // failed with a 'run timeout after Ns' note. 0 disables; pre-timeout
@@ -243,10 +316,10 @@ async function main(): Promise<number> {
             ? setTimeout(() => {
                 runTimedOut = true
                 void (async () => {
-                    const term = await terminateEndpointTree(endpointPid)
+                    const term = await terminateEndpointVerified()
                     await store.appendEvent(runId, {
                         ts: now(), type: 'run-timeout', pid: endpointPid, after_sec: runTimeoutSec,
-                        method: term.method, ok: term.ok,
+                        method: term?.method ?? 'already_exited', ok: term?.ok ?? true,
                     }).catch(() => {})
                 })()
             }, runTimeoutSec * 1000)
@@ -261,9 +334,9 @@ async function main(): Promise<number> {
             cancelKillStarted = true
             cancelRequested = true
             void (async () => {
-                const term = await terminateEndpointTree(endpointPid)
+                const term = await terminateEndpointVerified()
                 await store.appendEvent(runId, {
-                    ts: now(), type: 'cancel', pid: endpointPid, method: term.method, ok: term.ok,
+                    ts: now(), type: 'cancel', pid: endpointPid, method: term?.method ?? 'already_exited', ok: term?.ok ?? true,
                 }).catch(() => {})
             })()
         }
@@ -276,15 +349,22 @@ async function main(): Promise<number> {
         if (runTimer) clearTimeout(runTimer)
         clearInterval(cancelWatcher)
         await Promise.all([stdoutDone, stderrDone])
-
-        if (cancelRequested) {
-            return finalizeCancelled(
-                store, runId, request.endpoint, request.model, exitCode,
-                `cancel requested by user; endpoint tree killed (exit_code=${exitCode ?? 'null'})`,
-            )
+        // a marker that landed in the completion window (after the last poll)
+        // is still honored — the endpoint already exited on its own
+        if (!cancelRequested && existsSync(store.cancelMarkerPath(runId))) {
+            cancelRequested = true
+            await store.appendEvent(runId, {
+                ts: now(), type: 'cancel', pid: endpointPid, method: 'already_exited', ok: true,
+            }).catch(() => {})
         }
 
-        const parsed = parser.finish(stdoutBuf + stdoutDecoder.end(), stderrBuf + stderrDecoder.end())
+        // parse + evidence collection run on every exit path, including a
+        // cancel that raced a successful completion: the run still ends
+        // cancelled, but the endpoint's evidence is never thrown away
+        const parsed = parser.finish(
+            await boundedTail(stdoutBuf, stdoutDecoder.end(), 'stdout'),
+            await boundedTail(stderrBuf, stderrDecoder.end(), 'stderr'),
+        )
         if (parsed.sessionId) {
             await store.patchState(runId, now(), {
                 session: { handle: parsed.sessionId, resumable: manifest.resume?.kind === 'flag' },
@@ -315,6 +395,26 @@ async function main(): Promise<number> {
         }
         const deliverables = await resolveDeliverables(request.deliverables, request.cwd)
         const refusals = [...new Set([...parsed.refusals, ...detectRefusals(stderrTail, exitCode)])]
+
+        if (cancelRequested) {
+            const note = `cancel requested by user; endpoint tree killed (exit_code=${exitCode ?? 'null'})`
+            const cancelNotes = [note, ...parsed.warnings, ...usageNotes]
+            await store.appendEvent(runId, redactor.redactJson({
+                ts: now(), type: 'terminal', state: 'cancelled', exit_code: exitCode, signal, notes: cancelNotes,
+            }) as RunEvent)
+            return finalizeCancelled(store, runId, request.endpoint, request.model, exitCode, note, {
+                final_text: parsed.finalText,
+                evidence: {
+                    deliverables,
+                    refusals,
+                    parser: { type: manifest.parser, degraded: parsed.degraded },
+                    notes: cancelNotes,
+                },
+                usage: usage ?? { input_tokens: null, output_tokens: null, cached_input_tokens: null, cost: null, source: 'unavailable' },
+                session_handle: parsed.sessionId,
+            })
+        }
+
         const judgment = judgeTerminal({
             exit_code: exitCode,
             signal,
@@ -378,6 +478,11 @@ async function resolveDeliverables(
     return out
 }
 
+/**
+ * Terminal state is always 'cancelled'. When the endpoint had already produced
+ * output (a cancel that raced a successful completion), `settled` carries the
+ * parsed evidence through to result.json; the default is the pre-spawn shape.
+ */
 async function finalizeCancelled(
     store: RunStore,
     runId: string,
@@ -385,10 +490,7 @@ async function finalizeCancelled(
     model: string | null,
     exitCode: number | null,
     note: string,
-): Promise<number> {
-    await finalize(store, runId, endpoint, model, {
-        state: 'cancelled',
-        exit_code: exitCode,
+    settled: Omit<TerminalWrite, 'state' | 'exit_code'> = {
         final_text: '',
         evidence: {
             deliverables: [],
@@ -398,6 +500,12 @@ async function finalizeCancelled(
         },
         usage: { input_tokens: null, output_tokens: null, cached_input_tokens: null, cost: null, source: 'unavailable' },
         session_handle: null,
+    },
+): Promise<number> {
+    await finalize(store, runId, endpoint, model, {
+        state: 'cancelled',
+        exit_code: exitCode,
+        ...settled,
     })
     return 0
 }

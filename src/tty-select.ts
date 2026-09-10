@@ -1,6 +1,6 @@
 // Raw-mode interactive select widgets (zero deps, Node stdlib only) for the
 // init wizard, modeled on the @clack/prompts visual grammar that the
-// `npx skills` installer uses: ◆/◇ step symbols with a guide bar, ◻/◼
+// `npx skills` installer uses: ◆/◇ step symbols with a guide bar, √/×
 // checkboxes (cyan cursor / green selected), ●/○ radios, dim instruction
 // footer, wrap-around cursor, scrolling with "…" overflow markers, and a
 // collapsed one-line summary after confirm. The key reducers are pure and
@@ -117,9 +117,9 @@ const S = {
     stepCancel: unicodeOr('■', 'x'),
     bar: unicodeOr('│', '|'),
     barEnd: unicodeOr('└', '—'),
-    checkboxActive: unicodeOr('◻', '[•]'),
-    checkboxSelected: unicodeOr('◼', '[+]'),
-    checkboxInactive: unicodeOr('◻', '[ ]'),
+    checkboxActive: unicodeOr('×', '[ ]'),
+    checkboxSelected: unicodeOr('√', '[x]'),
+    checkboxInactive: unicodeOr('×', '[ ]'),
     radioActive: unicodeOr('●', '>'),
     radioInactive: unicodeOr('○', ' '),
     overflow: '...',
@@ -207,6 +207,23 @@ async function runSelect<TState>(
         drawn = lines.length
     }
     const wasRaw = (stdin as { isRaw?: boolean }).isRaw ?? false
+    // persistent listener + queue: keys that arrive mid-repaint must not be
+    // dropped (an once() re-registered after the paint would miss them)
+    const queue: Key[] = []
+    let waiter: ((key: Key) => void) | null = null
+    const onKeypress = (_ch: string, k: Key): void => {
+        const key = { name: k?.name ?? '', ctrl: k?.ctrl }
+        if (waiter) {
+            const w = waiter
+            waiter = null
+            w(key)
+        } else {
+            queue.push(key)
+        }
+    }
+    const nextKey = (): Promise<Key> =>
+        queue.length > 0 ? Promise.resolve(queue.shift() as Key) : new Promise<Key>((resolve) => (waiter = resolve))
+    stdin.on('keypress', onKeypress)
     stdin.setRawMode?.(true)
     stdin.resume()
     output.write('\x1b[?25l') // hide the cursor while the widget owns the screen
@@ -214,9 +231,7 @@ async function runSelect<TState>(
         let state = initial
         repaint(render(state, 'active'))
         for (;;) {
-            const key = await new Promise<Key>((resolve) => {
-                stdin.once('keypress', (_ch: string, k: Key) => resolve({ name: k?.name ?? '', ctrl: k?.ctrl }))
-            })
+            const key = await nextKey()
             const next = step(state, key)
             state = next.state
             if (next.action === 'abort') {
@@ -231,6 +246,7 @@ async function runSelect<TState>(
         }
     } finally {
         output.write('\x1b[?25h')
+        stdin.removeListener('keypress', onKeypress)
         stdin.setRawMode?.(wasRaw)
         stdin.pause()
     }

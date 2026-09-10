@@ -55,6 +55,7 @@ import {
     checkPermission,
     DEFAULT_PROMPT_MAX_BYTES,
     EndpointRegistry,
+    filterSafeAliases,
     loadParserModule,
     ManifestError,
     measureArgvBytes,
@@ -87,8 +88,12 @@ function emitError(err: unknown): number {
     if (err instanceof CliError) {
         process.stdout.write(JSON.stringify({ ok: false, error: { code: err.code, message: err.message } }) + '\n')
     } else {
+        // node:util parseArgs rejections (ERR_PARSE_ARGS_*) are user input
+        // errors, not internal ones — surface them as ARGS_INVALID
+        const code = (err as { code?: unknown } | null)?.code
+        const mapped = typeof code === 'string' && code.startsWith('ERR_PARSE_ARGS') ? 'ARGS_INVALID' : 'INTERNAL'
         const message = err instanceof Error ? err.message : String(err)
-        process.stdout.write(JSON.stringify({ ok: false, error: { code: 'INTERNAL', message } }) + '\n')
+        process.stdout.write(JSON.stringify({ ok: false, error: { code: mapped, message } }) + '\n')
     }
     return 1
 }
@@ -245,6 +250,21 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
     // at 32767 chars — measure the final argv and refuse at submit time.
     // --task-file does NOT help here: it only changes how paidan reads the task.
     if (manifest.command.prompt_delivery === 'argv') {
+        // cmd.exe shim + argv prompt delivery is refused outright: npm .cmd
+        // shims pass a bare %*, which re-splits the caret-escaped command line
+        // on spaces, so task text can smuggle real flags past tokenization.
+        const configBin = ctx.config.endpoints.overrides[manifest.name]?.bin ?? null
+        const spawnRes = await planEndpointSpawn(manifest, { configBin })
+        if (spawnRes.plan?.resolved_from === 'cmd-shim') {
+            throw new CliError(
+                'SPAWN_UNSUPPORTED',
+                `endpoint "${manifest.name}" resolves to a cmd.exe shim (${spawnRes.plan.endpoint_bin ?? manifest.detect.bin});` +
+                ' cmd.exe shims cannot preserve argument boundaries for argv prompt delivery' +
+                ' (npm .cmd shims pass %* and re-split on spaces — task text can smuggle flags).' +
+                ` Repair: set endpoints.overrides.${manifest.name}.bin in config.json to the native binary or JS bundle,` +
+                ' or install the agent so a native exe is on PATH.',
+            )
+        }
         const hint = withPromptCwdHint(manifest, taskText, cwd)
         const draft: RunRequest = {
             schema_version: '1.0.0',
@@ -517,7 +537,13 @@ async function verbModels(ctx: Ctx, args: string[]): Promise<void> {
         if (!parserMod?.discoverModels) {
             throw new CliError('UNSUPPORTED', `endpoint "${manifest.name}" has no model discovery in v0`)
         }
-        const { models, notes } = await parserMod.discoverModels()
+        const discovered = await parserMod.discoverModels()
+        // aliases are substitution candidates for {model}; keep only argv-safe ones
+        const safe = filterSafeAliases(discovered.models)
+        const models = safe.models
+        const notes = safe.dropped > 0
+            ? [...discovered.notes, `dropped ${safe.dropped} alias(es) failing the argv-safety charset`]
+            : discovered.notes
         const spawnRes = await planEndpointSpawn(manifest, {
             configBin: ctx.config.endpoints.overrides[manifest.name]?.bin ?? null,
         })
@@ -884,15 +910,19 @@ async function gatherEndpointInfo(ctx: Ctx): Promise<InitEndpointInfo[]> {
                 const mod = await loadParserModule(manifest.parser)
                 if (mod.discoverModels) {
                     const found = await mod.discoverModels()
-                    models = found.models
+                    // aliases are substitution candidates for {model}; keep only argv-safe ones
+                    const safe = filterSafeAliases(found.models)
+                    models = safe.models
                     await cache.write({
                         schema_version: '1.0.0',
                         endpoint: manifest.name,
                         fetched_at: new Date().toISOString(),
                         version,
                         source: manifest.models.parse,
-                        models: found.models,
-                        notes: found.notes,
+                        models: safe.models,
+                        notes: safe.dropped > 0
+                            ? [...found.notes, `dropped ${safe.dropped} alias(es) failing the argv-safety charset`]
+                            : found.notes,
                     })
                 }
             } catch {
@@ -960,10 +990,20 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
     }
     await writeJsonAtomic(ctx.configPath, mergeInitConfig(existingRaw, cfg))
 
-    let skills: SkillInstallResult[] = []
+    const skills: SkillInstallResult[] = []
     if (selectedHosts.length > 0 && hostInfo.source) {
         for (const host of selectedHosts) {
-            skills.push(await installSkill(host, hostInfo.source))
+            try {
+                skills.push(await installSkill(host, hostInfo.source))
+            } catch (err) {
+                // one failing host must not sink the rest; the envelope reports it
+                skills.push({
+                    host: host.name,
+                    path: host.target,
+                    status: 'error',
+                    error: err instanceof Error ? err.message : String(err),
+                })
+            }
         }
     }
     emitOk({

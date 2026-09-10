@@ -20,6 +20,13 @@ import { DEFAULT_TTL_DAYS } from './config.js'
 
 const RUN_ID_RE = /^run_\d{8}_[0-9a-f]{8}$/
 
+// create() critical-section mutex (<dataDir>/locks/<fingerprint hex>): a lock
+// older than this means its creator crashed mid-create
+const CREATE_LOCK_STALE_MS = 60_000
+// while a live competitor holds the lock, poll for its run for at most this long
+const CREATE_LOCK_WAIT_MS = 5_000
+const CREATE_LOCK_POLL_MS = 100
+
 export class StoreCorruptError extends Error {
     override name = 'StoreCorruptError'
 }
@@ -43,6 +50,11 @@ export interface CreateRunOutcome {
     request: RunRequest
     state: RunStateRecord
     created: boolean
+}
+
+interface FingerprintHit {
+    request: RunRequest
+    state: RunStateRecord
 }
 
 export function sha256Hex(text: string | Buffer): string {
@@ -138,6 +150,14 @@ export class RunStore {
         return nodePath.join(this.dataDir, 'runs')
     }
 
+    /**
+     * create() mutex dir, one entry per request fingerprint. Deliberately
+     * outside runsDir so list/cleanExpired/reconcile never scan it.
+     */
+    get locksDir(): string {
+        return nodePath.join(this.dataDir, 'locks')
+    }
+
     runDir(runId: string): string {
         assertSafeRunId(runId)
         return nodePath.join(this.runsDir, runId)
@@ -148,59 +168,170 @@ export class RunStore {
     async create(input: CreateRunInput, now: string = new Date().toISOString()): Promise<CreateRunOutcome> {
         const fingerprint = requestFingerprint(input.endpoint, input.cwd, input.task_text, input.mode)
         // idempotency: identical fingerprint on a non-terminal run returns that run
+        const existing = await this.findByFingerprint(fingerprint)
+        if (existing) return { ...existing, created: false }
+
+        // two submitters can pass the scan above concurrently; serialize the
+        // run-dir creation on a per-fingerprint lock dir so exactly one wins
+        const lockPath = this.createLockPath(fingerprint)
+        const lockStamp = `${now}\n${process.pid}-${randomBytes(4).toString('hex')}`
+        await fs.mkdir(this.locksDir, { recursive: true })
+        const contested = await this.acquireCreateLock(lockPath, fingerprint, lockStamp)
+        if (contested) return contested
+
+        try {
+            // re-scan under the lock: the previous holder may have created the
+            // run while we were acquiring
+            const recheck = await this.findByFingerprint(fingerprint)
+            if (recheck) return { ...recheck, created: false }
+
+            await fs.mkdir(this.runsDir, { recursive: true })
+            let runId = newRunId()
+            for (let attempt = 0; attempt < 5; attempt++) {
+                try {
+                    await fs.mkdir(this.runDir(runId), { recursive: false })
+                    break
+                } catch (err) {
+                    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+                    runId = newRunId()
+                    if (attempt === 4) throw new Error('could not allocate a unique run_id')
+                }
+            }
+
+            const request: RunRequest = {
+                schema_version: '1.0.0',
+                run_id: runId,
+                fingerprint,
+                endpoint: input.endpoint,
+                cwd: input.cwd,
+                add_dirs: input.add_dirs,
+                task_file: input.task_file,
+                task_text: input.task_text,
+                mode: input.mode,
+                model: input.model,
+                effort: input.effort,
+                resume_session: input.resume_session,
+                run_timeout_sec: input.run_timeout_sec,
+                deliverables: input.deliverables,
+                created_at: now,
+                warnings: input.warnings,
+            }
+            const state: RunStateRecord = {
+                schema_version: '1.0.0',
+                run_id: runId,
+                state: 'pending',
+                worker: null,
+                session: { handle: null, resumable: false },
+                created_at: now,
+                updated_at: now,
+                terminal_at: null,
+            }
+            await writeJsonAtomic(this.requestPath(runId), request)
+            await writeJsonAtomic(this.statePath(runId), state)
+            return { request, state, created: true }
+        } finally {
+            // the lock is released once state.json is on disk (or the create
+            // failed) — only if it is still OUR lock: a competitor may have
+            // broken it as stale and re-acquired it in the meantime
+            await this.rmCreateLockIfMatches(lockPath, lockStamp)
+        }
+    }
+
+    private async readCreateLockStamp(lockPath: string): Promise<string | null> {
+        try {
+            return await fs.readFile(nodePath.join(lockPath, 'created_at'), 'utf8')
+        } catch {
+            return null
+        }
+    }
+
+    private async rmCreateLockIfMatches(lockPath: string, stamp: string): Promise<void> {
+        if ((await this.readCreateLockStamp(lockPath)) === stamp) {
+            await fs.rm(lockPath, { recursive: true, force: true }).catch(() => {})
+        }
+    }
+
+    /**
+     * Per-fingerprint mutex as a lock directory (mkdir is atomic everywhere).
+     * Returns a CreateRunOutcome when a competitor's run appeared while we
+     * waited; null means this caller now holds the lock. A lock older than
+     * CREATE_LOCK_STALE_MS is stale (its creator crashed) and broken; a fresh
+     * lock whose holder never produces a run within CREATE_LOCK_WAIT_MS is
+     * treated the same way. Only after the retry also fails is an error raised.
+     */
+    private async acquireCreateLock(lockPath: string, fingerprint: string, lockStamp: string): Promise<CreateRunOutcome | null> {
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                await fs.mkdir(lockPath, { recursive: false })
+            } catch (err) {
+                if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+                // remember whose lock this is: stale-break / stuck-break below
+                // only ever remove the SAME holder we contended with
+                const seen = await this.readCreateLockStamp(lockPath)
+                if (await this.createLockIsStale(lockPath)) {
+                    if (seen !== null) await this.rmCreateLockIfMatches(lockPath, seen)
+                    continue
+                }
+                const appeared = await this.waitForFingerprint(fingerprint, CREATE_LOCK_WAIT_MS)
+                if (appeared) return { ...appeared, created: false }
+                // no run appeared: the holder is presumed stuck — break the
+                // lock only if it is unchanged (a fresh holder gets its own wait)
+                if (seen !== null) await this.rmCreateLockIfMatches(lockPath, seen)
+                continue
+            }
+            try {
+                await fs.writeFile(nodePath.join(lockPath, 'created_at'), lockStamp, 'utf8')
+                return null
+            } catch (err) {
+                await this.rmCreateLockIfMatches(lockPath, lockStamp)
+                throw err
+            }
+        }
+        throw new Error(`could not acquire the create lock for fingerprint ${fingerprint}`)
+    }
+
+    /** sha256:<hex> -> <dataDir>/locks/<hex>; only the hex part becomes a dir name. */
+    private createLockPath(fingerprint: string): string {
+        const hex = fingerprint.replace(/^sha256:/, '')
+        if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error(`unsafe fingerprint for create lock: ${fingerprint}`)
+        return nodePath.join(this.locksDir, hex)
+    }
+
+    /** Lock age from the created_at stamp the acquirer writes into the lock dir. */
+    private async createLockIsStale(lockPath: string): Promise<boolean> {
+        const raw = await this.readCreateLockStamp(lockPath)
+        if (raw !== null) {
+            const createdMs = Date.parse(raw.split('\n', 1)[0] as string)
+            if (Number.isFinite(createdMs)) return Date.now() - createdMs > CREATE_LOCK_STALE_MS
+        }
+        // no readable stamp (holder crashed mid-acquire): fall back to the dir mtime
+        try {
+            return Date.now() - (await fs.stat(lockPath)).mtimeMs > CREATE_LOCK_STALE_MS
+        } catch {
+            return false
+        }
+    }
+
+    /** While a competitor holds the lock, poll for its run to become visible. */
+    private async waitForFingerprint(fingerprint: string, timeoutMs: number): Promise<FingerprintHit | null> {
+        const deadline = Date.now() + timeoutMs
+        do {
+            const found = await this.findByFingerprint(fingerprint)
+            if (found) return found
+            await sleep(CREATE_LOCK_POLL_MS)
+        } while (Date.now() < deadline)
+        return this.findByFingerprint(fingerprint)
+    }
+
+    /** The non-terminal run carrying this fingerprint, or null. */
+    private async findByFingerprint(fingerprint: string): Promise<FingerprintHit | null> {
         const existing = await this.list({ skipCleanup: true })
         for (const state of existing) {
             if (isTerminal(state.state)) continue
             const req = await this.readRequest(state.run_id).catch(() => null)
-            if (req && req.fingerprint === fingerprint) {
-                return { request: req, state, created: false }
-            }
+            if (req && req.fingerprint === fingerprint) return { request: req, state }
         }
-
-        await fs.mkdir(this.runsDir, { recursive: true })
-        let runId = newRunId()
-        for (let attempt = 0; attempt < 5; attempt++) {
-            try {
-                await fs.mkdir(this.runDir(runId), { recursive: false })
-                break
-            } catch (err) {
-                if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
-                runId = newRunId()
-                if (attempt === 4) throw new Error('could not allocate a unique run_id')
-            }
-        }
-
-        const request: RunRequest = {
-            schema_version: '1.0.0',
-            run_id: runId,
-            fingerprint,
-            endpoint: input.endpoint,
-            cwd: input.cwd,
-            add_dirs: input.add_dirs,
-            task_file: input.task_file,
-            task_text: input.task_text,
-            mode: input.mode,
-            model: input.model,
-            effort: input.effort,
-            resume_session: input.resume_session,
-            run_timeout_sec: input.run_timeout_sec,
-            deliverables: input.deliverables,
-            created_at: now,
-            warnings: input.warnings,
-        }
-        const state: RunStateRecord = {
-            schema_version: '1.0.0',
-            run_id: runId,
-            state: 'pending',
-            worker: null,
-            session: { handle: null, resumable: false },
-            created_at: now,
-            updated_at: now,
-            terminal_at: null,
-        }
-        await writeJsonAtomic(this.requestPath(runId), request)
-        await writeJsonAtomic(this.statePath(runId), state)
-        return { request, state, created: true }
+        return null
     }
 
     // ---------- read ----------

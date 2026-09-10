@@ -32,12 +32,14 @@ export interface HostInfo {
     notes?: string
 }
 
-export type SkillInstallStatus = 'created' | 'updated' | 'unchanged'
+export type SkillInstallStatus = 'created' | 'updated' | 'unchanged' | 'error'
 
 export interface SkillInstallResult {
     host: string
     path: string
     status: SkillInstallStatus
+    /** failure message when status is 'error' (reported by the caller, which keeps installing other hosts) */
+    error?: string
 }
 
 export class SkillInstallError extends Error {}
@@ -123,6 +125,12 @@ export async function installSkill(
         `.SKILL.md.${process.pid}.${Date.now()}.tmp`,
     )
     await fs.writeFile(tmp, source)
-    await fs.rename(tmp, host.target)
+    try {
+        await fs.rename(tmp, host.target)
+    } catch (err) {
+        // never leave the staged tmp file behind (e.g. locked/readonly target)
+        await fs.rm(tmp, { force: true }).catch(() => {})
+        throw err
+    }
     return { host: host.name, path: host.target, status }
 }

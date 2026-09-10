@@ -95,9 +95,9 @@ test('checkboxSelect shell: frame, toggle, submit collapse, selected indexes', a
         { label: 'kimi-code', checked: false },
     ], io)
     await new Promise((r) => setImmediate(r))
-    // initial frame: title, guide bar, checkbox glyphs, instruction footer, cursor hidden
+    // initial frame: title, guide bar, checkbox glyphs (√/×, ASCII [x]/[ ]), instruction footer, cursor hidden
     assert.match(io.text(), /Enable endpoints/)
-    assert.match(io.text(), /(◻|◼|\[•\]|\[\+\]|\[ \])/)
+    assert.match(io.text(), /(√|×|\[x\]|\[ \])/)
     assert.match(io.text(), /to navigate • space: select • a: all • i: invert • enter: confirm/)
     assert.match(io.raw(), /\x1b\[\?25l/)
     // move to kimi-code, check it, then uncheck agy via digit, confirm
@@ -111,6 +111,19 @@ test('checkboxSelect shell: frame, toggle, submit collapse, selected indexes', a
     // submit frame collapses to a dim summary line with the picked labels
     assert.match(io.text(), /Enable endpoints[\s\S]*codex, kimi-code/)
     assert.match(io.raw(), /\x1b\[\?25h$/)
+})
+
+test('checkboxSelect shell: rapid keys fired in one chunk are queued, not dropped', async () => {
+    const io = fakeIO()
+    const promise = checkboxSelect('Enable endpoints', [
+        { label: 'agy', checked: false },
+        { label: 'codex', checked: false },
+        { label: 'kimi-code', checked: false },
+    ], io)
+    await new Promise((r) => setImmediate(r))
+    // down, down, space, enter — all at once; the persistent listener queues them
+    await io.type('\u001b[B\u001b[B \r')
+    assert.deepEqual(await promise, [2])
 })
 
 test('checkboxSelect shell: empty selection renders "none" in the summary', async () => {
