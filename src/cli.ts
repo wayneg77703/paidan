@@ -22,6 +22,7 @@ import {
     defaultInitAnswers,
     buildInitConfig,
     initConfigToJson,
+    mergeInitConfig,
     type InitAnswers,
     type InitEndpointInfo,
 } from './engine/init-plan.js'
@@ -934,7 +935,13 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
         // one cheap insurance copy before overwrite
         await fs.copyFile(ctx.configPath, `${ctx.configPath}.bak-${Date.now()}`).catch(() => {})
     }
-    await writeJsonAtomic(ctx.configPath, initConfigToJson(cfg))
+    // re-init merges: the wizard owns only endpoints.enabled + defaults; machine-local
+    // keys it does not own (endpoints.overrides, dataDir, run_timeout_sec, ...) survive
+    let existingRaw: Record<string, unknown> = {}
+    if (existsSync(ctx.configPath)) {
+        existingRaw = JSON.parse(await fs.readFile(ctx.configPath, 'utf8')) as Record<string, unknown>
+    }
+    await writeJsonAtomic(ctx.configPath, mergeInitConfig(existingRaw, cfg))
 
     let skills: SkillInstallResult[] = []
     if (selectedHosts.length > 0 && hostInfo.source) {

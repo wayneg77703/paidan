@@ -67,3 +67,19 @@ export function initConfigToJson(cfg: InitConfig): Record<string, unknown> {
     if (Object.keys(defaults).length > 0) out.defaults = defaults
     return out
 }
+
+/**
+ * Merge fresh init answers into an existing config.json document: only
+ * endpoints.enabled and defaults are replaced; machine-local keys the wizard
+ * does not own (endpoints.overrides, dataDir, run_timeout_sec, ...) survive a
+ * re-init verbatim.
+ */
+export function mergeInitConfig(existing: Record<string, unknown>, cfg: InitConfig): Record<string, unknown> {
+    const fresh = initConfigToJson(cfg)
+    const existingEndpoints = (existing.endpoints ?? {}) as Record<string, unknown>
+    return {
+        ...existing,
+        ...('defaults' in fresh ? { defaults: fresh.defaults } : {}),
+        endpoints: { ...existingEndpoints, enabled: cfg.endpoints.enabled },
+    }
+}

@@ -120,3 +120,40 @@ test('skill_hosts defaults to empty when no hosts are detected', () => {
     const answers = defaultInitAnswers(INFO)
     assert.deepEqual(answers.skill_hosts, [])
 })
+
+test('mergeInitConfig preserves machine-local keys across re-init', async () => {
+    const { mergeInitConfig } = await import('../dist/engine/init-plan.js')
+    const existing = {
+        endpoints: { enabled: ['kimi-code'], overrides: { zcode: { bin: 'E:/custom/zcode.cjs' } } },
+        defaults: { endpoint: 'kimi-code' },
+        run_timeout_sec: 600,
+    }
+    const merged = mergeInitConfig(existing, {
+        endpoints: { enabled: ['kimi-code', 'codex'] },
+        defaults: { endpoint: 'codex', model: 'gpt-5.3-codex-spark' },
+    })
+    assert.deepEqual(merged.endpoints.enabled, ['kimi-code', 'codex'])
+    assert.deepEqual(merged.endpoints.overrides, { zcode: { bin: 'E:/custom/zcode.cjs' } })
+    assert.deepEqual(merged.defaults, { endpoint: 'codex', model: 'gpt-5.3-codex-spark' })
+    assert.equal(merged.run_timeout_sec, 600)
+})
+
+test('CLI init --yes twice preserves endpoints.overrides written between runs', async () => {
+    const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-init-'))
+    try {
+        const hostHome = nodePath.join(root, 'hosts')
+        await fs.mkdir(nodePath.join(hostHome, '.kimi-code', 'skills'), { recursive: true })
+        const env = { ...process.env, PAIDAN_HOME: nodePath.join(root, 'home'), PAIDAN_DATA_DIR: nodePath.join(root, 'data'), PAIDAN_HOST_HOME: hostHome }
+        const configPath = nodePath.join(root, 'home', 'config.json')
+        await execFileAsync(process.execPath, [CLI, 'init', '--yes'], { env, timeout: 120_000 })
+        // user hand-edits machine-local overrides in between
+        const cfg1 = JSON.parse(await fs.readFile(configPath, 'utf8'))
+        cfg1.endpoints.overrides = { dsh: { bin: 'C:/custom/dsh/bin.js' } }
+        await fs.writeFile(configPath, JSON.stringify(cfg1, null, 2))
+        await execFileAsync(process.execPath, [CLI, 'init', '--yes'], { env, timeout: 120_000 })
+        const cfg2 = JSON.parse(await fs.readFile(configPath, 'utf8'))
+        assert.deepEqual(cfg2.endpoints.overrides, { dsh: { bin: 'C:/custom/dsh/bin.js' } })
+    } finally {
+        await fs.rm(root, { recursive: true, force: true })
+    }
+})
