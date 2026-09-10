@@ -34,6 +34,7 @@ import {
     type SkillInstallResult,
 } from './engine/skill-install.js'
 import { reconcileRuns, pidAlive } from './engine/reconcile.js'
+import { verifyProcessIdentity } from './engine/process-identity.js'
 import { ModelsCache, type CachedModels } from './engine/models-cache.js'
 import { RunStore, writeJsonAtomic } from './engine/run-store.js'
 import { isTerminal, transitionRecord } from './engine/state-machine.js'
@@ -309,6 +310,27 @@ async function verbGet(ctx: Ctx, args: string[]): Promise<void> {
     emitOk({ run: state, result, terminal: isTerminal(state.state) })
 }
 
+/**
+ * Direct endpoint kill gated on PID-reuse identity: a pid whose current start
+ * token differs from the worker's record is someone else's process — never
+ * taskkill it. Query failure degrades to pid liveness (and the note says so).
+ * Returns a note for the caller when something noteworthy happened.
+ */
+async function terminateRecordedEndpoint(
+    endpointPid: number,
+    recordedStart: string | null | undefined,
+): Promise<string | null> {
+    const verdict = await verifyProcessIdentity(endpointPid, recordedStart)
+    if (verdict === 'mismatch') {
+        return `endpoint pid ${endpointPid} start-token mismatch (pid reused by another process); not killed, treated as already gone`
+    }
+    if (!pidAlive(endpointPid)) return null
+    await terminateEndpointTree(endpointPid)
+    return verdict === 'unknown'
+        ? 'endpoint identity could not be re-verified (query unavailable); killed on pid liveness alone'
+        : null
+}
+
 async function verbCancel(ctx: Ctx, args: string[]): Promise<void> {
     const { positionals } = parseArgs({ args, strict: true, allowPositionals: true, options: {} })
     const runId = positionals[0]
@@ -324,11 +346,11 @@ async function verbCancel(ctx: Ctx, args: string[]): Promise<void> {
     if (state.state === 'attention') {
         // worker is gone; kill a possibly orphaned endpoint process, then close out
         const endpointPid = state.worker?.endpoint_pid ?? null
-        if (endpointPid && pidAlive(endpointPid)) {
-            await terminateEndpointTree(endpointPid)
-        }
+        const note = endpointPid
+            ? await terminateRecordedEndpoint(endpointPid, state.worker?.endpoint_pid_start)
+            : null
         await writeCancelledDirect(ctx.store, state, 'cancelled while attention (worker absent)')
-        emitOk({ run_id: runId, state: 'cancelled' })
+        emitOk({ run_id: runId, state: 'cancelled', ...(note ? { note } : {}) })
         return
     }
 
@@ -341,15 +363,19 @@ async function verbCancel(ctx: Ctx, args: string[]): Promise<void> {
     }
     // worker wedged: direct fallback kill + close out
     const endpointPid = final?.worker?.endpoint_pid ?? null
-    if (endpointPid && pidAlive(endpointPid)) {
-        await terminateEndpointTree(endpointPid)
-    }
+    const identityNote = endpointPid
+        ? await terminateRecordedEndpoint(endpointPid, final?.worker?.endpoint_pid_start)
+        : null
     const latest = await ctx.store.readState(runId)
     if (latest && !isTerminal(latest.state)) {
         await writeCancelledDirect(ctx.store, latest, 'cancel finalized by CLI after worker did not respond within 15s')
     }
     const after = await ctx.store.readState(runId)
-    emitOk({ run_id: runId, state: after?.state ?? 'cancelled', note: 'worker did not finalize within 15s; CLI closed the run' })
+    emitOk({
+        run_id: runId,
+        state: after?.state ?? 'cancelled',
+        note: ['worker did not finalize within 15s; CLI closed the run', identityNote].filter(Boolean).join('; '),
+    })
 }
 
 async function writeCancelledDirect(store: RunStore, state: RunStateRecord, note: string): Promise<void> {

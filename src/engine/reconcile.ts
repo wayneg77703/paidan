@@ -1,14 +1,15 @@
 // Startup reconcile: scan non-terminal runs; if the worker pid is dead, mark
 // attention with an evidence note. Never auto-restart anything.
 
+import { verifyProcessIdentity, type ProcessStartQuery } from './process-identity.js'
 import type { RunStateRecord } from './types.js'
 import { isTerminal, transitionRecord } from './state-machine.js'
 import type { RunStore } from './run-store.js'
 
 /**
- * Pid liveness via signal-0. PID reuse is not defended against in v0 (the
- * runner did full CIM identity checks); a reused pid delays attention marking
- * until the unrelated process exits. TODO: process-identity verification.
+ * Pid liveness via signal-0. Liveness alone does not prove identity (PID reuse):
+ * when the worker recorded a start token, reconcile/cancel re-verify via
+ * verifyProcessIdentity before acting.
  */
 export function pidAlive(pid: number): boolean {
     if (!Number.isSafeInteger(pid) || pid <= 0) return false
@@ -32,7 +33,7 @@ export interface ReconcileReport {
 
 export async function reconcileRuns(
     store: RunStore,
-    opts: { now?: string; limit?: number } = {},
+    opts: { now?: string; limit?: number; queryStart?: ProcessStartQuery } = {},
 ): Promise<ReconcileReport> {
     const now = opts.now ?? new Date().toISOString()
     const report: ReconcileReport = { scanned: 0, changed: [], errors: [] }
@@ -42,7 +43,7 @@ export async function reconcileRuns(
         if (opts.limit !== undefined && report.scanned >= opts.limit) break
         report.scanned++
         try {
-            const next = await reconcileOne(store, run, now)
+            const next = await reconcileOne(store, run, now, opts.queryStart)
             if (next && next.state !== run.state) {
                 report.changed.push({ run_id: run.run_id, from: run.state, to: next.state })
             }
@@ -57,10 +58,27 @@ async function reconcileOne(
     store: RunStore,
     run: RunStateRecord,
     now: string,
+    queryStart?: ProcessStartQuery,
 ): Promise<RunStateRecord | null> {
     const worker = run.worker
-    if (worker && pidAlive(worker.pid)) return null
-    if (!worker && Date.parse(now) - Date.parse(run.created_at) < SPAWN_GRACE_MS) return null
+    // goneReason set = fall through to the terminal-adoption/attention path
+    let goneReason: string | null = null
+    if (worker) {
+        if (!pidAlive(worker.pid)) {
+            goneReason = `worker pid ${worker.pid} is dead`
+        } else if (worker.pid_start) {
+            const verdict = await verifyProcessIdentity(worker.pid, worker.pid_start, queryStart)
+            if (verdict === 'mismatch') {
+                goneReason = `worker pid ${worker.pid} was reused by another process (start-token mismatch)`
+            }
+            // match: alive and ours. unknown: identity query unavailable —
+            // degrade to pid liveness (the pid-only behavior), never a crash.
+        }
+        // no recorded start token (old run or failed query): pid liveness only
+    } else if (Date.parse(now) - Date.parse(run.created_at) >= SPAWN_GRACE_MS) {
+        goneReason = 'worker never became observable'
+    }
+    if (goneReason === null) return null
 
     // Worker is gone. If the worker managed to write result.json before dying,
     // adopt its terminal state instead of inventing one.
@@ -71,7 +89,7 @@ async function reconcileOne(
         await store.appendEvent(run.run_id, {
             ts: now,
             type: 'reconcile',
-            note: `worker gone; adopted terminal state ${result.state} from result.json`,
+            note: `worker gone (${goneReason}); adopted terminal state ${result.state} from result.json`,
         })
         return next
     }
@@ -81,9 +99,7 @@ async function reconcileOne(
     await store.appendEvent(run.run_id, {
         ts: now,
         type: 'reconcile',
-        note: worker
-            ? `worker pid ${worker.pid} is dead and no result.json exists; marked attention (never auto-restarted)`
-            : 'worker never became observable; marked attention (never auto-restarted)',
+        note: `${goneReason} and no result.json exists; marked attention (never auto-restarted)`,
     })
     return next
 }

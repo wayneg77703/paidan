@@ -8,6 +8,7 @@ import * as fs from 'node:fs/promises'
 import * as nodePath from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { loadConfig, resolveDataDir, DEFAULT_RUN_TIMEOUT_SEC } from './engine/config.js'
+import { queryProcessStart } from './engine/process-identity.js'
 import { createRedactor } from './engine/redactor.js'
 import { RunStore, sha256Hex } from './engine/run-store.js'
 import { isTerminal, transitionRecord } from './engine/state-machine.js'
@@ -45,15 +46,24 @@ async function main(): Promise<number> {
     const initial = await store.readState(runId)
     if (!initial || isTerminal(initial.state)) return 0
 
-    // pending -> running, registering worker identity; reconcile uses this pid
+    // pending -> running, registering worker identity; reconcile uses this pid.
+    // pid_start is the platform start token so reconcile can tell a reused pid
+    // from this worker; a failed query degrades to pid-only liveness (noted).
+    const selfStart = await queryProcessStart(process.pid)
     try {
         await store.writeState(
             transitionRecord(initial, 'running', now(), {
-                worker: { pid: process.pid, started_at: now(), endpoint_pid: null },
+                worker: { pid: process.pid, started_at: now(), pid_start: selfStart, endpoint_pid: null },
             }),
         )
     } catch {
         return 0 // cancelled/terminal race: nothing to do
+    }
+    if (selfStart === null) {
+        await store.appendEvent(runId, {
+            ts: now(), type: 'note',
+            note: 'process identity query unavailable for the worker; pid-reuse checks degrade to pid liveness',
+        }).catch(() => {})
     }
 
     const fail = async (code: string, message: string, exitCode: number | null = null): Promise<number> => {
@@ -145,35 +155,10 @@ async function main(): Promise<number> {
             return fail('SPAWN_FAILED', `endpoint spawn returned no pid (bin ${plan.endpoint_bin ?? plan.command})`)
         }
         const endpointPid = child.pid
-        const current = await store.readState(runId)
-        await store.patchState(runId, now(), {
-            worker: { pid: process.pid, started_at: current?.worker?.started_at ?? now(), endpoint_pid: endpointPid },
-        })
-        const argvForLog = [plan.endpoint_bin ?? plan.command, ...args].map((a) =>
-            a === delivery.task_text ? `[prompt sha256:${sha256Hex(a).slice(0, 12)}]` : a,
-        )
-        await store.appendEvent(runId, redactor.redactJson({
-            ts: now(), type: 'spawn', pid: endpointPid, argv: argvForLog, cwd: request.cwd, resolved_from: plan.resolved_from,
-        }) as RunEvent)
-
-        // engine wall-clock cap: at the deadline kill the endpoint tree (same
-        // termination path as cancel); the judgment below is then forced to
-        // failed with a 'run timeout after Ns' note. 0 disables; pre-timeout
-        // requests (no field) fall back to the default.
-        const runTimeoutSec = request.run_timeout_sec ?? DEFAULT_RUN_TIMEOUT_SEC
-        let runTimedOut = false
-        const runTimer = runTimeoutSec > 0
-            ? setTimeout(() => {
-                runTimedOut = true
-                void (async () => {
-                    const term = await terminateEndpointTree(endpointPid)
-                    await store.appendEvent(runId, {
-                        ts: now(), type: 'run-timeout', pid: endpointPid, after_sec: runTimeoutSec,
-                        method: term.method, ok: term.ok,
-                    }).catch(() => {})
-                })()
-            }, runTimeoutSec * 1000)
-            : null
+        // in flight while the stream plumbing attaches below — awaiting it inline
+        // here would let a fast endpoint exit before the stdout listeners exist
+        // (Windows destroys the pipe on exit and the buffered output is lost)
+        const endpointStartP = queryProcessStart(endpointPid)
 
         const completion = new Promise<{ exitCode: number | null; signal: string | null }>((resolve) => {
             if (child.exitCode !== null || child.signalCode !== null) {
@@ -221,6 +206,51 @@ async function main(): Promise<number> {
             feedStderr(stderrDecoder.write(chunk))
             return Promise.resolve()
         })
+
+        // stream plumbing is attached; now register identity, log the spawn,
+        // and arm the wall-clock cap
+        const endpointStart = await endpointStartP
+        const current = await store.readState(runId)
+        await store.patchState(runId, now(), {
+            worker: {
+                pid: process.pid,
+                started_at: current?.worker?.started_at ?? now(),
+                pid_start: current?.worker?.pid_start ?? null,
+                endpoint_pid: endpointPid,
+                endpoint_pid_start: endpointStart,
+            },
+        })
+        if (endpointStart === null) {
+            await store.appendEvent(runId, {
+                ts: now(), type: 'note',
+                note: 'process identity query unavailable for the endpoint; cancel/reconcile degrade to pid liveness',
+            }).catch(() => {})
+        }
+        const argvForLog = [plan.endpoint_bin ?? plan.command, ...args].map((a) =>
+            a === delivery.task_text ? `[prompt sha256:${sha256Hex(a).slice(0, 12)}]` : a,
+        )
+        await store.appendEvent(runId, redactor.redactJson({
+            ts: now(), type: 'spawn', pid: endpointPid, argv: argvForLog, cwd: request.cwd, resolved_from: plan.resolved_from,
+        }) as RunEvent)
+
+        // engine wall-clock cap: at the deadline kill the endpoint tree (same
+        // termination path as cancel); the judgment below is then forced to
+        // failed with a 'run timeout after Ns' note. 0 disables; pre-timeout
+        // requests (no field) fall back to the default.
+        const runTimeoutSec = request.run_timeout_sec ?? DEFAULT_RUN_TIMEOUT_SEC
+        let runTimedOut = false
+        const runTimer = runTimeoutSec > 0
+            ? setTimeout(() => {
+                runTimedOut = true
+                void (async () => {
+                    const term = await terminateEndpointTree(endpointPid)
+                    await store.appendEvent(runId, {
+                        ts: now(), type: 'run-timeout', pid: endpointPid, after_sec: runTimeoutSec,
+                        method: term.method, ok: term.ok,
+                    }).catch(() => {})
+                })()
+            }, runTimeoutSec * 1000)
+            : null
 
         // explicit cancel: marker file -> tree kill (in the watcher, not after
         // completion — a long task must actually be interrupted)

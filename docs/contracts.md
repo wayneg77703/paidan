@@ -48,7 +48,7 @@ Root: `<dataDir>/runs/<run_id>/` (default `<APPDATA>/paidan/runs`).
   "schema_version": "1.0.0",
   "run_id": "run_...",
   "state": "pending | running | completed | failed | cancelled | unknown | attention",
-  "worker": { "pid": 1234, "started_at": "ISO", "endpoint_pid": 5678 },
+  "worker": { "pid": 1234, "started_at": "ISO", "pid_start": "platform start token or null", "endpoint_pid": 5678, "endpoint_pid_start": "platform start token or null" },
   "session": { "handle": "native session id or null", "resumable": true },
   "created_at": "...", "updated_at": "...", "terminal_at": null
 }
@@ -87,6 +87,7 @@ Judgment order (terminal.js): deliverable evidence → endpoint refusal signals 
 - Cancel: explicit only. v0 transition: `taskkill /PID <pid> /T /F` on Windows, process-group kill elsewhere; Windows Job Object-based reaping is the planned replacement (documented gap, not a bug).
 - Run timeout: the worker enforces `request.run_timeout_sec` as a wall-clock cap on the endpoint process (0 = disabled); expiry reuses the cancel termination path and ends the run `failed` with the note `run timeout after Ns`.
 - Reconcile runs at CLI start: scan non-terminal states, worker pid dead → state `attention` with evidence note. Never auto-restart.
+- PID-reuse identity: a live pid does not prove the recorded process still exists. The worker records platform start tokens for itself (`pid_start`) and the endpoint (`endpoint_pid_start`) — win32 CIM `CreationDate`, linux `/proc/<pid>/stat` field 22, macOS `ps lstart`; equality is identity, formats are never parsed. Reconcile re-verifies before marking `attention` (mismatch = the recorded worker is gone); cancel re-verifies before any direct `taskkill` (mismatch = already gone, never killed). Query failure or an old record without tokens degrades to pid-only liveness, with a note in events/result — never a crash.
 
 ## 6. Endpoint manifest (`endpoints/<name>.json`)
 

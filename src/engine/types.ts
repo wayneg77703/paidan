@@ -45,7 +45,11 @@ export interface RunRequest {
 export interface RunWorkerRef {
     pid: number
     started_at: string
+    /** platform process-start token (process-identity.ts); absent on old records or query failure */
+    pid_start?: string | null
     endpoint_pid: number | null
+    /** start token of the endpoint process; cancel verifies before killing */
+    endpoint_pid_start?: string | null
 }
 
 export interface RunStateRecord {
