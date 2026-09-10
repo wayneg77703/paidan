@@ -136,6 +136,8 @@ export async function readKimiLedgerUsage(
             input_tokens: totals.inputOther + totals.inputCacheCreation,
             output_tokens: totals.output,
             cached_input_tokens: totals.inputCacheRead,
+            // the kimi ledger has no cost concept
+            cost: null,
             source: 'endpoint-ledger',
         },
         warnings: [],

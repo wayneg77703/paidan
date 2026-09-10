@@ -24,6 +24,7 @@ test('normal run: last agent_message wins, thread_id is the session handle, prov
         input_tokens: 79038,
         output_tokens: 179,
         cached_input_tokens: 45696,
+        cost: null,
         source: 'provider',
     })
 })
@@ -88,6 +89,7 @@ test('multiple turn.completed events sum usage (adapter semantics)', () => {
         input_tokens: 79138,
         output_tokens: 184,
         cached_input_tokens: 45696,
+        cost: null,
         source: 'provider',
     })
 })

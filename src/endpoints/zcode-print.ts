@@ -47,6 +47,7 @@ export function usageFromEnvelope(value: unknown): UsageSummary | null {
         input_tokens: input,
         output_tokens: output,
         cached_input_tokens: nonnegativeInteger(o.cacheReadTokens),
+        cost: null,
         source: 'provider',
     }
 }

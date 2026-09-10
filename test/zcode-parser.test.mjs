@@ -54,6 +54,7 @@ test('normal envelope: response/sessionId/usage extracted, not degraded', () => 
         input_tokens: 17001,
         output_tokens: 14,
         cached_input_tokens: 4352,
+        cost: null,
         source: 'provider',
     })
 })
@@ -135,6 +136,7 @@ test('usage absent or partial -> null, never fabricated zeros', () => {
         input_tokens: 5,
         output_tokens: 7,
         cached_input_tokens: null,
+        cost: null,
         source: 'provider',
     })
 })

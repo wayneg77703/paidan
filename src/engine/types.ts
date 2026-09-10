@@ -74,6 +74,8 @@ export interface UsageSummary {
     input_tokens: number | null
     output_tokens: number | null
     cached_input_tokens: number | null
+    /** provider-reported cost (claude total_cost_usd); null when the endpoint has no cost concept */
+    cost: number | null
     source: UsageSource
 }
 

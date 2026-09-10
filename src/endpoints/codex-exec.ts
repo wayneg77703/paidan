@@ -135,6 +135,7 @@ export function createCodexExecParser(): CodexExecParser {
                         input_tokens: inputTokens,
                         output_tokens: outputTokens,
                         cached_input_tokens: cachedTokens,
+                        cost: null,
                         source: 'provider',
                     }
                 }

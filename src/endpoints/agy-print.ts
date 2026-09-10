@@ -46,7 +46,7 @@ export function readAgyUsage(value: unknown): UsageSummary | null {
     const output = safeInt(value.output_tokens)
     const cached = safeInt(value.cache_read_tokens)
     if (input === null && output === null && cached === null) return null
-    return { input_tokens: input, output_tokens: output, cached_input_tokens: cached, source: 'provider' }
+    return { input_tokens: input, output_tokens: output, cached_input_tokens: cached, cost: null, source: 'provider' }
 }
 
 export function createAgyPrintParser(): AgyPrintParser {

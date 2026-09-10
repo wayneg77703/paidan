@@ -39,6 +39,8 @@ test('fresh run: wire usage.record rows sum into endpoint-ledger usage', async (
             input_tokens: 235,
             output_tokens: 13,
             cached_input_tokens: 50,
+            // the kimi ledger has no cost concept
+            cost: null,
             source: 'endpoint-ledger',
         })
         assert.deepEqual(r.warnings, [])

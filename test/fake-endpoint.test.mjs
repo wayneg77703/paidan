@@ -63,6 +63,7 @@ test('worker adopts parser usage into result.json + usage.db; in-band error land
             input_tokens: 100,
             output_tokens: 7,
             cached_input_tokens: 40,
+            cost: null,
             source: 'provider',
         })
         assert.ok(
@@ -73,7 +74,7 @@ test('worker adopts parser usage into result.json + usage.db; in-band error land
         assert.equal(got.run.session.resumable, true)
 
         const db = new DatabaseSync(nodePath.join(root, 'data', 'usage.db'))
-        const row = db.prepare('SELECT endpoint, source, input_tokens, output_tokens, cached_input_tokens FROM usage WHERE run_id = ?').get(run.run_id)
+        const row = db.prepare('SELECT endpoint, source, input_tokens, output_tokens, cached_input_tokens, cost FROM usage WHERE run_id = ?').get(run.run_id)
         db.close()
         // node:sqlite rows are null-prototype objects; spread for the literal compare
         assert.deepEqual({ ...row }, {
@@ -82,6 +83,7 @@ test('worker adopts parser usage into result.json + usage.db; in-band error land
             input_tokens: 100,
             output_tokens: 7,
             cached_input_tokens: 40,
+            cost: null,
         })
     } finally {
         await fs.rm(root, { recursive: true, force: true })
@@ -140,12 +142,13 @@ test('kimi endpoint-ledger: stream-less usage is adopted from the native session
             input_tokens: 230,
             output_tokens: 11,
             cached_input_tokens: 50,
+            cost: null,
             source: 'endpoint-ledger',
         })
         const db = new DatabaseSync(nodePath.join(root, 'data', 'usage.db'))
-        const row = db.prepare('SELECT source, input_tokens, output_tokens FROM usage WHERE run_id = ?').get(run.run_id)
+        const row = db.prepare('SELECT source, input_tokens, output_tokens, cost FROM usage WHERE run_id = ?').get(run.run_id)
         db.close()
-        assert.deepEqual({ ...row }, { source: 'endpoint-ledger', input_tokens: 230, output_tokens: 11 })
+        assert.deepEqual({ ...row }, { source: 'endpoint-ledger', input_tokens: 230, output_tokens: 11, cost: null })
 
         // prompt_cwd_hint: request.json keeps the original text; events record the append
         const runDir = nodePath.join(root, 'data', 'runs', run.run_id)
@@ -159,6 +162,56 @@ test('kimi endpoint-ledger: stream-less usage is adopted from the native session
             .update(`x\n\nThe current working directory is ${work}. Use absolute paths for all file operations.`)
             .digest('hex').slice(0, 12)
         assert.ok(spawnEvent.argv.some((a) => a === `[prompt sha256:${hintedSha}]`), 'hinted prompt is what argv carried')
+    } finally {
+        await fs.rm(root, { recursive: true, force: true })
+    }
+})
+
+test('claude total_cost_usd flows into result.json usage.cost and the usage.db cost column', async () => {
+    const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-fake-claude-'))
+    try {
+        const endpointsDir = nodePath.join(root, 'endpoints')
+        const work = nodePath.join(root, 'work')
+        await fs.mkdir(endpointsDir, { recursive: true })
+        await fs.mkdir(work, { recursive: true })
+        const fakeBin = nodePath.join(repoRoot, 'test', 'fixtures', 'fake-claude.cjs')
+        await fs.writeFile(nodePath.join(endpointsDir, 'fake-claude.json'), JSON.stringify({
+            schema_version: '1.0.0',
+            name: 'fake-claude',
+            detect: { bin: fakeBin },
+            command: { argv: ['{bin}', '-p', '{prompt}'], prompt_delivery: 'argv' },
+            permission: {
+                'fs.read': { status: 'supported' },
+                'fs.write': { status: 'supported' },
+                presets: { 'workspace-write': 'supported' },
+            },
+            resume: { kind: 'flag', args: ['--resume', '{session}'] },
+            parser: 'claude-stream-json',
+        }))
+        const env = {
+            ...process.env,
+            PAIDAN_HOME: nodePath.join(root, 'home'),
+            PAIDAN_DATA_DIR: nodePath.join(root, 'data'),
+            PAIDAN_ENDPOINTS_DIR: endpointsDir,
+        }
+        const run = await paidan(env, ['run', '--endpoint', 'fake-claude', '--cwd', work, '--task', 'x'])
+        assert.equal(run.ok, true, JSON.stringify(run))
+
+        const got = await paidan(env, ['get', run.run_id, '--wait', '--timeout', '60'])
+        assert.equal(got.run.state, 'completed', JSON.stringify(got))
+        assert.deepEqual(got.result.usage, {
+            input_tokens: 64,
+            output_tokens: 9,
+            cached_input_tokens: 30,
+            cost: 0.0123,
+            source: 'provider',
+        })
+        assert.ok(!got.result.evidence.notes.some((n) => n.includes('total_cost_usd')), 'cost note is gone')
+
+        const db = new DatabaseSync(nodePath.join(root, 'data', 'usage.db'))
+        const row = db.prepare('SELECT source, cost FROM usage WHERE run_id = ?').get(run.run_id)
+        db.close()
+        assert.deepEqual({ ...row }, { source: 'provider', cost: 0.0123 })
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }

@@ -181,7 +181,7 @@ export function createOmpPrintParser(): EndpointStreamParser {
             } else if (turnUsages.length === 1) {
                 const u = turnUsages[0]
                 if (validProviderTokens(u)) {
-                    usage = { input_tokens: u.input, output_tokens: u.output, cached_input_tokens: u.cacheRead, source: 'provider' }
+                    usage = { input_tokens: u.input, output_tokens: u.output, cached_input_tokens: u.cacheRead, cost: null, source: 'provider' }
                 } else {
                     warnings.push('turn_end usage missing or invalid; usage unavailable')
                 }

@@ -307,7 +307,7 @@ async function writeCancelledDirect(store: RunStore, state: RunStateRecord, note
             parser: { type: 'none', degraded: false },
             notes: [note],
         },
-        usage: { input_tokens: null, output_tokens: null, cached_input_tokens: null, source: 'unavailable' },
+        usage: { input_tokens: null, output_tokens: null, cached_input_tokens: null, cost: null, source: 'unavailable' },
         session_handle: state.session.handle,
         terminal_at: terminalAt,
     }

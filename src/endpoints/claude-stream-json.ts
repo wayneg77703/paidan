@@ -57,6 +57,8 @@ export function readClaudeUsage(value: unknown): UsageSummary | null {
         input_tokens: fresh === null && cacheCreation === null ? null : (fresh ?? 0) + (cacheCreation ?? 0),
         output_tokens: output,
         cached_input_tokens: cacheRead,
+        // filled by the parser from the result event's total_cost_usd
+        cost: null,
         source: 'provider',
     }
 }
@@ -106,6 +108,7 @@ export function createClaudeStreamJsonParser(): ClaudeStreamJsonParser {
             if (typeof obj.session_id === 'string') resultSessionId = obj.session_id
             usage = readClaudeUsage(obj.usage)
             costUsd = finiteNumber(obj.total_cost_usd)
+            if (usage) usage.cost = costUsd
             if (Array.isArray(obj.permission_denials)) {
                 for (const d of obj.permission_denials) {
                     const tool = isRecord(d) ? d.tool_name : undefined
@@ -135,10 +138,6 @@ export function createClaudeStreamJsonParser(): ClaudeStreamJsonParser {
             }
             for (const tool of deniedTools) {
                 warnings.push(`permission denied by endpoint: ${tool}`)
-            }
-            if (costUsd !== null) {
-                // the run-record contract has no cost field; the note keeps it observable
-                warnings.push(`endpoint reported total_cost_usd=${costUsd} (not recorded; no cost field in contract)`)
             }
             return {
                 finalText: resultText ?? assistantText,

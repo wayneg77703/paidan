@@ -69,7 +69,7 @@ Root: `<dataDir>/runs/<run_id>/` (default `<APPDATA>/paidan/runs`).
     "parser": { "type": "kimi-print-json", "degraded": false },
     "notes": []
   },
-  "usage": { "input_tokens": 1, "output_tokens": 2, "cached_input_tokens": null, "source": "provider | endpoint-ledger | unavailable" },
+  "usage": { "input_tokens": 1, "output_tokens": 2, "cached_input_tokens": null, "cost": null, "source": "provider | endpoint-ledger | unavailable" },
   "session_handle": null,
   "terminal_at": "ISO"
 }
@@ -142,4 +142,4 @@ Parser modules are convention-loaded: `parser: "<name>"` resolves to `src/endpoi
 
 ## 8. usage.db (node:sqlite)
 
-Table `usage(run_id TEXT PRIMARY KEY, endpoint TEXT, connection TEXT, model TEXT, input_tokens INTEGER, cached_input_tokens INTEGER, output_tokens INTEGER, cost REAL, source TEXT, recorded_at TEXT)`. `source` ∈ `provider | endpoint-ledger | unavailable` — three-state, never fabricate zeros. `provider` = the endpoint's own output stream carried usage; `endpoint-ledger` = observed from the endpoint's native on-disk ledger (kimi: `<KIMI_CODE_HOME|~/.kimi-code>/session_index.jsonl` → `<sessionDir>/agents/*/wire.jsonl` `usage.record` rows, summed; fresh runs only — a resumed session's wire contains earlier turns and stays `unavailable` until a pre-spawn cursor exists). No cross-connection aggregation games: accounting is per connection.
+Table `usage(run_id TEXT PRIMARY KEY, endpoint TEXT, connection TEXT, model TEXT, input_tokens INTEGER, cached_input_tokens INTEGER, output_tokens INTEGER, cost REAL, source TEXT, recorded_at TEXT)`. `source` ∈ `provider | endpoint-ledger | unavailable` — three-state, never fabricate zeros. `provider` = the endpoint's own output stream carried usage; `endpoint-ledger` = observed from the endpoint's native on-disk ledger (kimi: `<KIMI_CODE_HOME|~/.kimi-code>/session_index.jsonl` → `<sessionDir>/agents/*/wire.jsonl` `usage.record` rows, summed; fresh runs only — a resumed session's wire contains earlier turns and stays `unavailable` until a pre-spawn cursor exists). No cross-connection aggregation games: accounting is per connection. `cost` mirrors `result.json` usage.cost: the provider-reported total (claude `total_cost_usd`), NULL for endpoints without a cost concept (kimi ledger and every other endpoint today).

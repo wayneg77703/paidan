@@ -67,7 +67,7 @@ async function main(): Promise<number> {
                 parser: { type: 'none', degraded: false },
                 notes: [`${code}: ${message}`],
             },
-            usage: { input_tokens: null, output_tokens: null, cached_input_tokens: null, source: 'unavailable' },
+            usage: { input_tokens: null, output_tokens: null, cached_input_tokens: null, cost: null, source: 'unavailable' },
             session_handle: null,
         })
         return 0
@@ -277,7 +277,7 @@ async function main(): Promise<number> {
             },
             // usage: parser-reported (provider) or native-ledger observation
             // (endpoint-ledger); absent stays unavailable
-            usage: usage ?? { input_tokens: null, output_tokens: null, cached_input_tokens: null, source: 'unavailable' },
+            usage: usage ?? { input_tokens: null, output_tokens: null, cached_input_tokens: null, cost: null, source: 'unavailable' },
             session_handle: parsed.sessionId,
         })
         return 0
@@ -329,7 +329,7 @@ async function finalizeCancelled(
             parser: { type: 'none', degraded: false },
             notes: [note],
         },
-        usage: { input_tokens: null, output_tokens: null, cached_input_tokens: null, source: 'unavailable' },
+        usage: { input_tokens: null, output_tokens: null, cached_input_tokens: null, cost: null, source: 'unavailable' },
         session_handle: null,
     })
     return 0
@@ -391,7 +391,7 @@ async function finalize(
             input_tokens: write.usage.input_tokens,
             cached_input_tokens: write.usage.cached_input_tokens,
             output_tokens: write.usage.output_tokens,
-            cost: null,
+            cost: write.usage.cost,
             source: write.usage.source,
             recorded_at: result.terminal_at,
         })

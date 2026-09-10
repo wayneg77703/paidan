@@ -23,6 +23,7 @@ test('normal run: text is the final answer, sessionID is the handle, single step
         input_tokens: 6599,
         output_tokens: 17,
         cached_input_tokens: 1792,
+        cost: null,
         source: 'provider',
     })
 })

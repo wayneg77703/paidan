@@ -48,8 +48,9 @@ test('full lifecycle: init -> assistant -> result yields session, result text, p
     assert.equal(r.usage.cached_input_tokens, 62714)
     assert.equal(r.usage.output_tokens, 198)
     assert.equal(r.usage.source, 'provider')
-    // cost is observable as a note; the contract has no cost field
-    assert.ok(r.warnings.some((w) => w.includes('total_cost_usd=0.4273')))
+    // cost rides the contract field now (contracts §4), not a note
+    assert.equal(r.usage.cost, 0.4273)
+    assert.ok(!r.warnings.some((w) => w.includes('total_cost_usd')))
 })
 
 test('permission denial terminal: exit-0 success shape with permission_denials surfaces denial evidence', () => {

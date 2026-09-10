@@ -112,7 +112,7 @@ test('result.json is write-once: identical rewrite is a no-op, conflicting rewri
             exit_code: 0,
             final_text: '',
             evidence: { deliverables: [], refusals: [], parser: { type: 'kimi-print', degraded: false }, notes: ['x'] },
-            usage: { input_tokens: null, output_tokens: null, cached_input_tokens: null, source: 'unavailable' },
+            usage: { input_tokens: null, output_tokens: null, cached_input_tokens: null, cost: null, source: 'unavailable' },
             session_handle: null,
             terminal_at: new Date().toISOString(),
         }

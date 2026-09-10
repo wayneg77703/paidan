@@ -130,6 +130,7 @@ export function createOpencodeRunParser(): OpencodeRunParser {
                         input_tokens: stepTokens.input,
                         output_tokens: stepTokens.output,
                         cached_input_tokens: stepTokens.cache.read,
+                        cost: null,
                         source: 'provider',
                     }
                 } else {

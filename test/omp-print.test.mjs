@@ -33,6 +33,7 @@ test('normal run: session id is the handle, finalText from turn_end, sole-turn u
         input_tokens: 18977,
         output_tokens: 2,
         cached_input_tokens: 0,
+        cost: null,
         source: 'provider',
     })
 })
