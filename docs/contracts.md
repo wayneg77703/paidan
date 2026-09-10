@@ -9,9 +9,11 @@ Root: `<dataDir>/runs/<run_id>/` (default `<APPDATA>/paidan/runs`).
 | file | writer | contents |
 |---|---|---|
 | `request.json` | CLI at submit | immutable run request (schema below) |
-| `state.json` | worker | current state record, **atomic write** (tmp + rename), idempotent transitions |
+| `state.json` | worker (also CLI cancel fallback / reconcile) | current state record, **atomic write** (tmp + rename), idempotent transitions |
 | `events.jsonl` | worker | append-only event log (spawn/stdout-chunk meta/terminal judgment evidence) |
-| `result.json` | worker | terminal result + evidence, written once, atomic |
+| `result.json` | worker (also CLI cancel fallback / reconcile adoption) | terminal result + evidence, written once, atomic |
+| `cancel.request` | CLI at cancel | cancel marker; the worker's watcher (500 ms poll) turns it into a tree kill |
+| `prompt.txt` | worker | delivered task text, only for `prompt_delivery: "file"` endpoints |
 
 `run_id`: `run_<yyyymmdd>_<8hex>` (date = submit date, local). Idempotent submit: request fingerprint = sha256(endpoint + cwd + task text + mode); a second submit with an identical fingerprint while a non-terminal run exists returns that run instead of creating a duplicate.
 
@@ -32,6 +34,7 @@ Root: `<dataDir>/runs/<run_id>/` (default `<APPDATA>/paidan/runs`).
   "effort": null,
   "resume_session": null,
   "run_timeout_sec": 1800,
+  "deliverables": [{ "path": "probe-write.txt", "expected": null }],
   "created_at": "ISO-8601",
   "warnings": ["permission:fs.read is soft on this endpoint, verified_at 2026-09-09"]
 }
@@ -84,9 +87,9 @@ Judgment order (terminal.js): deliverable evidence → endpoint refusal signals 
 
 - Submit spawns a **detached worker** (`node dist/worker.js <run_id>`); the worker spawns the endpoint process and owns events/state/result. CLI never babysits.
 - Endpoint spawn resolution (Windows EINVAL-safe) is layered: machine-config override (`endpoints.overrides.<name>.bin`, may point at a JS bundle — spawned via `process.execPath`) → PATH scan (`.EXE` preferred over `.CMD` in one directory) → manifest npm layout (`detect.npm_exe` native binary preferred, then `detect.npm_entry` JS entry via node) under the shim's `node_modules` or the standard npm global roots → manifest well-known install locations (`detect.known_paths`, `{home}`/`{env:NAME}` templates so the repo stays free of machine-absolute literals) → last resort `cmd.exe /d /s /c` with caret-escaped verbatim argv (CR/LF and empty arguments are rejected outright). Doctor, probe and the worker share this one resolution path.
-- Cancel: explicit only. `taskkill /PID <pid> /T /F` on Windows, process-group kill elsewhere. Accepted limitation: Node stdlib cannot create Windows Job Objects (no FFI) and zero runtime dependencies is an invariant, so a force-killed endpoint may leave orphaned grandchildren; no native helper will be introduced for this.
+- Cancel: explicit only, three layers. ① The CLI writes a `cancel.request` marker into the run dir; the worker's watcher (500 ms poll) turns it into `terminateEndpointTree` — two phases everywhere: graceful first (`taskkill /PID <pid> /T` without `/F` on Windows, process-group SIGTERM elsewhere), forced after a 5 s grace window. ② If the worker does not reach a terminal state within 15 s of the marker, the CLI kills the endpoint tree itself (after re-verifying the recorded start token) and writes the cancelled terminal record directly (`writeCancelledDirect`; a worker that later finishes the same record wins by content, loses silently otherwise). ③ Reconcile backstops orphaned runs. Accepted limitation: Node stdlib cannot create Windows Job Objects (no FFI) and zero runtime dependencies is an invariant, so a force-killed endpoint may leave orphaned grandchildren; no native helper will be introduced for this.
 - Run timeout: the worker enforces `request.run_timeout_sec` as a wall-clock cap on the endpoint process (0 = disabled); expiry reuses the cancel termination path and ends the run `failed` with the note `run timeout after Ns`.
-- Reconcile runs at CLI start: scan non-terminal states, worker pid dead → state `attention` with evidence note. Never auto-restart.
+- Reconcile runs at CLI start: scan non-terminal states, worker pid dead → state `attention` with evidence note (a 30 s spawn grace window protects just-launched runs; when the worker is gone but `result.json` already holds a terminal record, reconcile **adopts** that terminal state instead of marking `attention`). Never auto-restart.
 - PID-reuse identity: a live pid does not prove the recorded process still exists. The worker records platform start tokens for itself (`pid_start`) and the endpoint (`endpoint_pid_start`) — win32 CIM `CreationDate`, linux `/proc/<pid>/stat` field 22, macOS `ps lstart`; equality is identity, formats are never parsed. Reconcile re-verifies before marking `attention` (mismatch = the recorded worker is gone); cancel re-verifies before any direct `taskkill` (mismatch = already gone, never killed). Query failure or an old record without tokens degrades to pid-only liveness, with a note in events/result — never a crash.
 
 ## 6. Endpoint manifest (`endpoints/<name>.json`)
@@ -118,7 +121,7 @@ Judgment order (terminal.js): deliverable evidence → endpoint refusal signals 
     "denial_evidence": { "status": "supported|soft|unsupported", "via": "..." }
   },
   "resume": { "kind": "flag", "args": ["--resume", "{session}"], "cross_process": true, "notes": "..." },
-  "models": { "command": ["{bin}", "..."], "parse": "kimi-models", "connections": [] },
+  "models": { "command": null, "parse": "kimi-native-config", "connections": [] },
   "parser": "kimi-print",
   "native_preflight": { "file": "{home}/.tool/settings.json", "require_allow": ["read_file(*)"] },
   "capabilities": { "background_native": false, "cancel_native": false, "max_run_sec": 1800 }
@@ -126,6 +129,10 @@ Judgment order (terminal.js): deliverable evidence → endpoint refusal signals 
 ```
 
 `native_preflight` (optional) declares a native settings file and the allow rules an endpoint needs (`{"file": "{home}/.../settings.json", "require_allow": [...]}`; `file` follows the `known_paths` template rules). The engine only ever reads it: `doctor` reports `ok | {missing: [...]} | unreadable` per endpoint, and `run` records a request warning when rules are missing — never a refusal, never a write (invariant 4).
+
+`models` governs model discovery: `parse` is only a provenance label stored in the cache entry's `source` — the discovery code always lives in the endpoint's `parser` module (`discoverModels()`), never in a separate `<models.parse>` module. `models.command` is documentation-only (no code reads it; discovery implementations choose their own mechanism — native config read, CLI query, etc.).
+
+`{model}` and `{session}` argv substitutions are charset-validated before splicing (`/^[A-Za-z0-9_][A-Za-z0-9_.:/-]{0,127}$/`, which also rules out a leading `-`): a model alias from discovery/cache or a session handle from endpoint output that fails the check is rejected (`MANIFEST_INVALID` at submit, run `failed` with a note in the worker) instead of being spliced into argv. Model discovery results that fail the same check are dropped from the cache with a note.
 
 `capabilities.max_run_sec` (optional number|null) is documentation-only: the endpoint's own total-time cap (omp's native 30m → `1800`; dsh has none → `null`, the engine cap backstops). The enforcing timeout is always the engine's `run_timeout_sec` (§2).
 
@@ -145,14 +152,14 @@ Parser modules are convention-loaded: `parser: "<name>"` resolves to `src/endpoi
 
 ## 7. CLI verbs (output always JSON)
 
-`run | get [--wait] | cancel | list | models [--refresh] | doctor | probe | init [--yes]`
+`run | get [--wait] [--timeout s] | cancel | list | models [--refresh] | doctor | probe | init [--yes] | help`
 
-`run` selects the permission tier with `--mode <preset>` (default `workspace-write`) or `--capabilities '<json>'` (explicit set; mutually exclusive with `--mode`, see §2), bounds wall time with `--run-timeout <秒>` (`0` disables, see §2), and refuses over-long argv prompts with `TASK_TOO_LONG` (§6 `prompt_max_bytes`). The model resolves as `--model` ?? `defaults.models[endpoint]` ?? `defaults.model` (per-endpoint defaults win over the global one; never a cross-connection fallback).
+`run` selects the permission tier with `--mode <preset>` (default `workspace-write`) or `--capabilities '<json>'` (explicit set; mutually exclusive with `--mode`, see §2), bounds wall time with `--run-timeout <秒>` (`0` disables, see §2), and refuses over-long argv prompts with `TASK_TOO_LONG` (§6 `prompt_max_bytes`). The model resolves as `--model` ?? `defaults.models[endpoint]` ?? `defaults.model` (per-endpoint defaults win over the global one; never a cross-connection fallback). A run whose endpoint would spawn through a cmd.exe shim is refused with `SPAWN_UNSUPPORTED` when `prompt_delivery` is `argv` — npm `.cmd` shims pass arguments through a bare `%*`, which re-splits them on spaces and lets the task text smuggle real CLI flags (verified empirically); the refusal names the repair (`endpoints.overrides.<name>.bin` pointing at the native binary/JS bundle, or installing so a native exe is on PATH). The same check backstops inside the worker (run ends `failed` with a `spawn-refused` event) for paths that bypass submit.
 
 - `doctor`: endpoint detection results, versions, permission map status, native_preflight outcome, config/data dir paths, db status, models-cache ages. This is the compatibility-matrix generator.
 - `probe`: per endpoint, P1 write / P2 read-only refusal / P3 resume contract probes against the installed agent; refreshes `verified_at` fields on success (local calendar date).
 - `models`: cache-first against `<dataDir>/models-cache/<endpoint>.json` (`{schema_version, endpoint, fetched_at, version, source, models, notes}`); `--refresh` forces a live query and writes through. A failed refresh serves the last successful cache with `stale: true`; a successful empty list overwrites (never borrows the old cache).
-- `init`: first-run wizard. Interactive on a TTY: skipped non-detected endpoints (with repair hints, not enable-able), then a checkbox multi-select for endpoints (space toggles, enter confirms; arrows/numbers/a=all/n=none), an arrow-key menu for the default endpoint, a **per-endpoint default-model prompt for every enabled endpoint** (single-model endpoints auto-pick with a note; model-less endpoints keep the native default), and a checkbox multi-select of hosts for the skill install (already-installed hosts marked). stderr must be a TTY for the raw-mode widgets; otherwise the wizard falls back to line-based numeric prompts. Writes config.json; existing config is backed up first **and merged** — the wizard owns only `endpoints.enabled` + the wizard-owned defaults keys (`endpoint`, `model`, `models`); machine-local keys it does not own like `endpoints.overrides`/`dataDir`/`defaults.run_timeout_sec` survive re-init verbatim). Non-TTY callers get `INIT_INTERACTIVE_REQUIRED` plus current state JSON; `--yes` enables all detected endpoints with each endpoint's first discovered model as its default. The decision logic lives in `engine/init-plan.ts` (UI-free) so a console GUI reuses it. After the config write, init offers to install the paidan skill (`skills/paidan/SKILL.md`, payload listed in `skills/hosts.json`) into each selected host's user-scope skills dir — per-host multi-select on a TTY, all detected hosts under `--yes`; installs are atomic copies reported as created/updated/unchanged, and only ever happen on explicit selection (invariant 4: no silent writes to an agent's native home).
+- `init`: first-run wizard. Interactive on a TTY: skipped non-detected endpoints (with repair hints, not enable-able), then a checkbox multi-select for endpoints (space toggles, enter confirms; arrows wrap, numbers, a=toggle-all, i=invert), an arrow-key menu for the default endpoint, a **per-endpoint default-model prompt for every enabled endpoint** (single-model endpoints auto-pick with a note; model-less endpoints keep the native default), and a checkbox multi-select of hosts for the skill install (already-installed hosts marked; `skills/hosts.json` lists all eight agents' user-scope skills dirs, so every agent can be both delegatee and host). stderr must be a TTY for the raw-mode widgets; otherwise the wizard falls back to line-based numeric prompts. Writes config.json; existing config is backed up first **and merged** — the wizard owns only `endpoints.enabled` + the wizard-owned defaults keys (`endpoint`, `model`, `models`); machine-local keys it does not own like `endpoints.overrides`/`dataDir`/`defaults.run_timeout_sec` survive re-init verbatim). Non-TTY callers get `INIT_INTERACTIVE_REQUIRED` plus current state JSON; `--yes` enables all detected endpoints with each endpoint's first discovered model as its default. The decision logic lives in `engine/init-plan.ts` (UI-free) so a console GUI reuses it. After the config write, init offers to install the paidan skill (`skills/paidan/SKILL.md`, payload listed in `skills/hosts.json`) into each selected host's user-scope skills dir — per-host multi-select on a TTY, all detected hosts under `--yes`; installs are atomic copies reported as created/updated/unchanged, and only ever happen on explicit selection (invariant 4: no silent writes to an agent's native home).
 
 ## 8. usage.db (node:sqlite)
 

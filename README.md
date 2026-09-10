@@ -20,7 +20,7 @@ All CLI output is JSON. There is no daemon: each run is supervised by a detached
 
 ## Host integration
 
-A host AI agent drives paidan through the CLI — no plugin system. The `paidan init` wizard is fully interactive: checkbox multi-selects (space toggles, enter confirms) for the endpoints to enable and for the hosts to receive the skill file ([`skills/paidan/SKILL.md`](skills/paidan/SKILL.md)), an arrow-key menu for the default endpoint, and a default-model pick for **every** enabled endpoint (stored as `defaults.models.<endpoint>`; `--yes` installs into all detected hosts and picks each endpoint's first discovered model; known hosts live in [`skills/hosts.json`](skills/hosts.json)). You can also copy it by hand (for Kimi Code: the user-scope `~/.kimi-code/skills/paidan/` directory). It teaches the seven verbs, the permission-preset semantics, and the evidence-first terminal judgment rules.
+A host AI agent drives paidan through the CLI — no plugin system. The `paidan init` wizard is fully interactive: checkbox multi-selects (space toggles, enter confirms) for the endpoints to enable and for the hosts to receive the skill file ([`skills/paidan/SKILL.md`](skills/paidan/SKILL.md)), an arrow-key menu for the default endpoint, and a default-model pick for **every** enabled endpoint (stored as `defaults.models.<endpoint>`; `--yes` installs into all detected hosts and picks each endpoint's first discovered model). Every supported agent can be a host as well as a delegatee — [`skills/hosts.json`](skills/hosts.json) lists the user-scope skills directory of all eight agents (kimi-code, claude-code, zcode, codex, dsh, opencode, agy, omp). You can also copy it by hand (for Kimi Code: the user-scope `~/.kimi-code/skills/paidan/` directory). It teaches the seven verbs, the permission-preset semantics, and the evidence-first terminal judgment rules.
 
 ## What it is / is not
 
@@ -44,7 +44,7 @@ Data never flows back into the code repo. Move the data dir anywhere via config;
 
 ## Endpoints
 
-An endpoint is a **data manifest** (`endpoints/<name>.json`) plus a small parser (≤200 lines). The manifest declares: how to detect the agent binary, command template, permission capability map, prompt delivery, output parsing type, model discovery command, and capability flags with the date they were last verified.
+An endpoint is a **data manifest** (`endpoints/<name>.json`) plus a small parser (one protocol per file, ~150-260 lines). The manifest declares: how to detect the agent binary, command template, permission capability map, prompt delivery, output parsing type, model discovery command, and capability flags with the date they were last verified.
 
 Permission presets (`read-only` / `workspace-write` / `unattended`) are conveniences only — each endpoint maps them to its native permission model, and an endpoint that cannot enforce a preset says so honestly (`soft` or `unsupported`) instead of pretending. See `docs/contracts.md`.
 
@@ -57,7 +57,7 @@ Permission presets (`read-only` / `workspace-write` / `unattended`) are convenie
 | opencode | ✅ / ✅ / ✅ | project root anchors to the inherited `PWD` if present — paidan pins `run --dir <cwd>` and unsets `PWD`. `add_dirs` unsupported in v0 (needs a computed-env permission projection). |
 | omp | ✅ / ✅ / ✅ | workspace-write tier has **no shell.exec** (bash/eval fail closed); shell needs unattended (yolo). |
 | dsh | ✅ / ✅ / – | no PATH shim — the conventional profile-home launcher (`~/.dsh/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js`) is auto-probed via `detect.known_paths`; otherwise set `endpoints.overrides.dsh.bin`. No resume (headless returns no session handle). read-only rides `mode_env` (DSH_PERMISSION_MODE) because any extra argv fragment would merge into the prompt. |
-| agy | ✅ / ✅ / ✅ | shell.exec is **soft**: the shell leg sits outside path governance (suite-recorded `run_command` off-location starts) and needs a native `command(*)` allow rule. fs.read needs a native `read_file` allow rule — and on Windows only the unscoped `read_file(*)` form currently takes effect (upstream limitation). No `--sandbox` flag exists; enforcement is carried by native `~/.gemini` permission settings, which paidan never patches (invariant 4). **Drift watch:** agy 1.2.0 (self-update) stopped matching scoped `write_file(<path>)` allow rules — Windows write governance is whole-disk via unscoped `write_file(*)` (calibrated 2026-09-10, probes P1-P3 pass again); scoped granularity awaits an upstream fix. |
+| agy | ✅ / ✅ / ✅ | fs.write and shell.exec are both **soft**: writes and shell commands sit outside path governance (deliverables ride `run_command`, which starts in agy's own scratch dir — paidan appends a cwd hint) and need native allow rules (`command(*)`; fs.read needs `read_file`, and on Windows only the unscoped `read_file(*)` form currently takes effect — upstream limitation). No `--sandbox` flag exists; enforcement is carried by native `~/.gemini` permission settings, which paidan never patches (invariant 4). **Drift watch:** agy 1.2.0 (self-update) stopped matching scoped `write_file(<path>)` allow rules — Windows write governance is whole-disk via unscoped `write_file(*)` (calibrated 2026-09-10, probes P1-P3 pass again); scoped granularity awaits an upstream fix. |
 
 Legend: ✅ supported · – unsupported · soft = claims it, enforcement doubtful (submit warning).
 
@@ -75,7 +75,7 @@ Early (0.x). The engine works; all eight endpoint manifests are wired and pass t
 
 | platform | engine | notes |
 |---|---|---|
-| Windows 10/11 | ✅ tested daily-driver | cancel = taskkill tree-kill (Job Object reaping planned) |
+| Windows 10/11 | ✅ tested daily-driver | cancel = taskkill tree-kill, graceful then forced (orphaned grandchildren after a force-kill are an accepted limitation — Job Objects need FFI, zero-dep invariant) |
 | Linux | 🟡 designed, untested | config at `$XDG_CONFIG_HOME/paidan` (default `~/.config/paidan`); cancel = POSIX process-group signals |
 | macOS | 🟡 designed, untested | same POSIX path (`~/.config/paidan`, deliberately not `~/Library/Application Support` — one code path) |
 

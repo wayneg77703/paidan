@@ -17,12 +17,18 @@ This repo is maintained mostly by AI agents. This file is your onboarding: the i
 
 ```
 src/engine/     run-store, supervisor, terminal judgment, reconcile, redactor, usage-db, config,
-                models-cache, init-plan (UI-free init/probe decisions a console GUI can reuse)
-src/endpoints/  per-endpoint parser code (≤200 lines each), convention-loaded by manifest.parser;
+                models-cache, init-plan (UI-free init/probe decisions a console GUI can reuse),
+                skill-install (host skill registry + atomic copies)
+src/endpoints/  per-endpoint parser code (registry.ts + spawn.ts own shared rules;
+                parsers evaluated by function, one protocol per file — the retired ≤200-line
+                cap is recorded in git history; current max ~260, split by concern when it
+                stops being single-purpose)
                 spawn.ts owns layered endpoint spawn resolution (override → PATH → npm layout → cmd shim)
 endpoints/      per-endpoint data manifest (JSON): detection, command template, permission map,
                 prompt delivery, output parsing type, model discovery, capability flags (+verified_at)
 src/cli.js→ts   argument parsing (node:util parseArgs), one handler per verb
+src/tty-select.ts  raw-mode checkbox/menu widgets for the init wizard (clack-style grammar;
+                reducers are pure and unit-tested, rendering is covered by fake-TTY shell tests)
 docs/contracts.md  run record schema, manifest schema, terminal state rules
 ```
 
@@ -30,14 +36,15 @@ Layering rule: engine never imports from endpoints except through the manifest r
 
 ## How to add an endpoint
 
-1. Create `endpoints/<name>.json` from an existing manifest as template. Fill every capability flag honestly; mark unmeasured ones `unverified` with today's date.
-2. If output parsing differs from existing types, add `src/endpoints/<name>.ts` (≤200 lines, parser only).
+1. Create `endpoints/<name>.json` from an existing manifest as template. Fill every capability flag honestly; mark unmeasured ones `unverified` with today's date. The registry enforces these rules at load (violations = `ManifestError`): `name` must equal the filename; `command.argv[0]` must be `{bin}`; argv prompt delivery must contain `{prompt}`; `resume_argv` must start with `{bin}` and contain `{session}`; `detect.known_paths` templates must start with `{home}`/`{env:NAME}` and contain no `..`.
+2. If output parsing differs from existing types, add `src/endpoints/<name>.ts` (parser only, one protocol per file).
 3. Run the contract probes: `paidan probe --endpoint <name>` (P1 write / P2 read-only refusal / P3 resume). All must pass or be explicitly marked unsupported.
 4. Update README endpoint notes if behavior surprises users.
 
 ## How to verify a change
 
 - `npm run build` must be clean; `npm test` (node:test, golden fixtures for parsers + run-store round trips) must pass.
+- Test isolation hooks (never point tests at the real machine config): `PAIDAN_HOME` (config+data root), `PAIDAN_DATA_DIR`, `PAIDAN_ENDPOINTS_DIR` (manifest dir), `PAIDAN_HOST_HOME` (host homes for skill install). The CLI must be run as `node dist/cli.js` — `npm run build` first, dist/ is gitignored.
 - Behavior changes to an endpoint path require re-running that endpoint's probes.
 - No test may require governance/CI infrastructure; probes run against locally installed agents only, and are skipped when the agent is absent.
 

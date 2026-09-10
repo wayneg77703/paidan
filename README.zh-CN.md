@@ -20,7 +20,7 @@ CLI 的 stdout 恒为 JSON。没有 daemon：每个 run 由一个 detached worke
 
 ## 宿主接入
 
-宿主 AI agent 通过 CLI 驱动 paidan——没有插件体系。`paidan init` 向导是全交互的：启用端点与安装 skill 的宿主都是复选框多选（空格勾选、回车确认；skill 文件见 [`skills/paidan/SKILL.md`](skills/paidan/SKILL.md)），默认端点用方向键菜单单选，**每个**启用端点都各自选默认模型（存为 `defaults.models.<端点>`；`--yes` 非交互模式 = 装进所有探测到的宿主并取每个端点发现的首个模型；已知宿主清单见 [`skills/hosts.json`](skills/hosts.json)）。也可以手工复制（Kimi Code：复制到用户级 `~/.kimi-code/skills/paidan/` 目录）。它教会宿主七个动词、权限预设语义和「证据优先」的终态判读规则。
+宿主 AI agent 通过 CLI 驱动 paidan——没有插件体系。`paidan init` 向导是全交互的：启用端点与安装 skill 的宿主都是复选框多选（空格勾选、回车确认；skill 文件见 [`skills/paidan/SKILL.md`](skills/paidan/SKILL.md)），默认端点用方向键菜单单选，**每个**启用端点都各自选默认模型（存为 `defaults.models.<端点>`；`--yes` 非交互模式 = 装进所有探测到的宿主并取每个端点发现的首个模型）。**每个受支持的 agent 都既是被调方也能当宿主**——[`skills/hosts.json`](skills/hosts.json) 登记了全部八个 agent 的用户级技能目录（kimi-code、claude-code、zcode、codex、dsh、opencode、agy、omp）。也可以手工复制（Kimi Code：复制到用户级 `~/.kimi-code/skills/paidan/` 目录）。它教会宿主七个动词、权限预设语义和「证据优先」的终态判读规则。
 
 ## 它是什么 / 不是什么
 
@@ -44,7 +44,7 @@ paidan 是本机派单台（"派单" = dispatching an order）。它做三件事
 
 ## 端点
 
-端点 = 一份**数据清单**（`endpoints/<name>.json`）+ 一个小 parser（≤200 行）。清单声明：如何探测 agent 二进制、命令模板、权限能力映射、prompt 投递方式、输出解析类型、模型发现命令，以及带最后验证日期的能力标志。
+端点 = 一份**数据清单**（`endpoints/<name>.json`）+ 一个小 parser（一个协议一个文件，约 150-260 行）。清单声明：如何探测 agent 二进制、命令模板、权限能力映射、prompt 投递方式、输出解析类型、模型发现命令，以及带最后验证日期的能力标志。
 
 权限预设（`read-only` / `workspace-write` / `unattended`）只是便利语法——每个端点把它映射到自己的原生权限模型；无法强制某预设的端点会如实声明（`soft` 或 `unsupported`），不会假装支持。见 `docs/contracts.md`。
 
@@ -57,7 +57,7 @@ paidan 是本机派单台（"派单" = dispatching an order）。它做三件事
 | opencode | ✅ / ✅ / ✅ | 项目根会被继承的 `PWD` 锚定——paidan 钉 `run --dir <cwd>` 并 unset `PWD`。v0 不支持 `add_dirs`（需要 computed-env 权限投影）。 |
 | omp | ✅ / ✅ / ✅ | workspace-write 档**没有 shell.exec**（bash/eval fail closed）；shell 需 unattended（yolo）。 |
 | dsh | ✅ / ✅ / – | 无 PATH shim——约定位置（`~/.dsh/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js`）由 `detect.known_paths` 自动探测；否则设 `endpoints.overrides.dsh.bin`。无 resume（headless 不返回会话句柄）。read-only 走 `mode_env`（DSH_PERMISSION_MODE），因为任何额外 argv 片段都会并进 prompt。 |
-| agy | ✅ / ✅ / ✅ | shell.exec 为 **soft**：shell 腿在路径治理之外（suite 记录的 `run_command` 异位启动），需原生 `command(*)` 放行规则。fs.read 需原生 `read_file` 放行规则——且在 Windows 上目前仅无作用域的 `read_file(*)` 形式生效（上游限制）。没有 `--sandbox` 标志；强制由原生 `~/.gemini` 权限设置承载，paidan 永不改写（不变量 4）。**漂移观察**：agy 1.2.0（自更新）起有作用域的 `write_file(<路径>)` 放行规则不再匹配——Windows 下写治理只能走无作用域 `write_file(*)`（2026-09-10 已校准，探针 P1-P3 恢复全过）；作用域粒度待上游修复。 |
+| agy | ✅ / ✅ / ✅ | fs.write 与 shell.exec 同为 **soft**：写与 shell 都在路径治理之外（交付物走 `run_command`，其起始目录是 agy 自己的 scratch——paidan 会追加 cwd 提示），需原生放行规则（`command(*)`；fs.read 需 `read_file`，且 Windows 上目前仅无作用域的 `read_file(*)` 生效——上游限制）。没有 `--sandbox` 标志；强制由原生 `~/.gemini` 权限设置承载，paidan 永不改写（不变量 4）。**漂移观察**：agy 1.2.0（自更新）起有作用域的 `write_file(<路径>)` 放行规则不再匹配——Windows 下写治理只能走无作用域 `write_file(*)`（2026-09-10 已校准，探针 P1-P3 恢复全过）；作用域粒度待上游修复。 |
 
 图例：✅ 支持 · – 不支持 · soft = 声称支持但强制力存疑（提交时出 warning）。
 
@@ -75,7 +75,7 @@ paidan 是本机派单台（"派单" = dispatching an order）。它做三件事
 
 | 平台 | 引擎 | 备注 |
 |---|---|---|
-| Windows 10/11 | ✅ 实测主力 | cancel = taskkill 树杀（计划换 Job Object 收尸） |
+| Windows 10/11 | ✅ 实测主力 | cancel = taskkill 树杀，先温和后强制（强杀后孤儿孙进程属 accepted limitation——Job Object 需要 FFI，零依赖不变量） |
 | Linux | 🟡 已设计，未实测 | 配置在 `$XDG_CONFIG_HOME/paidan`（默认 `~/.config/paidan`）；cancel = POSIX 进程组信号 |
 | macOS | 🟡 已设计，未实测 | 同 POSIX 路径（`~/.config/paidan`，刻意不走 `~/Library/Application Support`——一条代码路径） |
 
