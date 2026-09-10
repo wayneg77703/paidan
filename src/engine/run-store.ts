@@ -176,6 +176,8 @@ export class RunStore {
         const lockPath = this.createLockPath(fingerprint)
         const lockStamp = `${now}\n${process.pid}-${randomBytes(4).toString('hex')}`
         await fs.mkdir(this.locksDir, { recursive: true })
+        // crashed holders leave locks behind; sweep the provably-abandoned ones
+        await this.sweepCreateLocks()
         const contested = await this.acquireCreateLock(lockPath, fingerprint, lockStamp)
         if (contested) return contested
 
@@ -245,6 +247,31 @@ export class RunStore {
         }
     }
 
+    /** Remove lock dirs past the stale age — no legitimate holder can occupy the critical section that long. */
+    private async sweepCreateLocks(): Promise<void> {
+        let entries: string[]
+        try {
+            entries = await fs.readdir(this.locksDir)
+        } catch {
+            return
+        }
+        for (const entry of entries) {
+            if (!/^[0-9a-f]{64}$/.test(entry)) continue
+            const candidate = nodePath.join(this.locksDir, entry)
+            if (await this.createLockIsStale(candidate)) {
+                await fs.rm(candidate, { recursive: true, force: true }).catch(() => {})
+            }
+        }
+    }
+
+    private async lockDirMtimeMs(lockPath: string): Promise<number | null> {
+        try {
+            return (await fs.stat(lockPath)).mtimeMs
+        } catch {
+            return null
+        }
+    }
+
     private async rmCreateLockIfMatches(lockPath: string, stamp: string): Promise<void> {
         if ((await this.readCreateLockStamp(lockPath)) === stamp) {
             await fs.rm(lockPath, { recursive: true, force: true }).catch(() => {})
@@ -269,7 +296,23 @@ export class RunStore {
                 // only ever remove the SAME holder we contended with
                 const seen = await this.readCreateLockStamp(lockPath)
                 if (await this.createLockIsStale(lockPath)) {
-                    if (seen !== null) await this.rmCreateLockIfMatches(lockPath, seen)
+                    if (seen !== null) {
+                        await this.rmCreateLockIfMatches(lockPath, seen)
+                    } else {
+                        // stamp-less lock (holder died between mkdir and stamp — it
+                        // can never be matched by stamp): break it only when the dir
+                        // mtime is STILL past the stale age and it is STILL stamp-less
+                        // (mtime as the token, same ownership discipline)
+                        const before = await this.lockDirMtimeMs(lockPath)
+                        if (
+                            before !== null &&
+                            Date.now() - before > CREATE_LOCK_STALE_MS &&
+                            (await this.readCreateLockStamp(lockPath)) === null &&
+                            (await this.lockDirMtimeMs(lockPath)) === before
+                        ) {
+                            await fs.rm(lockPath, { recursive: true, force: true }).catch(() => {})
+                        }
+                    }
                     continue
                 }
                 const appeared = await this.waitForFingerprint(fingerprint, CREATE_LOCK_WAIT_MS)

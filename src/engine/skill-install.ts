@@ -158,16 +158,24 @@ export function adaptSkillPayload(source: string, fields?: string[]): string {
     if (!m) return source
     const lines = (m[1] as string).split('\n')
     const blocks: Array<{ key: string; text: string[] }> = []
+    const preamble: string[] = []
     for (const line of lines) {
         const keyMatch = /^([A-Za-z_][A-Za-z0-9_-]*):/.exec(line)
         if (keyMatch) {
             blocks.push({ key: keyMatch[1] as string, text: [line] })
         } else if (blocks.length > 0) {
             ;(blocks[blocks.length - 1] as { key: string; text: string[] }).text.push(line)
+        } else {
+            // non-field lines before the first key (comments etc.) are kept verbatim
+            preamble.push(line)
         }
     }
+    if (blocks.length === 0) {
+        // a frontmatter block that parses to no fields is a broken payload — say so
+        throw new SkillInstallError('skill payload frontmatter contains no fields')
+    }
     const kept = blocks.filter((b) => fields.includes(b.key))
-    if (kept.length === blocks.length) return source
-    const frontmatter = kept.map((b) => b.text.join('\n')).join('\n')
+    if (kept.length === blocks.length && preamble.length === 0) return source
+    const frontmatter = [...preamble, ...kept.map((b) => b.text.join('\n'))].join('\n')
     return `---\n${frontmatter}\n---\n${source.slice(m[0].length)}`
 }

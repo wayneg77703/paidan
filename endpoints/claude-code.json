@@ -137,6 +137,6 @@
     "status": "supported",
     "verified_at": "2026-09-10",
     "version": "2.1.260",
-    "notes": "`claude --help` 2.1.260: `--effort <level>  Effort level for the current session (low, medium, high, xhigh, max)`. Absent = claude's native session default applies; no cross-connection fallback."
+    "notes": "`claude --help` 2.1.260: `--effort <level>  Effort level for the current session (low, medium, high, xhigh, max)`. Absent = claude's native session default applies; no cross-connection fallback. effort × resume combination UNVERIFIED (flag shape verified for fresh runs only; resume carries its own session settings per the endpoint)."
   }
 }
