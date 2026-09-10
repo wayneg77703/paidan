@@ -16,6 +16,10 @@ paidan models --endpoint kimi-code            # cache-first; --refresh re-querie
 
 All CLI output is JSON. There is no daemon: each run is supervised by a detached worker process, and the on-disk run store is the single source of truth.
 
+## Host integration
+
+A host AI agent drives paidan through the CLI — no plugin system. Give your host the skill file at [`skills/paidan/SKILL.md`](skills/paidan/SKILL.md) (for Kimi Code: copy it to the user-scope `~/.kimi-code/skills/paidan/` directory). It teaches the seven verbs, the permission-preset semantics, and the evidence-first terminal judgment rules.
+
 ## What it is / is not
 
 paidan is a local dispatch desk ("派单" = dispatching an order). It does three things and no more:
