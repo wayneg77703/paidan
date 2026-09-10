@@ -1,0 +1,126 @@
+{
+  "schema_version": "1.0.0",
+  "name": "agy",
+  "family": "agy",
+  "detect": {
+    "bin": "agy",
+    "version_args": [
+      "--version"
+    ],
+    "version_re": "^([0-9]+\\.[0-9]+\\.[0-9]+)",
+    "detect_notes": "`agy --version` prints a bare semver (\"1.1.28\", live 2026-09-10). On this machine agy is a single native agy.exe directly on PATH (no npm shim, no script wrapper), so detect.npm_exe/npm_entry do not apply: the PATH scan resolves the .exe and spawns it without a shell. The binary self-updates in place (1.1.27 -> 1.1.28 observed 2026-09-09 probe report); version drift policy applies — re-run probes after upgrades."
+  },
+  "command": {
+    "argv": [
+      "{bin}",
+      "-p",
+      "{prompt}",
+      "--output-format",
+      "stream-json",
+      "--print-timeout",
+      "30m"
+    ],
+    "prompt_delivery": "argv",
+    "mode_args": {
+      "read-only": [
+        "--mode",
+        "plan"
+      ],
+      "workspace-write": [
+        "--mode",
+        "accept-edits"
+      ],
+      "unattended": [
+        "--mode",
+        "accept-edits"
+      ]
+    },
+    "mode_args_notes": "agy has no --permission-mode; the agent-execution axis is `--mode` (help 1.1.28 lists accept-edits|plan; no flag = default). Live 2026-09-10 native zero-copy probe (tmp/agy-native-probe/out/): plan headless auto-denies write_file even with ZERO permission rules (t2a: file absent, result.denied_actions[write_file], exit 0) — a true enforced read-only tier. accept-edits auto-approves write_file when no rule governs it (t2c), so write SCOPING comes from the user's native ~/.gemini/antigravity-cli/settings.json permissions (allow write_file(<root>) + ask write_file(*); verified both directions t3-in/t3-out). paidan never writes that file (invariant 4): the rules are user-maintained native config; without them workspace-write is unscoped and shell.exec auto-denies. unattended shares accept-edits; its shell.exec requirement rides the native command(*) allow rule (verified t6c). --sandbox is deliberately absent: on Windows 1.1.28 it adds an unsandboxed(*) gate that headless can never grant (t6b auto-deny) and its readwrite mount config rejects drive-stripped rule paths — the native permission engine is the enforcement layer.",
+    "model_arg": [
+      "--model",
+      "{model}"
+    ],
+    "add_dir_arg": [
+      "--add-dir",
+      "{dir}"
+    ],
+    "argv_notes": "Prompt rides argv (-p <prompt>) like the suite adapter (prompt_transport=argv); there is no single-shot stdin text mode (--input-format stream-json is a multi-turn NDJSON protocol, out of v0 scope). Windows command-line budget applies to the prompt bytes (suite cap 26 KiB). --print-timeout is always passed: native default is 5m, window 30s..120m; 30m preserves the historical operational envelope. 1.1.28 timeout semantics: partial output + exit 0 + status SUCCESS + stderr marker, surfaced as the print-timeout-partial-output refusal signal. Native config (~/.gemini) decides auth and default model; paidan never stages or overrides beyond the flags above.",
+    "cwd_arg": null,
+    "env": {
+      "AGY_CLI_DISABLE_AUTO_UPDATE": "true",
+      "_env_notes": "AGY_CLI_DISABLE_AUTO_UPDATE=true is pinned (same as the suite): without it, headless runs still touched the native updater (update_status.json flipped to 'Update failed, please install from website', last_check.timestamp refreshed; live 2026-09-10) even though antigravity-cli/settings.json carries update.mode=none; with the env var, updater files stay untouched (verified). HOME/USERPROFILE are NOT set: agy runs against the user's real ~/.gemini (zero-copy native home; Google OAuth lives in the OS keyring, unaffected by HOME isolation). Paidan never stages or copies agy config/credentials."
+    },
+    "verified_at": "2026-09-10",
+    "version": "1.1.28"
+  },
+  "permission": {
+    "fs.read": {
+      "status": "supported",
+      "via": "view_file requires a native read_file allow rule (request-review default auto-denies it headless, verified 2026-09-10); on Windows 1.1.28 only the unscoped form read_file(*) matched — every scoped path form tested (drive-stripped dir, dir/*, full-drive, backslash) failed to authorize view_file, an upstream limitation to revisit on upgrades. grep_search/list_dir work unlisted. Production native settings carry read_file(*).",
+      "verified_at": "2026-09-10",
+      "version": "1.1.28"
+    },
+    "fs.write": {
+      "status": "supported",
+      "via": "workspace-write = --mode accept-edits + native rules allow write_file(<root>) / ask write_file(*): in-scope write succeeded (t3-in), out-of-scope write auto-denied with denied_actions (t3-out); explicit deny write_file(*) beats accept-edits auto-approval (t2b, 'Matches user-configured deny rule'). read-only = --mode plan: write_file auto-denied headless even rule-free (t2a). Rule paths use the official normalization (drive letter stripped, backslashes -> slashes; verified semantically identical under native read).",
+      "verified_at": "2026-09-10",
+      "version": "1.1.28"
+    },
+    "shell.exec": {
+      "status": "soft",
+      "via": "run_command auto-approved headless when the native allow rule command(*) is present (verified 2026-09-10: output captured, DONE, no denial); without the rule it auto-denies (request-review + no prompt channel). SOFT because shell is NOT path-confined without --sandbox: on 2026-09-10 a workspace-write run's shell leg wrote a duplicate deliverable into the paidan CALLER's cwd (outside the run cwd; run_command starts from an inherited PWD-ish directory on Windows — the suite documented this as 'run_command may start from C:\\'); write_file tool writes stay natively path-governed, shell writes are not. Under --sandbox run_command demands an unsandboxed grant headless runs can never receive — paidan does not pass --sandbox.",
+      "verified_at": "2026-09-10",
+      "version": "1.1.28"
+    },
+    "net.fetch": {
+      "status": "unverified",
+      "via": "read_url_content tool exists and the native allow rule read_url(*) is in place, but no live fetch probe was run in the 2026-09-10 native matrix; 1.1.28 changed URL fetching to default-Ask (probe report 2026-09-09 §8), so expect auto-deny without the rule",
+      "verified_at": "2026-09-10"
+    },
+    "interact.ask": {
+      "status": "unsupported",
+      "via": "headless has no approval channel: every ask/unlisted action is auto-denied and lands in result.denied_actions with the stderr jetski line (verified repeatedly 2026-09-10); ask write_file(*) is exactly this backstop",
+      "verified_at": "2026-09-10"
+    },
+    "presets": {
+      "read-only": "supported",
+      "workspace-write": "supported",
+      "unattended": "supported"
+    },
+    "presets_notes": "Mapping: read-only=--mode plan (write/exec auto-deny headless, in-band evidence), workspace-write=--mode accept-edits (+ native write_file scoping rules), unattended=--mode accept-edits (+ native command(*) rule for shell.exec). Enforcement of write scoping and shell is carried by the user's native ~/.gemini/antigravity-cli/settings.json permissions — user-maintained native config that paidan never writes; runs in a cwd with no covering write_file rule fail closed into denied_actions evidence (never silent). Caveat: native rules govern the write_file TOOL per path but cannot path-confine run_command shell egress (shell.exec=soft); unattended submits therefore carry a soft warning.",
+    "denial_evidence": {
+      "status": "supported",
+      "via": "three in-band channels, all live-verified 2026-09-10: (1) result.denied_actions[] e.g. {action:write_file,display_name:WriteToFile} for ask/plan auto-denies; (2) step_update state=ERROR tool_info.error TOOL_ERROR messages ('permission check failed ... Matches user-configured deny rule', 'user denied permission ...') for explicit rules; (3) stderr 'jetski: no output produced — a tool required the \"<action>\" permission ... auto-denied'. Empty response with SUCCESS is a legal terminal shape and stays evidence, not automatic failure",
+      "verified_at": "2026-09-10",
+      "version": "1.1.28"
+    }
+  },
+  "resume": {
+    "kind": "flag",
+    "args": [
+      "--conversation",
+      "{session}"
+    ],
+    "cross_process": true,
+    "notes": "Session handle = conversation_id (UUID) from the init/result events. Cross-process resume via --conversation <id> verified 2026-09-10 (1.1.28): recalled prior content exactly, and resolution is machine-wide — the same id resumed from a DIFFERENT cwd too (supersedes the 2026-09-09 probe report's cwd-scoped assumption for explicit ids). --continue/-c picks the most recent conversation of the current cwd (verified). mode_args are re-spliced on resume (no resume_argv): --mode and --conversation coexist in one argv (suite adapter shape; a resumed run re-tiers from the new invocation). Concurrent resume of the same conversation was not probed; treat as forbidden (transcript interleaving, claude-analog).",
+    "verified_at": "2026-09-10",
+    "version": "1.1.28"
+  },
+  "models": {
+    "command": [
+      "{bin}",
+      "models"
+    ],
+    "parse": "agy-models",
+    "connections": [],
+    "notes": "`agy models` (headless-safe, verified 2026-09-10) prints TSV <id>\\t<Display Name>; 14 ids under the google-oauth (OS keyring) connection: gemini-3.8/3.7/3.6-flash-{high,medium,low}, gemini-3.1-pro-{high,low}, claude-sonnet-4-6, claude-opus-4-6-thinking, gpt-oss-120b-medium. The catalog varies with auth method: modelProvider=gemini + GEMINI_API_KEY dual-config is a documented second connection (probe report 2026-09-09 §4) but UNVERIFIED here (no key on this machine; paidan never does cross-connection fallback). Selection = config.json defaults.model -> --model; absent, agy's native default (antigravity-cli/settings.json model display-name key) applies."
+  },
+  "parser": "agy-print",
+  "parser_notes": "stdout NDJSON: init (conversation_id, cwd, permission_mode) -> step_update (agent_response text_delta accumulation; tool ERROR events carry permission TOOL_ERRORs) -> exactly one terminal result (status, response, conversation_id cross-checked against init, usage input/output/cache_read tokens, denied_actions). finalText = result.response, falling back to accumulated agent_response deltas with a warning when no result event arrives. Non-JSON lines, mid-line EOF and conflicting conversation ids degrade the parser. detectRefusals reads the stderr jetski auto-deny line and the 1.1.28 print-timeout marker (partial output + exit 0 + SUCCESS). Evidence: live 1.1.28 captures 2026-09-10 (tmp/agy-native-probe/out/) + suite adapter operations/governance/harnesses/runtime/adapters/agy.mjs.",
+  "capabilities": {
+    "background_native": false,
+    "cancel_native": false,
+    "completed_nonzero_exit": false,
+    "_capabilities_notes": "No native background for -p runs. Cancel = paidan taskkill tree (v0). Upstream >= 1.1.20 made exit codes semantic (non-zero = cascade failure); print-timeout and soft denials still exit 0 — terminal judgment is evidence-first, never exit-code-only."
+  }
+}

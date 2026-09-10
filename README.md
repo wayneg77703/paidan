@@ -42,6 +42,19 @@ An endpoint is a **data manifest** (`endpoints/<name>.json`) plus a small parser
 
 Permission presets (`read-only` / `workspace-write` / `unattended`) are conveniences only — each endpoint maps them to its native permission model, and an endpoint that cannot enforce a preset says so honestly (`soft` or `unsupported`) instead of pretending. See `docs/contracts.md`.
 
+| endpoint | presets (ro/ww/ua) | user-visible surprises |
+|---|---|---|
+| kimi-code | – / ✅ / ✅ | no headless read-only tier at all (`-p` fixes auto permission; probe-verified). Usage comes from the native session ledger (`endpoint-ledger`). |
+| codex | ✅ / ✅ / ✅ | resume restores the session's original sandbox tier (`exec resume` takes no `-s`/`--add-dir`). |
+| claude-code | ✅ / ✅ / ✅ | read-only = default tier + `--permission-prompts none`; shell.exec needs bypassPermissions (unattended). |
+| zcode | – / – / ✅ | yolo-only by design (non-yolo tiers wait forever headless). Desktop installs no PATH binary — set `endpoints.overrides.zcode.bin` to the CLI bundle, or make a shim. |
+| opencode | ✅ / ✅ / ✅ | project root anchors to the inherited `PWD` if present — paidan pins `run --dir <cwd>` and unsets `PWD`. `add_dirs` unsupported in v0 (needs a computed-env permission projection). |
+| omp | ✅ / ✅ / ✅ | workspace-write tier has **no shell.exec** (bash/eval fail closed); shell needs unattended (yolo). |
+| dsh | ✅ / ✅ / – | no PATH shim — set `endpoints.overrides.dsh.bin` to `<dsh home>/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js`. No resume (headless returns no session handle). read-only rides `mode_env` (DSH_PERMISSION_MODE) because any extra argv fragment would merge into the prompt. |
+| agy | ✅ / ✅ / ✅ | shell.exec is **soft**: the shell leg sits outside path governance (suite-recorded `run_command` off-location starts) and needs a native `command(*)` allow rule. fs.read needs a native `read_file` allow rule — and on Windows only the unscoped `read_file(*)` form currently takes effect (upstream limitation). No `--sandbox` flag exists; enforcement is carried by native `~/.gemini` permission settings, which paidan never patches (invariant 4). |
+
+Legend: ✅ supported · – unsupported · soft = claims it, enforcement doubtful (submit warning).
+
 ## Maintenance mode
 
 This project is **maintained by AI agents** (with human oversight at a low bandwidth). Responses may be slow. Forks are welcome and encouraged — the repo is designed to be self-explanatory: read `AGENTS.md` for the invariants and how to add an endpoint.

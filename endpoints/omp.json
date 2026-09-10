@@ -1,0 +1,128 @@
+{
+  "schema_version": "1.0.0",
+  "name": "omp",
+  "family": "omp",
+  "detect": {
+    "bin": "omp",
+    "version_args": [
+      "--version"
+    ],
+    "version_re": "omp/([0-9]+\\.[0-9]+\\.[0-9]+)",
+    "detect_notes": "`omp --version` prints `omp/18.1.14`. On this machine omp is a NATIVE exe, not an npm shim: where.exe resolves exactly one hit, C:/Users/a/AppData/Local/omp/omp.exe (verified 2026-09-10), which the PATH scan spawns directly (.EXE beats .CMD). The npm global scope dir %APPDATA%/npm/node_modules/@oh-my-pi exists but is EMPTY (uninstalled leftover, mtime 2026-09-10) — detect.npm_exe/npm_entry are intentionally omitted because no npm layout exists to verify package-relative paths against (evidence-first; add them only after a real npm install is observed). omp.exe self-updates in place (omp.exe.<ts>.bak sibling observed 2026-09-09); the version-drift policy (probe after upgrade) applies."
+  },
+  "command": {
+    "argv": [
+      "{bin}",
+      "-p",
+      "--mode",
+      "json",
+      "--max-time",
+      "30m",
+      "{prompt}"
+    ],
+    "prompt_delivery": "argv",
+    "mode_args": {
+      "read-only": [
+        "--approval-mode",
+        "always-ask",
+        "--tools",
+        "read,bash,grep,glob,lsp,task,todo,web_search"
+      ],
+      "workspace-write": [
+        "--approval-mode",
+        "write"
+      ],
+      "unattended": [
+        "--approval-mode",
+        "yolo"
+      ]
+    },
+    "model_arg": [
+      "--model",
+      "{model}"
+    ],
+    "add_dir_arg": [
+      "--add-dir",
+      "{dir}"
+    ],
+    "argv_notes": "Rendered fresh-run shape: `omp [--model M] [--add-dir D]... --approval-mode <tier> [--tools <ro-subset>] -p --mode json --max-time 30m <prompt>` (buildArgs splices model/add-dir/mode fragments in front of the argv tail; flag order is position-independent here, verified live 2026-09-10). argv template follows the suite adapter buildInvocation (operations/governance/harnesses/runtime/adapters/omp.mjs:446-459): -p = print/headless, --mode json = NDJSON event stream on stdout (NOT --json; that flag does not exist on omp), prompt is the final positional argument (prompt_transport=argv; omp has no stdin prompt convention, omp --help 18.1.14). --max-time 30m is pinned on EVERY run: it is omp's native TOTAL session deadline (session.deadline = start + N, not idle — suite adapter 2026-09-07 time-semantics fix), and paidan v0 has no idle supervisor, so the native cap is the only settling guarantee; 30m anchors to the suite's default supervision budget (idle_timeout_ms=1800000, contracts/omp-cli.json failure_policy.timeout); a per-run override is a documented v0 gap. --cwd is omitted: the worker already spawns with cwd=request.cwd and omp's session store is per-cwd. --session-dir is omitted: sessions live in omp's native per-cwd store ~/.omp/agent/sessions/<encoded-cwd>/ (zero-injection native reuse, probe report 2026-09-09 section 7 'omp 零注入原生'); the suite's managed --session-dir spool is a multi-tenant isolation choice, not a paidan need. Approval-tier mapping verified live on 18.1.14 (2026-09-10): always-ask fail-closes write+exec without an interactive UI; write auto-approves the write tier and fail-closes bash/eval; yolo auto-approves everything. The read-only --tools subset read,bash,grep,glob,lsp,task,todo,web_search is the suite's 18.0.5 runtime-verified static set (contracts/omp-cli.json required_invocation.permission_rule), re-verified accepted by 18.1.14 on 2026-09-10 (no CliUsageError); it physically removes write/edit tools as the hard lock. Known limit: argv prompt transport inherits the Windows command-line ceiling (the suite caps managed tasks at 26 KiB); paidan v0 has no prompt-size guard.",
+    "cwd_arg": null,
+    "env": {
+      "DEEPSEEK_API_KEY": "{native_default}",
+      "_env_notes": "native_default = paidan does not set the variable at all (omp runs against the user's own credential surface: --api-key > models.yml > OAuth/auth-broker > stored keys > env, probe report 2026-09-09 section 4; the live connection on this machine is the deepseek official stored credential). paidan never reads, stages, or copies credentials (invariant 3/4)."
+    },
+    "verified_at": "2026-09-10",
+    "version": "18.1.14"
+  },
+  "permission": {
+    "fs.read": {
+      "status": "supported",
+      "via": "read-tier tools (read/grep/glob) are auto-approved under every approval-mode including always-ask; live read-only run answered from cwd files 2026-09-10",
+      "verified_at": "2026-09-10",
+      "version": "18.1.14"
+    },
+    "fs.write": {
+      "status": "supported",
+      "via": "--approval-mode write auto-approves the write tier (live 2026-09-10: write-tier run created w-check.txt, exit 0); yolo also covers it",
+      "verified_at": "2026-09-10",
+      "version": "18.1.14"
+    },
+    "shell.exec": {
+      "status": "supported",
+      "via": "--approval-mode yolo auto-approves the exec tier (bash/eval); exec-tier gating evidence: bash/eval fail closed under write and always-ask with 'requires approval but no interactive UI available' (live 2026-09-10), suite gateway P1 under yolo passed 2026-09-09 (run 6cdb5e94)",
+      "verified_at": "2026-09-09",
+      "version": "18.1.14"
+    },
+    "net.fetch": {
+      "status": "unverified",
+      "via": "web_search ships in the tool family and is included in the read-only --tools subset (observed in the live tool inventory 2026-09-10), but no live fetch is exercised by the P1-P3 contract probes",
+      "verified_at": "2026-09-10"
+    },
+    "interact.ask": {
+      "status": "unsupported",
+      "via": "print mode has no approval/interaction channel: approval-gated tool calls fail with 'requires approval but no interactive UI available' (live 2026-09-10, read-only and write tiers)",
+      "verified_at": "2026-09-10",
+      "version": "18.1.14"
+    },
+    "presets": {
+      "read-only": "supported",
+      "workspace-write": "supported",
+      "unattended": "supported"
+    },
+    "presets_notes": "Tier mapping (omp approvalMode three tiers, probe report 2026-09-09 section 1): read-only = --approval-mode always-ask + --tools read,bash,grep,glob,lsp,task,todo,web_search; workspace-write = --approval-mode write; unattended = --approval-mode yolo. read-only enforcement is NATIVE, not intent-only: the --tools subset physically removes write/edit tools (hard lock) and always-ask fail-closes the exec-tier remainder (bash/task) because no interactive approval can arrive — live P2 2026-09-10: file absent, denial visible in band and in the final text. workspace-write delivers exactly paidan's capability ladder for the preset (fs.read+fs.write, exec fail-closed; bash/eval rejection live-verified 2026-09-10). Caveat: omp has NO OS sandbox, so no preset confines writes to the workspace directory — location discipline beyond the capability tier belongs to the user's native config policies (tools.approval.* / deny rules, enforced in every mode), which paidan never stages. The suite additionally injects a prompt-level soft read-only constraint + AUTHORIZED_ROOTS wrapper (probe report 2026-09-09 section 3 item 4); paidan v0 passes task text verbatim and does not reproduce that wrapper.",
+    "denial_evidence": {
+      "status": "supported",
+      "via": "in-band: turn_end.toolResults[] rows with isError and 'requires approval but no interactive UI available' (parser refusal evidence approval-unavailable-headless:<tool>), plus the final assistant text explaining the denial — both live-verified 2026-09-10 (read-only write attempt, exit 0, file absent). stderr CliUsageError / 'Unknown tools in --tools' signatures via detectRefusals (adapter classifyOmpStderr)",
+      "verified_at": "2026-09-10",
+      "version": "18.1.14"
+    }
+  },
+  "resume": {
+    "kind": "flag",
+    "args": [
+      "-r",
+      "{session}"
+    ],
+    "cross_process": true,
+    "notes": "-r accepts a session id prefix or full UUID (omp --help 18.1.14: 'Resume a session (by ID prefix, path, or picker if omitted)'); live-verified 2026-09-10 with the paidan argv shape (-p --mode json --approval-mode yolo -r <full-uuid>): same session id echoed, earlier context recalled exactly. The session store is per-cwd (~/.omp/agent/sessions/<encoded-cwd>/<ts>_<uuid>.jsonl): resume MUST use the same cwd as the source run — cross-project resume on a non-TTY errors out (probe report 2026-09-09 section 2). Resume restores model/thinking/service tier/MCP/tools/system prompt while the model is still listed (same source); paidan re-passes --approval-mode/--tools per the run's preset and --model when set (the suite adapter's buildInvocation likewise re-passes the full flag frame plus -r). Resume ABORTS an in-flight run on the same session (same source): never resume a session another process is actively running. -c/--continue (latest session for this cwd) is intentionally unused — paidan resumes only explicit handles. Session handle source: the stream's single session event id (full UUID; a prefix also works for -r).",
+    "verified_at": "2026-09-10",
+    "version": "18.1.14"
+  },
+  "models": {
+    "command": [
+      "{bin}",
+      "models",
+      "--json"
+    ],
+    "parse": "omp-models-json",
+    "connections": [],
+    "notes": "Live discovery via `omp models --json` (machine-readable surface, omp models --help 18.1.14; observed 2026-09-10: provider group deepseek with deepseek-v4-flash / deepseek-v4-flash-vision-exp / deepseek-v4-pro, thinking low|high|max). Alias = the provider-scoped `selector` field (e.g. deepseek/deepseek-v4-flash); connection = provider. One active connection on this machine (deepseek official stored credential, probe report 2026-09-09 section 4). Selection = config.json defaults.model or the omp native default (observed deepseek-v4-pro 2026-09-10); no cross-connection fallback. --thinking accepts off|minimal|low|medium|high|xhigh|max|auto on 18.1.14; paidan v0 never passes it (native default)."
+  },
+  "parser": "omp-print",
+  "parser_notes": "-p --mode json emits NDJSON on stdout: session {id} (the resume handle; exactly one per run), agent_start, turn_start, message_start/update/end, tool_execution_start/end, turn_end {message{content,usage{input,output,cacheRead,cacheWrite,cost},stopReason}, toolResults[]}, agent_end {messages[], isTerminal}, advisor_cost_changed, error (observed type set, 18.1.14 live runs 2026-09-10; tool_execution_update carries in-flight tool progress). finalText = last turn_end assistant text, else last agent_end assistant text (adapter finalText rule). Usage only from a SOLE turn_end usage (source provider); multiple turn_end events are normal with tool use and stay unavailable (per-turn vs cumulative unproven, contracts/omp-cli.json usage_contract). Headless approval denials are in-band toolResult errors ('requires approval but no interactive UI available'). A native --max-time deadline stop is a graceful agent_end with stopReason=aborted assistant messages and 'Deadline exceeded' tool results — flagged as refusal evidence only when BOTH signals appear (the raw string alone is user-echo-prone). Non-JSON stdout lines and mid-line EOF degrade the parser; unknown top-level event types are preserved and ignored with a summary warning (suite failure_policy.unknown_valid_events). Evidence: suite adapter omp.mjs analyzeNdjson/classifyOmpStderr + live 18.1.14 captures 2026-09-10.",
+  "capabilities": {
+    "background_native": false,
+    "cancel_native": false,
+    "completed_nonzero_exit": false
+  }
+}

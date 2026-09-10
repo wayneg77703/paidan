@@ -1,0 +1,129 @@
+{
+  "schema_version": "1.0.0",
+  "name": "opencode",
+  "family": "opencode",
+  "detect": {
+    "bin": "opencode",
+    "version_args": [
+      "--version"
+    ],
+    "version_re": "^([0-9]+\\.[0-9]+\\.[0-9]+)",
+    "npm_exe": "opencode-ai/bin/opencode.exe",
+    "detect_notes": "`opencode --version` prints a bare `1.18.29` (live 2026-09-10). The npm global install (package opencode-ai 1.18.29) exposes only script shims on PATH (opencode / opencode.cmd / opencode.ps1, %APPDATA%\\npm); Node >= 20.12 refuses to spawn .cmd without shell. opencode.cmd execs %dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe directly (shim read 2026-09-10), so npm_exe resolves the REAL native binary (~180MB, verified on disk and spawned 2026-09-10); platform optionalDependencies (opencode-windows-x64 etc.) sit under opencode-ai/node_modules and the bin exe is the resolved entry. There is no package-level JS entry (package.json bin -> ./bin/opencode.exe), hence no npm_entry."
+  },
+  "command": {
+    "argv": [
+      "{bin}",
+      "--format",
+      "json"
+    ],
+    "prompt_delivery": "stdin",
+    "mode_args": {
+      "read-only": [
+        "run",
+        "--agent",
+        "plan"
+      ],
+      "workspace-write": [
+        "run",
+        "--agent",
+        "build"
+      ],
+      "unattended": [
+        "run",
+        "--agent",
+        "build",
+        "--auto"
+      ]
+    },
+    "mode_args_notes": "The `run` subcommand rides inside mode_args (codex-manifest lesson: the security-critical --agent must land AFTER the subcommand; yargs also accepts root-position flags, verified live 2026-09-10). Rendered fresh shape: `opencode [--model M] run --agent <plan|build> [--auto] --format json`, prompt on stdin. Evidence: `opencode run --help` (1.18.29, 2026-09-10): run [message..], --format default|json, -m/--model provider/model, --agent, --auto ('auto-approve permissions that are not explicitly denied (dangerous!)'), -s/--session, -c/--continue, --fork, --dir. read-only = --agent plan (native read-only plan agent: write denied, SHELL read-only — 2026-09-09 eight-agent probe report §1/§3; live P2 2026-09-10: 'Im in plan mode, so I cant create the file yet', exit 0, file absent). workspace-write = --agent build (edit/bash default allow inside cwd; doom_loop/external_directory default ask and have no headless answer channel, so they fail closed). unattended = build + --auto (native approve-all-not-denied tier; live-verified 2026-09-10: `run --agent build --auto` wrote the file, exit 0; P1-P3 contract probes never exercise it). stdin prompt with empty message positionals is the suite-proven shape (adapters/opencode.mjs buildInvocation writes the prompt file to child stdin; re-verified live 2026-09-10).",
+    "model_arg": [
+      "--model",
+      "{model}"
+    ],
+    "cwd_arg": [
+      "--dir",
+      "{cwd}"
+    ],
+    "cwd_notes": "opencode anchors its PROJECT root from the inherited PWD env var when present, else the process cwd, else a VCS (.git) walk-up — NOT reliably the spawn cwd. Live-verified 2026-09-10 on 1.18.29: with PWD pointing elsewhere, a run whose spawn cwd was a bare temp dir still wrote its deliverable under PWD (relative tool paths resolve against the anchor); `run --dir <cwd>` overrides the anchor and pins writes to the run cwd even with a poisoned PWD. cwd_arg is spliced AFTER mode_args, so the rendered shape keeps the security order: `opencode [--model M] run --agent <plan|build> [--auto] --dir <run cwd> --format json` (--dir is a run-subcommand flag per run --help; yargs also accepts root-position flags, but paidan does not rely on that). env additionally unsets PWD (belt and suspenders).",
+    "env": {
+      "NO_COLOR": "1",
+      "TERM": "dumb",
+      "OPENCODE_CONFIG_CONTENT": "{native_default}",
+      "OPENCODE_PERMISSION": "{native_default}",
+      "PWD": "{unset}",
+      "_env_notes": "NO_COLOR/TERM=dumb are the suite adapter's static pins (adapters/opencode.mjs buildProviderEnv: the provider never spins up an interactive/colored terminal). PWD={unset} strips the inherited shell PWD so it cannot re-anchor the project root (see cwd_notes). {native_default} = paidan never sets the variable; caller-env values pass through. The suite's OPENCODE_CONFIG_CONTENT permission projection (permission.external_directory allow rules for cwd+add_dirs, permission.edit=deny in read-only — adapters/opencode.mjs buildOpenCodePermission) remains unexpressible in paidan v0: read-only enforcement rests on the plan agent alone, and add_dirs is unsupported on this endpoint in v0."
+    },
+    "verified_at": "2026-09-10",
+    "version": "1.18.29"
+  },
+  "permission": {
+    "fs.read": {
+      "status": "supported",
+      "via": "all agents (incl. read-only plan) read the cwd natively; live runs 2026-09-10 answered from the working directory",
+      "verified_at": "2026-09-10",
+      "version": "1.18.29"
+    },
+    "fs.write": {
+      "status": "supported",
+      "via": "build agent: edit permission defaults allow inside the project dir (live 2026-09-10: `run --agent build --format json` created probe-write.txt exactly, exit 0); plan agent denies writes (read-only)",
+      "verified_at": "2026-09-10",
+      "version": "1.18.29"
+    },
+    "shell.exec": {
+      "status": "supported",
+      "via": "build agent bash permission (default allow; doom_loop stays ask and fails closed headless); plan agent shell is read-only (2026-09-09 probe report §1/§3)",
+      "verified_at": "2026-09-10",
+      "version": "1.18.29"
+    },
+    "net.fetch": {
+      "status": "unverified",
+      "via": "opencode has webfetch/web search tools gated by permission keys; per-agent headless behavior not covered by P1-P3 contract probes",
+      "verified_at": "2026-09-10"
+    },
+    "interact.ask": {
+      "status": "unverified",
+      "via": "headless ask has no answer channel; third-party observation says ask auto-rejects (2026-09-09 probe report §1, 'headless 下 ask 疑似自动拒绝'); not live-probed through paidan",
+      "verified_at": "2026-09-10"
+    },
+    "presets": {
+      "read-only": "supported",
+      "workspace-write": "supported",
+      "unattended": "supported"
+    },
+    "presets_notes": "Mapping: read-only=`--agent plan`, workspace-write=`--agent build` (default tier), unattended=`--agent build --auto`. The suite additionally injects OPENCODE_CONFIG_CONTENT permission.edit=deny for read-only as a second layer (adapters/opencode.mjs); paidan v0 cannot express computed env, so plan-agent enforcement is the single layer here (live P2-equivalent verified 2026-09-10: file absent, refusal in final text). unattended (--auto) additionally live-verified 2026-09-10 (write completed, exit 0); the P1-P3 probes never exercise it.",
+    "denial_evidence": {
+      "status": "supported",
+      "via": "plan-agent write refusal is observable in the final text (live 2026-09-10: 'Im in plan mode, so I cant create the file yet', exit 0, file absent); in-band type:error events carry error.data.message (1.18.29 shape; legacy fixtures used part.message — parser reads both). No stderr refusal signature observed on 1.18.29, so detectRefusals is an honest no-op",
+      "verified_at": "2026-09-10",
+      "version": "1.18.29"
+    }
+  },
+  "resume": {
+    "kind": "flag",
+    "args": [
+      "--session",
+      "{session}"
+    ],
+    "cross_process": true,
+    "notes": "Session handle = the ses_... sessionID carried on every stdout event (single unique value per stream; drift degrades the parser). `opencode run --session <ses_id>` continues cross-process (run --help 1.18.29); live-verified 2026-09-10: fresh run remembered a codename, second process `--session <ses> --model <m> run --agent build --format json` recalled it with the same sessionID. Sessions are per-project: resume with the same cwd as the source run. --model/--agent may be re-passed on continue (suite adapter always re-passes them; official inheritance semantics unspecified). `--continue` (latest session) is implicit and never used by paidan; --fork exists but is not used (paidan continues in place, same as the suite). Concurrency on one session handle: officially unspecified.",
+    "verified_at": "2026-09-10",
+    "version": "1.18.29"
+  },
+  "models": {
+    "command": [
+      "{bin}",
+      "models"
+    ],
+    "parse": "opencode-models-command",
+    "connections": [],
+    "notes": "Live enumeration via `opencode models` (root help 1.18.29: 'list all available models'; plain `provider/model` lines, verified 2026-09-10: 7 free `opencode/*` Zen models + 28+ `opencode-go/*` models on this machine). connection = provider prefix: `opencode` = 免凭据 Zen free group, `opencode-go` = Go subscription credential (native auth.json — paidan never reads it), BYOK providers appear when natively configured. Selection = config.json defaults.model or the native default; no cross-connection fallback."
+  },
+  "parser": "opencode-run",
+  "parser_notes": "`run --format json` emits NDJSON on stdout (live 1.18.29 shape 2026-09-10): step_start / tool_use / step_finish / text / reasoning / error, every event carrying top-level sessionID. text events carry part.text (blank parts skipped, joined with \\n = finalText). step_finish carries part.tokens {input, output, reasoning, cache{read, write}} (+part.cost): usage maps to provider ONLY when exactly one step_finish has valid non-negative safe-integer tokens — zero or multiple step_finish events (normal on tool runs; cumulative vs incremental semantics unproven per contracts/opencode-cli.json usage_contract) collapse usage to null with a warning, never fabricated. type:error events are in-band soft errors (warning + refusal evidence; message read from error.data.message on 1.18.29, part.message on legacy shapes). Non-JSON stdout lines, mid-line EOF and multiple distinct sessionIDs degrade the parser; UNKNOWN event types are known-benign drift (contract failure_policy: 'preserve and ignore') — warning only, never degraded. Evidence: adapters/opencode.mjs analyzeNdjson + fixtures/opencode-cli + live 1.18.29 runs 2026-09-10.",
+  "capabilities": {
+    "background_native": false,
+    "cancel_native": false,
+    "completed_nonzero_exit": false
+  }
+}

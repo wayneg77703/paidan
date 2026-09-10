@@ -119,7 +119,9 @@ Judgment order (terminal.js): deliverable evidence → endpoint refusal signals 
 
 `status` ∈ `supported | soft | unsupported | unverified`. `soft` = endpoint claims it but enforcement is doubtful (e.g. intent-only modes); always surfaces as a submit warning.
 
-`command.mode_args` splices per-preset flag fragments (e.g. codex `-s read-only` vs `-s workspace-write`, claude `--permission-mode …`); a manifest that declares `mode_args` must cover every preset its permission map marks supported.
+`command.mode_args` splices per-preset flag fragments (e.g. codex `-s read-only` vs `-s workspace-write`, claude `--permission-mode …`); a manifest that declares `mode_args` must cover every preset its permission map marks supported. `command.cwd_arg` (optional array, `{cwd}` → run cwd) is consumed by buildArgs and spliced **after** `mode_args`, so a subcommand riding in `mode_args` (codex `exec`, opencode `run`) stays left of the cwd flag — the "security-critical flags never land in the wrong position" invariant. `command.mode_env` (optional per-preset env map, e.g. dsh `read-only` → `DSH_PERMISSION_MODE=read-only`) is spliced by buildEnv on top of static `env`; partial coverage is normal (only tiers needing an env override declare it).
+
+`command.env` value sentinels: `"{native_default}"` = never set the variable; `"{unset}"` = delete the inherited variable (opencode strips `PWD`, which otherwise re-anchors the project root). Keys starting with `_` are documentation and are never exported to the child process.
 
 `command.resume_argv` (optional) fully replaces `command.argv` on resume runs: `{session}`/`{prompt}` are substituted and `model_arg` is still spliced, but `mode_args`/`add_dir_arg` are not (a resumed session restores its original tier — e.g. `codex exec resume` accepts neither `-s` nor `--add-dir`). Without `resume_argv`, `resume.args` flags are spliced and `mode_args` are re-passed (claude semantics). `detect.npm_exe`/`npm_entry` are package-relative paths under the npm install tree (never machine-absolute), used when PATH exposes only a script shim.
 

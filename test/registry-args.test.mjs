@@ -91,3 +91,34 @@ test('pickProbePreset: workspace-write > unattended > read-only; null when none 
     assert.equal(pickProbePreset({ ...m, permission: { presets: { 'read-only': 'unsupported' } } }), null)
     assert.equal(pickProbePreset({ ...m, permission: { presets: { 'workspace-write': 'soft' } } }), null)
 })
+
+test('cwd_arg splices AFTER mode_args with {cwd} replaced (opencode run --dir)', () => {
+    const opencodeLike = {
+        schema_version: '1.0.0',
+        name: 'opencode',
+        detect: { bin: 'opencode' },
+        command: {
+            argv: ['{bin}', '--format', 'json'],
+            prompt_delivery: 'stdin',
+            mode_args: {
+                'read-only': ['run', '--agent', 'plan'],
+                'workspace-write': ['run', '--agent', 'build'],
+                unattended: ['run', '--agent', 'build', '--auto'],
+            },
+            cwd_arg: ['--dir', '{cwd}'],
+        },
+        permission: { presets: { 'workspace-write': 'supported' } },
+        parser: 'opencode-run',
+    }
+    const args = buildArgs(opencodeLike, request({ cwd: 'D:/run/root' }))
+    // the security order: subcommand (run) and --agent left of --dir; argv tail last
+    assert.deepEqual(args, ['run', '--agent', 'build', '--dir', 'D:/run/root', '--format', 'json'])
+})
+
+test('cwd_arg omitted from resume_argv rendering (resume restores the session cwd)', () => {
+    const args = buildArgs(
+        { ...codexLike(), command: { ...codexLike().command, cwd_arg: ['--dir', '{cwd}'] } },
+        request({ resume_session: 'thread-123' }),
+    )
+    assert.ok(!args.includes('--dir'))
+})

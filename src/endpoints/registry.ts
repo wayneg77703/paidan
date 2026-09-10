@@ -31,13 +31,17 @@ export interface EndpointManifest {
         argv: string[]
         prompt_delivery: 'stdin' | 'argv' | 'file'
         /** full alternative argv template used instead of argv on resume runs
-         *  ({session}/{prompt} replaced; mode_args are NOT spliced) */
+         *  ({session}/{prompt} replaced; mode_args/cwd_arg are NOT spliced) */
         resume_argv?: string[]
         /** per-preset argv fragments spliced in front of the template tail */
         mode_args?: Partial<Record<PermissionPreset, string[]>>
+        /** argv fragment with {cwd} -> request.cwd; spliced AFTER mode_args so a
+         *  subcommand carried in mode_args (codex exec, opencode run) stays left of it */
+        cwd_arg?: string[] | null
+        /** per-preset env fragments applied on top of env for that mode */
+        mode_env?: Partial<Record<PermissionPreset, Record<string, string>>>
         model_arg?: string[]
         add_dir_arg?: string[]
-        cwd_arg?: string | null
         env?: Record<string, string>
     }
     permission: {
@@ -186,6 +190,20 @@ export function validateManifest(value: unknown, source: string): EndpointManife
             throw new ManifestError(`${source}: command.resume_argv must contain {prompt} when prompt_delivery is argv`)
         }
     }
+    if (command.cwd_arg !== undefined && command.cwd_arg !== null && !isStringArray(command.cwd_arg)) {
+        throw new ManifestError(`${source}: command.cwd_arg must be a string array or null`)
+    }
+    if (command.mode_env !== undefined) {
+        if (!isPlainObject(command.mode_env)) {
+            throw new ManifestError(`${source}: command.mode_env must be an object`)
+        }
+        for (const [preset, fragment] of Object.entries(command.mode_env)) {
+            if (!['read-only', 'workspace-write', 'unattended'].includes(preset) || !isPlainObject(fragment)
+                || !Object.values(fragment).every((v) => typeof v === 'string')) {
+                throw new ManifestError(`${source}: command.mode_env["${preset}"] must be a string->string object keyed by a known preset`)
+            }
+        }
+    }
     if (command.mode_args !== undefined) {
         if (!isPlainObject(command.mode_args)) {
             throw new ManifestError(`${source}: command.mode_args must be an object`)
@@ -278,8 +296,9 @@ export function checkPermission(manifest: EndpointManifest, mode: PermissionPres
 /**
  * Build the endpoint argument list (without the bin itself; the spawn plan
  * resolves the command separately). Optional segments (resume / model /
- * add-dir / per-preset mode flags) are spliced in front of the template tail,
- * so flags never land after the prompt value.
+ * add-dir / per-preset mode flags / cwd pin) are spliced in front of the
+ * template tail, so flags never land after the prompt value. Splice order:
+ * resume, model, add-dirs, mode_args, cwd_arg.
  *
  * Resume: when the manifest declares command.resume_argv, that template fully
  * replaces command.argv and only model_arg is spliced (mode_args and add_dirs
@@ -330,23 +349,46 @@ export function buildArgs(manifest: EndpointManifest, request: RunRequest): stri
         throw new ManifestError(`endpoint ${manifest.name} has no mode_args for preset "${request.mode}"`)
     }
     if (modeArgs) insert.push(...modeArgs)
+    // cwd pin (e.g. opencode --dir): after mode_args so a subcommand riding in
+    // mode_args stays left of it
+    const cwdArg = manifest.command.cwd_arg
+    if (cwdArg) insert.push(...cwdArg.map((a) => a.replaceAll('{cwd}', request.cwd)))
     const argv = manifest.command.argv.map((a) => a.replaceAll('{prompt}', request.task_text))
     // argv[0] is the {bin} placeholder; the caller spawns the resolved bin.
     return [...insert, ...argv.slice(1)]
 }
 
 /**
- * Child env: inherit the caller env, then apply manifest command.env.
- * The literal value "{native_default}" means "do not set this variable at
- * all" — paidan runs the endpoint against its native config home and never
- * stages or copies endpoint config (invariant 3/4).
+ * Child env: inherit the caller env, then apply manifest command.env and (for
+ * the run's mode) command.mode_env[mode] on top. Value sentinels:
+ *   "{native_default}" — never set the variable (endpoint runs against its
+ *     native config home; paidan never stages or copies config)
+ *   "{unset}" — delete an inherited variable (e.g. opencode unsets PWD, which
+ *     would otherwise re-anchor the project root away from the spawn cwd)
+ * Keys starting with "_" are documentation fields, never exported (a manifest
+ * "_env_notes" key must not become a child-process variable).
  */
-export function buildEnv(manifest: EndpointManifest, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function buildEnv(
+    manifest: EndpointManifest,
+    base: NodeJS.ProcessEnv = process.env,
+    mode: PermissionPreset | null = null,
+): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = { ...base }
-    for (const [key, value] of Object.entries(manifest.command.env ?? {})) {
-        if (value === '{native_default}') continue
-        env[key] = value
+    const apply = (fragment: Record<string, string>) => {
+        for (const [key, value] of Object.entries(fragment)) {
+            if (key.startsWith('_')) continue
+            if (value === '{native_default}') continue
+            if (value === '{unset}') {
+                delete env[key]
+                continue
+            }
+            env[key] = value
+        }
     }
+    apply(manifest.command.env ?? {})
+    // partial mode_env coverage is normal: only tiers needing an env override declare it
+    const modeEnv = mode ? manifest.command.mode_env?.[mode] : undefined
+    if (modeEnv) apply(modeEnv)
     return env
 }
 
