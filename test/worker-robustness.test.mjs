@@ -191,3 +191,32 @@ test('cmd-shim + argv prompt delivery is refused before spawn (worker backstop)'
         await fs.rm(root, { recursive: true, force: true })
     }
 })
+
+test('endpoint that closes stdin early: worker survives EPIPE and the run reaches a terminal state', async () => {
+    const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-epipe-'))
+    try {
+        const fakeBin = nodePath.join(repoRoot, 'test', 'fixtures', 'fake-stdin-closer.cjs')
+        const { work, env } = await mkEnv(root, {
+            schema_version: '1.0.0',
+            name: 'fake-stdin-closer',
+            detect: { bin: fakeBin },
+            command: { argv: ['{bin}'], prompt_delivery: 'stdin' },
+            permission: { presets: { 'workspace-write': 'supported' } },
+            parser: 'kimi-print',
+        })
+        // 1 MiB of task text overflows the pipe buffer: the flush hits the
+        // already-exited endpoint's closed pipe -> EPIPE/EOF on the stream
+        const taskFile = nodePath.join(work, 'task.txt')
+        await fs.writeFile(taskFile, 'x'.repeat(1024 * 1024))
+        const run = await paidan(env, ['run', '--endpoint', 'fake-stdin-closer', '--cwd', work, '--task-file', taskFile])
+        assert.equal(run.ok, true, JSON.stringify(run))
+        const got = await paidan(env, ['get', run.run_id, '--wait', '--timeout', '30'])
+        assert.equal(got.terminal, true, `run stuck non-terminal: ${JSON.stringify(got.run)}`)
+        assert.ok(['completed', 'unknown'].includes(got.run.state), `state: ${got.run.state}`)
+        // the early-close note is recorded honestly, and a result record exists
+        const events = await readEvents(root, run.run_id)
+        assert.ok(events.some((e) => e.type === 'note' && String(e.note).includes('closed stdin early')))
+    } finally {
+        await fs.rm(root, { recursive: true, force: true })
+    }
+})

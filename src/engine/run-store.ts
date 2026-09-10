@@ -428,12 +428,25 @@ export class RunStore {
 
     /** result.json is written once; a conflicting second write is corruption, an identical one is a no-op. */
     async writeResult(result: RunResult): Promise<void> {
-        const existing = await readJsonFile<RunResult>(this.resultPath(result.run_id))
-        if (existing) {
-            if (JSON.stringify(existing) === JSON.stringify(result)) return
+        // result.json is written ONCE. A read-then-write check would race the
+        // CLI cancel fallback (both sides can pass the existence check and
+        // silently clobber each other — reproduced 10/10), so creation goes
+        // through a hard link: link(2) is the atomic create-if-absent primitive
+        // on win32 and POSIX alike. The complete file is written to a tmp name
+        // first, so a crash never leaves a partial result.json behind.
+        const final = this.resultPath(result.run_id)
+        await fs.mkdir(this.runDir(result.run_id), { recursive: true })
+        const tmp = nodePath.join(this.runDir(result.run_id), `.result.json.${process.pid}.${randomBytes(4).toString('hex')}.tmp`)
+        await fs.writeFile(tmp, JSON.stringify(result, null, 2), 'utf8')
+        try {
+            await fs.link(tmp, final)
+        } catch (err) {
+            await fs.rm(tmp, { force: true }).catch(() => {})
+            if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+            const existing = await readJsonFile<RunResult>(final)
+            if (existing && JSON.stringify(existing) === JSON.stringify(result)) return
             throw new StoreCorruptError(`result.json already exists for ${result.run_id}`)
         }
-        await writeJsonAtomic(this.resultPath(result.run_id), result)
     }
 
     /** Callers redact before appending; the store treats events as opaque. */

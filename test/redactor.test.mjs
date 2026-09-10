@@ -77,3 +77,26 @@ test('the home directory is replaced with ~ (both slash directions)', () => {
     assert.equal(r.redactText('file at C:\\Users\\tester\\docs\\x.txt'), 'file at ~\\docs\\x.txt')
     assert.equal(r.redactText('file at C:/Users/tester/docs/x.txt'), 'file at ~/docs/x.txt')
 })
+
+test('assignment form: keyword-first names and JSON-quoted keys are redacted (codex-found gaps)', () => {
+    const r = redactor()
+    // bare keyword-first names (the old pattern required a leading char and missed these)
+    assert.equal(r.redactText('password = hunter2secret'), 'password = [REDACTED]')
+    assert.equal(r.redactText('token: abcdef012345'), 'token: [REDACTED]')
+    // JSON-quoted keys: the quote before ':' no longer breaks the match,
+    // and the separator quote is mirrored so the JSON stays valid
+    const json = r.redactText('{"password": "hunter2secret"}')
+    assert.equal(json, '{"password": "[REDACTED]"}')
+    assert.doesNotThrow(() => JSON.parse(json))
+    const nested = r.redactText('{"outer": {"api_token": "tok-abcdefgh"}}')
+    assert.ok(!nested.includes('tok-abcdefgh'))
+    assert.doesNotThrow(() => JSON.parse(nested))
+})
+
+test('prose safety: lookalikes without an assignment survive', () => {
+    const r = redactor()
+    assert.equal(r.redactText('monkey business'), 'monkey business')
+    assert.equal(r.redactText('key=ab'), 'key=ab') // value too short
+    assert.equal(r.redactText('TOKEN=abc'), 'TOKEN=abc')
+    assert.equal(r.redactText('see https://example.com/docs?token=abc for details'), 'see https://example.com/docs?token=abc for details')
+})

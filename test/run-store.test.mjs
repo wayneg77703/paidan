@@ -221,3 +221,35 @@ test('a stale create lock (creator crashed) is broken, not waited on', async () 
         await fs.rm(dir, { recursive: true, force: true })
     }
 })
+
+test('writeResult: concurrent conflicting writes — exactly one wins, the other gets StoreCorruptError', async () => {
+    const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-wr-'))
+    try {
+        const store = new RunStore(root, {})
+        const mk = (state, note) => ({
+            schema_version: '1.0.0', run_id: 'run_20260910_deadbeef', state, exit_code: 0,
+            final_text: note,
+            evidence: { deliverables: [], refusals: [], parser: { type: 'none', degraded: false }, notes: [note] },
+            usage: { input_tokens: null, output_tokens: null, cached_input_tokens: null, cost: null, source: 'unavailable' },
+            session_handle: null, terminal_at: new Date().toISOString(),
+        })
+        await fs.mkdir(store.runDir('run_20260910_deadbeef'), { recursive: true })
+        const [r1, r2] = await Promise.allSettled([
+            store.writeResult(mk('completed', 'from-worker')),
+            store.writeResult(mk('cancelled', 'from-cli-fallback')),
+        ])
+        const statuses = [r1.status, r2.status].sort()
+        assert.deepEqual(statuses, ['fulfilled', 'rejected'])
+        const reason = (r1.status === 'rejected' ? r1 : r2).reason
+        assert.ok(reason instanceof StoreCorruptError, `expected StoreCorruptError, got ${reason}`)
+        // the surviving record is exactly one of the two candidates
+        const final = JSON.parse(await fs.readFile(store.resultPath('run_20260910_deadbeef'), 'utf8'))
+        assert.ok(['completed', 'cancelled'].includes(final.state))
+        // a sequential conflicting write still throws (existing behavior)
+        await assert.rejects(store.writeResult(mk('failed', 'late-conflict')), StoreCorruptError)
+        // an identical re-write is a no-op, not an error
+        await store.writeResult(final)
+    } finally {
+        await fs.rm(root, { recursive: true, force: true })
+    }
+})

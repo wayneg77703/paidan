@@ -25,9 +25,15 @@ const PATTERNS: Array<[RegExp, (m: RegExpExecArray) => string]> = [
     [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, () => '[REDACTED]'],
     // URL userinfo: keep scheme and host, erase the user:pass segment
     [/:\/\/[^\s/:@]+:[^\s/@]+@/g, () => '://[REDACTED]@'],
-    // assignment form: keep the variable name, erase the value (>=4 chars, to
-    // avoid mangling ordinary prose)
-    [/([A-Za-z_][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*)\s*[:=]\s*["']?[^"'\s,;]{4,}/gi, (m) => `${m[1]}=[REDACTED]`],
+    // assignment form: keep the variable name and separators, erase the value
+    // (>=4 chars, to avoid mangling ordinary prose). Covers bare names
+    // (password = x), keyword-first names (token: x) and JSON-quoted keys
+    // ("password": "x"); the value stops before its closing quote, so the
+    // surrounding text (incl. JSON structure) stays intact.
+    [
+        /(\b[A-Za-z0-9_]*?(?:KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*)(["']?\s*[:=]\s*["']?)[^"'\s,;]{4,}/gi,
+        (m) => `${m[1]}${m[2]}[REDACTED]`,
+    ],
 ]
 
 export function createRedactor(

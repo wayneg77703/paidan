@@ -163,6 +163,16 @@ async function main(): Promise<number> {
             windowsVerbatimArguments: needsVerbatimArgs(plan),
         })
         if (useStdin && child.stdin) {
+            // an endpoint that exits before reading stdin raises EPIPE/EOF on
+            // the stream; without a listener that is an uncaught exception and
+            // the worker dies leaving the run 'running' forever (reproduced).
+            // The exit event still fires and the terminal judgment proceeds.
+            child.stdin.on('error', (err: NodeJS.ErrnoException) => {
+                void store.appendEvent(runId, {
+                    ts: now(), type: 'note',
+                    note: `endpoint closed stdin early (${err.code ?? 'error'}); judging by the exit path`,
+                }).catch(() => {})
+            })
             child.stdin.write(delivery.task_text)
             child.stdin.end()
         }
@@ -580,13 +590,18 @@ async function pipeTo(
     if (!stream) return
     const rs = stream as import('node:stream').Readable
     return new Promise((resolve) => {
-        const done = () => resolve()
+        // serialize onData through a promise chain and resolve only after it
+        // drains: firing onData un-awaited lets slow event writes (e.g. a 100ms
+        // appendEvent) interleave buffer mutations and lets 'end' resolve
+        // while tail lines are still suspended behind them
+        let chain: Promise<unknown> = Promise.resolve()
+        const done = () => void chain.then(() => resolve(), () => resolve())
         if (rs.readableEnded || rs.destroyed) {
             done()
             return
         }
         rs.on('data', (chunk: Uint8Array) => {
-            onData(chunk).catch(() => {})
+            chain = chain.then(() => onData(chunk)).catch(() => {})
         })
         rs.on('end', done)
         rs.on('close', done)
