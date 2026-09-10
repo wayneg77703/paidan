@@ -73,23 +73,6 @@ export class UsageDb {
         )
     }
 
-    get(runId: string): UsageRow | null {
-        const row = this.db.prepare('SELECT * FROM usage WHERE run_id = ?').get(runId)
-        return (row as UsageRow | undefined) ?? null
-    }
-
-    list(query: { endpoint?: string; limit?: number } = {}): UsageRow[] {
-        const limit = query.limit && query.limit > 0 ? query.limit : 100
-        if (query.endpoint) {
-            return this.db
-                .prepare('SELECT * FROM usage WHERE endpoint = ? ORDER BY recorded_at DESC LIMIT ?')
-                .all(query.endpoint, limit) as unknown as UsageRow[]
-        }
-        return this.db
-            .prepare('SELECT * FROM usage ORDER BY recorded_at DESC LIMIT ?')
-            .all(limit) as unknown as UsageRow[]
-    }
-
     close(): void {
         this.db.close()
     }

@@ -1,7 +1,7 @@
-// Per-endpoint default models (defaults.models.<endpoint>): config schema
-// validation and run-time resolution order (--model ?? defaults.models[ep]
-// ?? defaults.model). Fully isolated via PAIDAN_HOME/PAIDAN_DATA_DIR/
-// PAIDAN_ENDPOINTS_DIR pointing at tmp dirs.
+// Submit-time defaults resolution and gates: config schema validation and the
+// --flag ?? per-endpoint ?? global resolution order for models AND efforts,
+// plus the MODEL_UNSUPPORTED / EFFORT_UNSUPPORTED / EFFORT_INVALID submit gates.
+// Fully isolated via PAIDAN_HOME/PAIDAN_DATA_DIR/PAIDAN_ENDPOINTS_DIR at tmp dirs.
 
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
@@ -198,6 +198,51 @@ test('run --effort against an endpoint without an effort block is EFFORT_UNSUPPO
         const res = await paidan(env, ['run', '--endpoint', 'fake-plain', '--cwd', work, '--task', 'x', '--effort', 'high'])
         assert.equal(res.ok, false)
         assert.equal(res.error.code, 'EFFORT_UNSUPPORTED')
+    } finally {
+        await fs.rm(root, { recursive: true, force: true })
+    }
+})
+
+test('run with a configured model against an endpoint without model_arg is MODEL_UNSUPPORTED', async () => {
+    const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-model-unsup-'))
+    try {
+        const endpointsDir = nodePath.join(root, 'endpoints')
+        const work = nodePath.join(root, 'work')
+        const home = nodePath.join(root, 'home')
+        await fs.mkdir(endpointsDir, { recursive: true })
+        await fs.mkdir(work, { recursive: true })
+        await fs.mkdir(home, { recursive: true })
+        const fakeBin = nodePath.join(repoRoot, 'test', 'fixtures', 'fake-sleeper.cjs')
+        await fs.writeFile(nodePath.join(endpointsDir, 'fake-nomodel.json'), JSON.stringify({
+            schema_version: '1.0.0',
+            name: 'fake-nomodel',
+            detect: { bin: fakeBin },
+            command: { argv: ['{bin}', '-p', '{prompt}'], prompt_delivery: 'argv' },
+            permission: { presets: { 'workspace-write': 'supported' } },
+            parser: 'kimi-print',
+        }))
+        const env = {
+            ...process.env,
+            PAIDAN_HOME: home,
+            PAIDAN_DATA_DIR: nodePath.join(root, 'data'),
+            PAIDAN_ENDPOINTS_DIR: endpointsDir,
+        }
+        // a global defaults.model poisons endpoints that cannot take one headless —
+        // the gate must name the repair, not leak a ManifestError flavor
+        await fs.writeFile(nodePath.join(home, 'config.json'), JSON.stringify({
+            endpoints: { enabled: ['fake-nomodel'] },
+            defaults: { endpoint: 'fake-nomodel', model: 'some-model' },
+        }))
+        const res = await paidan(env, ['run', '--endpoint', 'fake-nomodel', '--cwd', work, '--task', 'x'])
+        assert.equal(res.ok, false)
+        assert.equal(res.error.code, 'MODEL_UNSUPPORTED')
+        assert.match(res.error.message, /no headless model selection/)
+        assert.match(res.error.message, /Repair:/)
+        // a run with no model configured at all passes the gate
+        await fs.writeFile(nodePath.join(home, 'config.json'), JSON.stringify({ endpoints: { enabled: ['fake-nomodel'] } }))
+        const ok = await paidan(env, ['run', '--endpoint', 'fake-nomodel', '--cwd', work, '--task', 'x'])
+        assert.equal(ok.ok, true, JSON.stringify(ok))
+        await paidan(env, ['cancel', ok.run_id])
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }

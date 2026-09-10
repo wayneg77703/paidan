@@ -1,13 +1,12 @@
 // Detached worker launch + explicit process-tree termination.
 // Submit spawns `node dist/worker.js <run_id>` detached; the CLI never babysits.
-// Cancel on Windows is taskkill /T /F, permanently: Node stdlib cannot create
-// Job Objects (no FFI) and zero-dependency is invariant 6 — orphaned
-// grandchildren after a force-kill are an accepted limitation (contracts §5).
+// Cancel kills in two phases (graceful taskkill /T or SIGTERM, forced /F or
+// SIGKILL after grace): Node stdlib cannot create Job Objects (no FFI) and
+// zero-dependency is invariant 6 — orphaned grandchildren after a force-kill
+// are an accepted limitation (contracts §5).
 
 import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import * as fs from 'node:fs/promises'
-import * as nodePath from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { pidAlive } from './reconcile.js'
@@ -133,42 +132,6 @@ async function waitUntilDead(pid: number, timeoutMs: number): Promise<boolean> {
         await sleep(Math.min(200, Math.max(20, deadline - Date.now())))
     } while (Date.now() < deadline)
     return !pidAlive(pid)
-}
-
-/**
- * Resolve a bare bin name against PATH; on Windows .EXE beats the rest of
- * PATHEXT in each directory (Node >= 20.12 cannot spawn .cmd/.bat, EINVAL).
- */
-export async function resolveBin(bin: string, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
-    if (nodePath.isAbsolute(bin) || bin.includes('/') || bin.includes('\\')) {
-        return (await pathExists(bin)) ? bin : null
-    }
-    const pathEnv = env.PATH ?? env.Path ?? env.path ?? ''
-    const exts = process.platform === 'win32'
-        ? ['.EXE', ...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';')].filter(
-            (e, i, arr) => e && arr.findIndex((x) => x.toUpperCase() === e.toUpperCase()) === i,
-        )
-        : ['']
-    for (const dir of pathEnv.split(nodePath.delimiter)) {
-        if (!dir) continue
-        for (const ext of exts) {
-            const candidate = nodePath.join(dir, bin + ext.toLowerCase())
-            if (await pathExists(candidate)) return candidate
-            // PATHEXT entries and on-disk shims disagree on casing; try verbatim too
-            const verbatim = nodePath.join(dir, bin + ext)
-            if (verbatim !== candidate && (await pathExists(verbatim))) return verbatim
-        }
-    }
-    return null
-}
-
-async function pathExists(p: string): Promise<boolean> {
-    try {
-        await fs.access(p)
-        return true
-    } catch {
-        return false
-    }
 }
 
 function sleep(ms: number): Promise<void> {

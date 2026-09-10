@@ -178,8 +178,8 @@ test('cmd-shim + argv prompt delivery is refused before spawn (worker backstop)'
         const result = await store.readResult(request.run_id)
         assert.ok(
             result.evidence.notes.some((n) =>
-                n.includes('cmd.exe shim cannot preserve argument boundaries for argv prompt delivery')
-                && n.includes('(npm .cmd shims pass %* and re-split on spaces)')
+                n.includes('cmd.exe shims cannot preserve argument boundaries for argv prompt delivery')
+                && n.includes('re-split on spaces')
                 && n.includes('endpoints.overrides.fake-argv-shim.bin')),
             `notes: ${JSON.stringify(result.evidence.notes)}`,
         )

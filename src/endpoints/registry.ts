@@ -5,6 +5,8 @@ import * as fs from 'node:fs/promises'
 import * as nodePath from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { CapabilitySet, ModeSelection, PermissionPreset, RunRequest } from '../engine/types.js'
+import type { CachedModels, ModelsCache } from '../engine/models-cache.js'
+import { writeJsonAtomic } from '../engine/run-store.js'
 import type { EndpointParserModule, EndpointStreamParser } from './parser-api.js'
 
 export interface CapabilityStatus {
@@ -418,6 +420,34 @@ export function measureArgvBytes(parts: readonly string[]): number {
     return parts.reduce((n, a) => n + Buffer.byteLength(a, 'utf8') + 1, 0)
 }
 
+/** Write probe-verified verified_at/version fields back into a manifest (manifest structure knowledge lives here, not in the CLI). */
+export async function refreshManifestVerifiedAt(
+    dir: string,
+    name: string,
+    probes: Array<{ name: string; verdict: string }>,
+    today: string,
+    version: string | null,
+): Promise<void> {
+    const file = nodePath.join(dir, `${name}.json`)
+    const parsed = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>
+    const permission = parsed.permission as Record<string, Record<string, unknown>> | undefined
+    const passed = new Set(probes.filter((p) => p.verdict === 'pass').map((p) => p.name))
+    if (passed.has('P1-write') && permission) {
+        for (const cap of ['fs.read', 'fs.write']) {
+            if (permission[cap] && typeof permission[cap] === 'object') {
+                permission[cap].verified_at = today
+                if (version) permission[cap].version = version
+            }
+        }
+    }
+    if (passed.has('P3-resume') && parsed.resume && typeof parsed.resume === 'object') {
+        const resume = parsed.resume as Record<string, unknown>
+        resume.verified_at = today
+        if (version) resume.version = version
+    }
+    await writeJsonAtomic(file, parsed)
+}
+
 /**
  * argv-substitution safety for {model}/{session} values: they land on the
  * endpoint command line as single arguments, so whitespace, quotes and shell
@@ -439,6 +469,33 @@ export function assertSafeSubstitutionValue(value: string, kind: 'model' | 'sess
 export function filterSafeAliases<T extends { alias: string }>(models: readonly T[]): { models: T[]; dropped: number } {
     const kept = models.filter((m) => SAFE_SUBSTITUTION_VALUE_RE.test(m.alias))
     return { models: kept, dropped: models.length - kept.length }
+}
+
+/**
+ * Live model discovery + argv-safety filter + cache write-through — the one
+ * code path for `models --refresh` and init-time detection. Returns null when
+ * the endpoint has no discovery surface.
+ */
+export async function discoverAndCacheModels(manifest: EndpointManifest, cache: ModelsCache, version: string | null): Promise<CachedModels | null> {
+    if (!manifest.models?.parse) return null
+    const mod = await loadParserModule(manifest.parser)
+    if (!mod.discoverModels) return null
+    const found = await mod.discoverModels()
+    const safe = filterSafeAliases(found.models)
+    const notes = [...found.notes, 'selection = --model ?? config.json defaults.models[endpoint] ?? defaults.model; no cross-connection fallback']
+    if (safe.dropped > 0) notes.push(`dropped ${safe.dropped} alias(es) failing the argv-safety charset`)
+    const entry: CachedModels = {
+        schema_version: '1.0.0',
+        endpoint: manifest.name,
+        fetched_at: new Date().toISOString(),
+        version,
+        source: manifest.models.parse ?? 'parser-module',
+        models: safe.models,
+        notes,
+    }
+    // success writes through, even with an empty model list (no borrowing)
+    await cache.write(entry)
+    return entry
 }
 
 /** Validate an effort value against the endpoint's declared block and return the argv splice. */

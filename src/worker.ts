@@ -17,7 +17,7 @@ import { judgeTerminal } from './engine/terminal.js'
 import type { DeliverableEvidence, RunEvent, RunRequest, RunResult, TerminalState } from './engine/types.js'
 import { UsageDb } from './engine/usage-db.js'
 import { buildArgs, buildEnv, createEndpointParser, EndpointRegistry, ManifestError, withPromptCwdHint } from './endpoints/registry.js'
-import { finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn } from './endpoints/spawn.js'
+import { cmdShimRefusalMessage, finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn } from './endpoints/spawn.js'
 
 const STDERR_CAPTURE_LIMIT = 256 * 1024
 const STDOUT_EVENT_EVERY_LINES = 200
@@ -82,12 +82,12 @@ async function main(): Promise<number> {
             },
             usage: { input_tokens: null, output_tokens: null, cached_input_tokens: null, cost: null, source: 'unavailable' },
             session_handle: null,
-        })
+        }, redactor)
         return 0
     }
 
     if (existsSync(store.cancelMarkerPath(runId))) {
-        return finalizeCancelled(store, runId, request.endpoint, request.model, null, 'cancel requested before endpoint spawn')
+        return finalizeCancelled(store, runId, request.endpoint, request.model, null, 'cancel requested before endpoint spawn', redactor)
     }
 
     let registry: EndpointRegistry
@@ -115,11 +115,7 @@ async function main(): Promise<number> {
         // re-splits the shim's %* on spaces, so argv prompt delivery would
         // mangle the prompt. Refuse before anything is spawned.
         if (plan.resolved_from === 'cmd-shim' && manifest.command.prompt_delivery === 'argv') {
-            const note =
-                'cmd.exe shim cannot preserve argument boundaries for argv prompt delivery' +
-                ' (npm .cmd shims pass %* and re-split on spaces); repair: set' +
-                ` endpoints.overrides.${manifest.name}.bin in config.json to the native binary` +
-                ' or JS bundle, or install a native exe on PATH'
+            const note = cmdShimRefusalMessage(manifest.name, plan.endpoint_bin ?? manifest.detect.bin)
             await store.appendEvent(runId, redactor.redactJson({
                 ts: now(), type: 'spawn-refused', endpoint: manifest.name,
                 resolved_from: plan.resolved_from, prompt_delivery: manifest.command.prompt_delivery, note,
@@ -402,7 +398,7 @@ async function main(): Promise<number> {
             await store.appendEvent(runId, redactor.redactJson({
                 ts: now(), type: 'terminal', state: 'cancelled', exit_code: exitCode, signal, notes: cancelNotes,
             }) as RunEvent)
-            return finalizeCancelled(store, runId, request.endpoint, request.model, exitCode, note, {
+            return finalizeCancelled(store, runId, request.endpoint, request.model, exitCode, note, redactor, {
                 final_text: parsed.finalText,
                 evidence: {
                     deliverables,
@@ -446,7 +442,7 @@ async function main(): Promise<number> {
             },
             usage: usage ?? { input_tokens: null, output_tokens: null, cached_input_tokens: null, cost: null, source: 'unavailable' },
             session_handle: parsed.sessionId,
-        })
+        }, redactor)
         return 0
     } catch (err) {
         if (err instanceof ManifestError) return fail('MANIFEST_INVALID', err.message)
@@ -490,6 +486,7 @@ async function finalizeCancelled(
     model: string | null,
     exitCode: number | null,
     note: string,
+    redactor: ReturnType<typeof createRedactor>,
     settled: Omit<TerminalWrite, 'state' | 'exit_code'> = {
         final_text: '',
         evidence: {
@@ -506,7 +503,7 @@ async function finalizeCancelled(
         state: 'cancelled',
         exit_code: exitCode,
         ...settled,
-    })
+    }, redactor)
     return 0
 }
 
@@ -526,8 +523,8 @@ async function finalize(
     endpoint: string,
     model: string | null,
     write: TerminalWrite,
+    redactor: ReturnType<typeof createRedactor>,
 ): Promise<void> {
-    const redactor = createRedactor()
     const result = redactor.redactJson({
         schema_version: '1.0.0',
         run_id: runId,

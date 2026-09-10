@@ -8,7 +8,6 @@
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
-import { resolveBin } from '../engine/supervisor.js'
 import type { EndpointManifest } from './registry.js'
 
 export type SpawnSource = 'config-override' | 'path' | 'npm-exe' | 'npm-entry' | 'known-path' | 'cmd-shim'
@@ -186,6 +185,52 @@ function cmdShimPlan(shimPath: string, env: NodeJS.ProcessEnv, notes: string[]):
     }
 }
 
+/**
+ * Resolve a bare bin name against PATH; on Windows .EXE beats the rest of
+ * PATHEXT in each directory (Node >= 20.12 cannot spawn .cmd/.bat, EINVAL).
+ */
+export async function resolveBin(bin: string, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+    if (nodePath.isAbsolute(bin) || bin.includes('/') || bin.includes('\\')) {
+        return (await pathExists(bin)) ? bin : null
+    }
+    const pathEnv = env.PATH ?? env.Path ?? env.path ?? ''
+    const exts = process.platform === 'win32'
+        ? ['.EXE', ...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';')].filter(
+            (e, i, arr) => e && arr.findIndex((x) => x.toUpperCase() === e.toUpperCase()) === i,
+        )
+        : ['']
+    for (const dir of pathEnv.split(nodePath.delimiter)) {
+        if (!dir) continue
+        for (const ext of exts) {
+            const candidate = nodePath.join(dir, bin + ext.toLowerCase())
+            if (await pathExists(candidate)) return candidate
+            // PATHEXT entries and on-disk shims disagree on casing; try verbatim too
+            const verbatim = nodePath.join(dir, bin + ext)
+            if (verbatim !== candidate && (await pathExists(verbatim))) return verbatim
+        }
+    }
+    return null
+}
+
+async function pathExists(p: string): Promise<boolean> {
+    try {
+        await fs.access(p)
+        return true
+    } catch {
+        return false
+    }
+}
+
+/** The cmd-shim refusal text, shared by the CLI submit gate and the worker backstop (one vocabulary, one edit point). */
+export function cmdShimRefusalMessage(manifestName: string, shimBin: string): string {
+    return (
+        `endpoint "${manifestName}" resolves to a cmd.exe shim (${shimBin});` +
+        ' cmd.exe shims cannot preserve argument boundaries for argv prompt delivery' +
+        ' (npm .cmd shims pass %* and re-split on spaces — task text can smuggle flags).' +
+        ` Repair: set endpoints.overrides.${manifestName}.bin in config.json to the native binary or JS bundle,` +
+        ' or install the agent so a native exe is on PATH.'
+    )
+}
 /** Final argv for the plan; cmd-shim plans collapse everything into one escaped command line. */
 export function finalSpawnArgs(plan: SpawnPlan, args: string[]): string[] {
     if (plan.resolved_from !== 'cmd-shim') return [...plan.prefixArgs, ...args]

@@ -8,7 +8,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import { test } from 'node:test'
-import { resolveBin } from '../dist/engine/supervisor.js'
+import { resolveBin } from '../dist/endpoints/spawn.js'
 import {
     buildCmdLine,
     finalSpawnArgs,
