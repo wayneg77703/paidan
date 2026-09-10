@@ -4,7 +4,7 @@ description: 通过 paidan CLI 把任务委派给本机已安装的 AI CLI agent
 whenToUse: 需要把任务委派给本机 AI CLI agent 时使用本通道（run/get/cancel/list/models/doctor/probe），这是本机委派的唯一受管通道。
 ---
 
-# Kimi → paidan（派单）
+# 宿主 agent → paidan（派单）
 
 paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent 执行。stdout 恒为单个 JSON 信封（`{ok:true,...}` 或 `{ok:false,error:{code,message}}`），人类文本只在 stderr。没有 daemon：每个 run 由 detached worker 监督，磁盘 run store 是唯一真相源。
 
@@ -48,8 +48,8 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 - 永不把凭据搬进任务正文、参数或配置；端点用各 agent 自己的原生配置与调用方 env 运行，paidan 不代理、不暂存凭据。
 - paidan 不写任何 agent 的原生 home；缺原生设置时按 `doctor` 的 `repair_hint` 报告，不擅自改用户配置。
 - 模型/连接失败（配额、认证等）不跨连接 fallback：拒绝并报告，不自动换模型、换端点、升权。
-- 不传 `--model` 时生效值为 config `defaults.model` 或端点原生默认；需要核对时用 `paidan models --endpoint <name>` 查询。
+- 不传 `--model` 时生效值为 `--model ?? config defaults.models.<端点> ?? defaults.model ?? 端点原生默认`（不跨连接）；需要核对时用 `paidan models --endpoint <name>` 查询。
 
 ## 错误处理
 
-先读 `error.code` + `error.message`，不只看进程退出码。常见码：`ENDPOINT_UNKNOWN` / `ENDPOINT_DISABLED`（未在 config 启用）/ `PERMISSION_UNSUPPORTED` / `MODE_INVALID` / `TASK_REQUIRED` / `RUN_NOT_FOUND` / `CONFIG_INVALID` / `WORKER_SPAWN_FAILED`。端点相关问题先 `paidan doctor` 看探测状态与 `repair_hint`，再决定报告或修复。
+先读 `error.code` + `error.message`，不只看进程退出码。常见码：`ENDPOINT_UNKNOWN` / `ENDPOINT_DISABLED`（未在 config 启用）/ `PERMISSION_UNSUPPORTED` / `MODE_INVALID` / `TASK_REQUIRED` / `TASK_TOO_LONG`（argv 投递超长度上限，改 --task-file 或换 stdin 投递端点）/ `SPAWN_UNSUPPORTED`（端点只能经 cmd shim 解析且为 argv 投递，按 message 设 overrides.bin 或装原生 exe）/ `RUN_NOT_FOUND` / `CONFIG_INVALID` / `WORKER_SPAWN_FAILED`。端点相关问题先 `paidan doctor` 看探测状态与 `repair_hint`，再决定报告或修复。
