@@ -13,7 +13,13 @@ export interface PaidanConfig {
         /** per-endpoint machine overrides; bin may be a native binary or a JS bundle path */
         overrides: Record<string, { bin: string | null }>
     }
-    defaults: { endpoint: string | null; model: string | null; run_timeout_sec: number | null }
+    defaults: {
+        endpoint: string | null
+        model: string | null
+        /** per-endpoint default models; wins over `model` for its endpoint */
+        models: Record<string, string>
+        run_timeout_sec: number | null
+    }
     ttlDays: number
 }
 
@@ -29,7 +35,7 @@ export function effectiveRunTimeoutSec(flag: number | null, config: PaidanConfig
 
 const TOP_LEVEL_KEYS = new Set(['dataDir', 'endpoints', 'defaults', 'ttlDays'])
 const ENDPOINTS_KEYS = new Set(['enabled', 'overrides'])
-const DEFAULTS_KEYS = new Set(['endpoint', 'model', 'run_timeout_sec'])
+const DEFAULTS_KEYS = new Set(['endpoint', 'model', 'models', 'run_timeout_sec'])
 const OVERRIDE_KEYS = new Set(['bin'])
 
 /** Root for machine config and (by default) the data plane. PAIDAN_HOME overrides (tests, portability). */
@@ -56,7 +62,7 @@ function defaults(): PaidanConfig {
     return {
         dataDir: null,
         endpoints: { enabled: null, overrides: {} },
-        defaults: { endpoint: null, model: null, run_timeout_sec: null },
+        defaults: { endpoint: null, model: null, models: {}, run_timeout_sec: null },
         ttlDays: DEFAULT_TTL_DAYS,
     }
 }
@@ -150,6 +156,17 @@ export function loadConfig(configPath: string = defaultConfigPath()): PaidanConf
                 throw new Error('config key "defaults.model" must be a non-empty string')
             }
             out.defaults.model = df.model
+        }
+        if (df.models !== undefined) {
+            if (!df.models || typeof df.models !== 'object' || Array.isArray(df.models)) {
+                throw new Error('config key "defaults.models" must be an object keyed by endpoint name')
+            }
+            for (const [name, m] of Object.entries(df.models as Record<string, unknown>)) {
+                if (typeof m !== 'string' || m.length === 0) {
+                    throw new Error(`config key "defaults.models.${name}" must be a non-empty string`)
+                }
+                out.defaults.models[name] = m
+            }
         }
         if (df.run_timeout_sec !== undefined) {
             if (typeof df.run_timeout_sec !== 'number' || !Number.isFinite(df.run_timeout_sec) || df.run_timeout_sec < 0) {

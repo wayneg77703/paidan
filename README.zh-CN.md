@@ -20,7 +20,7 @@ CLI 的 stdout 恒为 JSON。没有 daemon：每个 run 由一个 detached worke
 
 ## 宿主接入
 
-宿主 AI agent 通过 CLI 驱动 paidan——没有插件体系。`paidan init` 会以勾选方式把 skill 文件（[`skills/paidan/SKILL.md`](skills/paidan/SKILL.md)）安装进每个探测到的宿主（`--yes` 非交互模式 = 装进所有探测到的宿主；已知宿主清单见 [`skills/hosts.json`](skills/hosts.json)）。也可以手工复制（Kimi Code：复制到用户级 `~/.kimi-code/skills/paidan/` 目录）。它教会宿主七个动词、权限预设语义和「证据优先」的终态判读规则。
+宿主 AI agent 通过 CLI 驱动 paidan——没有插件体系。`paidan init` 向导是全交互的：启用端点与安装 skill 的宿主都是复选框多选（空格勾选、回车确认；skill 文件见 [`skills/paidan/SKILL.md`](skills/paidan/SKILL.md)），默认端点用方向键菜单单选，**每个**启用端点都各自选默认模型（存为 `defaults.models.<端点>`；`--yes` 非交互模式 = 装进所有探测到的宿主并取每个端点发现的首个模型；已知宿主清单见 [`skills/hosts.json`](skills/hosts.json)）。也可以手工复制（Kimi Code：复制到用户级 `~/.kimi-code/skills/paidan/` 目录）。它教会宿主七个动词、权限预设语义和「证据优先」的终态判读规则。
 
 ## 它是什么 / 不是什么
 
@@ -37,7 +37,7 @@ paidan 是本机派单台（"派单" = dispatching an order）。它做三件事
 | 区 | 位置 | 内容 |
 |---|---|---|
 | 代码仓 | 本仓 | 零机器路径、零凭据 |
-| 机器配置 | `%APPDATA%\paidan\config.json` | 端点启用、默认值、数据目录覆盖、按端点的 bin 覆盖 |
+| 机器配置 | `%APPDATA%\paidan\config.json` | 端点启用、默认值（端点 + 按端点的默认模型）、数据目录覆盖、按端点的 bin 覆盖 |
 | 数据面 | `%APPDATA%\paidan\runs\` + `usage.db` + `models-cache/` | 每个 run 一个目录（request/state/events.jsonl/result）、usage 记账（provider / endpoint-ledger / unavailable，永不伪造）、模型发现缓存、TTL 自清理 |
 
 数据永不回流进代码仓。数据目录可通过配置搬走；没有任何东西钉死在一台机器上。

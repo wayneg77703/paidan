@@ -23,15 +23,19 @@ const INFO = [
     { name: 'zcode', detected: false, version: null, models: [] },
 ]
 
-test('--yes defaults: enable detected only, default = first detected + its first model', () => {
+test('--yes defaults: enable detected only, default = first detected; per-endpoint first models', () => {
     const answers = defaultInitAnswers(INFO)
     assert.deepEqual(answers.enabled, ['claude-code', 'codex', 'kimi-code'])
     assert.equal(answers.default_endpoint, 'claude-code')
     assert.equal(answers.default_model, null) // claude has no discovered models
+    assert.deepEqual(answers.models, { codex: 'gpt-5', 'kimi-code': 'kimi-for-coding/k3' })
     const cfg = buildInitConfig(INFO, answers)
     assert.deepEqual(cfg.endpoints.enabled, ['claude-code', 'codex', 'kimi-code'])
     const json = initConfigToJson(cfg)
-    assert.deepEqual(json, { endpoints: { enabled: ['claude-code', 'codex', 'kimi-code'] }, defaults: { endpoint: 'claude-code' } })
+    assert.deepEqual(json, {
+        endpoints: { enabled: ['claude-code', 'codex', 'kimi-code'] },
+        defaults: { endpoint: 'claude-code', models: { codex: 'gpt-5', 'kimi-code': 'kimi-for-coding/k3' } },
+    })
 })
 
 test('buildInitConfig rejects impossible answers', () => {
@@ -41,6 +45,24 @@ test('buildInitConfig rejects impossible answers', () => {
         () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', default_model: 'not-a-model' }),
         /not a discovered alias/,
     )
+    // per-endpoint models: must target an enabled endpoint and its own aliases
+    assert.throws(
+        () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', default_model: 'gpt-5', models: { 'kimi-code': 'k3' } }),
+        /not enabled/,
+    )
+    assert.throws(
+        () => buildInitConfig(INFO, { enabled: ['codex'], default_endpoint: 'codex', default_model: 'gpt-5', models: { codex: 'kimi-for-coding/k3' } }),
+        /not a discovered alias of codex/,
+    )
+    // null entries mean "native default" and pass validation
+    const cfg = buildInitConfig(INFO, {
+        enabled: ['codex', 'kimi-code'],
+        default_endpoint: 'codex',
+        default_model: 'gpt-5',
+        models: { codex: 'gpt-5', 'kimi-code': null },
+        skill_hosts: [],
+    })
+    assert.deepEqual(cfg.defaults.models, { codex: 'gpt-5' })
 })
 
 test('nothing detected -> empty enabled, null defaults, valid config', () => {
@@ -125,17 +147,41 @@ test('mergeInitConfig preserves machine-local keys across re-init', async () => 
     const { mergeInitConfig } = await import('../dist/engine/init-plan.js')
     const existing = {
         endpoints: { enabled: ['kimi-code'], overrides: { zcode: { bin: 'E:/custom/zcode.cjs' } } },
-        defaults: { endpoint: 'kimi-code' },
+        defaults: { endpoint: 'kimi-code', run_timeout_sec: 600 },
         run_timeout_sec: 600,
     }
     const merged = mergeInitConfig(existing, {
         endpoints: { enabled: ['kimi-code', 'codex'] },
-        defaults: { endpoint: 'codex', model: 'gpt-5.3-codex-spark' },
+        defaults: { endpoint: 'codex', model: 'gpt-5.3-codex-spark', models: {} },
     })
     assert.deepEqual(merged.endpoints.enabled, ['kimi-code', 'codex'])
     assert.deepEqual(merged.endpoints.overrides, { zcode: { bin: 'E:/custom/zcode.cjs' } })
-    assert.deepEqual(merged.defaults, { endpoint: 'codex', model: 'gpt-5.3-codex-spark' })
+    // wizard-owned defaults keys are replaced, machine-local keys inside defaults survive
+    assert.deepEqual(merged.defaults, { endpoint: 'codex', model: 'gpt-5.3-codex-spark', run_timeout_sec: 600 })
     assert.equal(merged.run_timeout_sec, 600)
+})
+
+test('mergeInitConfig clears stale wizard-owned defaults and replaces models wholesale', async () => {
+    const { mergeInitConfig } = await import('../dist/engine/init-plan.js')
+    const existing = {
+        endpoints: { enabled: ['codex', 'kimi-code'] },
+        defaults: { endpoint: 'codex', model: 'gpt-5', models: { codex: 'gpt-5', 'kimi-code': 'k3' }, run_timeout_sec: 900 },
+    }
+    // re-init: default moves to claude-code (no discovered models -> no model keys),
+    // kimi-code disabled -> its models entry must not survive
+    const merged = mergeInitConfig(existing, {
+        endpoints: { enabled: ['codex', 'claude-code'] },
+        defaults: { endpoint: 'claude-code', model: null, models: { codex: 'gpt-6' } },
+    })
+    assert.deepEqual(merged.defaults, { endpoint: 'claude-code', models: { codex: 'gpt-6' }, run_timeout_sec: 900 })
+    // nothing enabled at all -> wizard keys cleared, machine keys kept, empty defaults dropped
+    const cleared = mergeInitConfig(existing, { endpoints: { enabled: [] }, defaults: { endpoint: null, model: null, models: {} } })
+    assert.deepEqual(cleared.defaults, { run_timeout_sec: 900 })
+    const clearedAll = mergeInitConfig(
+        { endpoints: { enabled: ['codex'] }, defaults: { endpoint: 'codex', model: 'gpt-5' } },
+        { endpoints: { enabled: [] }, defaults: { endpoint: null, model: null, models: {} } },
+    )
+    assert.ok(!('defaults' in clearedAll))
 })
 
 test('CLI init --yes twice preserves endpoints.overrides written between runs', async () => {

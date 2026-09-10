@@ -66,6 +66,7 @@ import {
 } from './endpoints/registry.js'
 import { checkNativePreflight } from './endpoints/native-preflight.js'
 import { finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn, type SpawnPlan } from './endpoints/spawn.js'
+import { checkboxSelect, menuSelect, PromptAbort, rawSelectSupported } from './tty-select.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -129,6 +130,11 @@ function pickEndpoint(ctx: Ctx, flag: string | undefined): EndpointManifest {
         throw new CliError('ENDPOINT_DISABLED', `endpoint "${name}" is not in endpoints.enabled`)
     }
     return manifest
+}
+
+/** Model selection: --model flag ?? per-endpoint default ?? global default. Never cross-connection. */
+function resolveModel(ctx: Ctx, endpoint: string, flag: string | undefined): string | null {
+    return flag ?? ctx.config.defaults.models[endpoint] ?? ctx.config.defaults.model
 }
 
 async function waitForTerminal(
@@ -250,7 +256,7 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
             task_file: taskFile,
             task_text: hint.text,
             mode,
-            model: values.model ?? ctx.config.defaults.model,
+            model: resolveModel(ctx, manifest.name, values.model),
             effort: values.effort ?? null,
             resume_session: values.resume ?? null,
             run_timeout_sec: runTimeoutSec,
@@ -285,7 +291,7 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
         task_file: taskFile,
         task_text: taskText,
         mode,
-        model: values.model ?? ctx.config.defaults.model,
+        model: resolveModel(ctx, manifest.name, values.model),
         effort: values.effort ?? null,
         resume_session: values.resume ?? null,
         run_timeout_sec: runTimeoutSec,
@@ -523,7 +529,7 @@ async function verbModels(ctx: Ctx, args: string[]): Promise<void> {
             version,
             source: manifest.models?.parse ?? 'parser-module',
             models,
-            notes: [...notes, 'selection = config.json defaults.model; no cross-connection fallback'],
+            notes: [...notes, 'selection = --model ?? config.json defaults.models[endpoint] ?? defaults.model; no cross-connection fallback'],
         }
         // success writes through, even with an empty model list (no borrowing)
         await cache.write(entry)
@@ -670,7 +676,7 @@ async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
                 task_file: null,
                 task_text: task,
                 mode: opts.mode ?? probePreset ?? 'workspace-write',
-                model: ctx.config.defaults.model,
+                model: resolveModel(ctx, manifest.name, undefined),
                 effort: null,
                 resume_session: opts.resume ?? null,
                 run_timeout_sec: effectiveRunTimeoutSec(null, ctx.config),
@@ -927,7 +933,17 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
     if (values.yes) {
         answers = defaultInitAnswers(info, hostInfo.hosts.filter((h) => h.detected).map((h) => h.name))
     } else {
-        answers = await promptInitAnswers(info, hostInfo.hosts)
+        try {
+            answers = await promptInitAnswers(info, hostInfo.hosts)
+        } catch (err) {
+            if (err instanceof PromptAbort) {
+                process.stdout.write(
+                    JSON.stringify({ ok: false, error: { code: 'INIT_ABORTED', message: 'init aborted by user (Ctrl+C); nothing written' } }) + '\n',
+                )
+                return 130
+            }
+            throw err
+        }
     }
     const cfg = buildInitConfig(info, answers)
     const selectedHosts = selectSkillHosts(hostInfo.hosts, answers.skill_hosts)
@@ -962,9 +978,75 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
 }
 
 async function promptInitAnswers(info: InitEndpointInfo[], hosts: HostInfo[]): Promise<InitAnswers> {
+    process.stderr.write('paidan init — detection complete. Human output is on stderr; stdout stays JSON.\n\n')
+    if (rawSelectSupported()) return promptInitRaw(info, hosts)
+    return promptInitLine(info, hosts)
+}
+
+/** Raw-mode wizard: checkbox multi-selects (space toggles, enter confirms) and arrow-key menus. */
+async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[]): Promise<InitAnswers> {
+    const detectedEps = info.filter((e) => e.detected)
+    for (const ep of info) {
+        if (!ep.detected) {
+            process.stderr.write(`  ${ep.name}  NOT detected — skipped${ep.repair ? `. Repair: ${ep.repair}` : ''}\n`)
+        }
+    }
+    let enabled: string[] = []
+    if (detectedEps.length > 0) {
+        const picked = await checkboxSelect(
+            'Enable endpoints',
+            detectedEps.map((ep) => ({
+                label: `${ep.name}  ${ep.version ?? 'unknown version'}`,
+                hint: ep.models.length > 0 ? `${ep.models.length} models` : undefined,
+                checked: true,
+            })),
+        )
+        enabled = picked.map((i) => (detectedEps[i] as InitEndpointInfo).name)
+    }
+    let defaultEndpoint: string | null = null
+    let defaultModel: string | null = null
+    const models: Record<string, string | null> = {}
+    if (enabled.length > 0) {
+        defaultEndpoint = enabled[await menuSelect('Default endpoint', enabled.map((name) => ({ label: name })))] as string
+        // every enabled endpoint gets its own default model
+        for (const name of enabled) {
+            const found = info.find((e) => e.name === name)?.models ?? []
+            if (found.length === 0) {
+                process.stderr.write(`(no discovered models for ${name}; native default will be used)\n`)
+            } else if (found.length === 1) {
+                models[name] = (found[0] as { alias: string }).alias
+                process.stderr.write(`Default model for ${name}: ${(found[0] as { alias: string }).alias} (only discovered model)\n`)
+            } else {
+                const idx = await menuSelect(
+                    `Default model for ${name}`,
+                    found.map((m) => ({ label: m.alias, hint: m.connection ?? undefined })),
+                )
+                models[name] = (found[idx] as { alias: string }).alias
+            }
+        }
+        defaultModel = models[defaultEndpoint] ?? null
+    }
+    const skillHosts: string[] = []
+    const detectedHosts = hosts.filter((h) => h.detected)
+    if (detectedHosts.length > 0) {
+        const picked = await checkboxSelect(
+            'Install skill into hosts',
+            detectedHosts.map((h) => ({
+                label: h.name,
+                hint: `${h.skills_dir}${h.installed ? ' — already installed' : ''}`,
+                checked: true,
+            })),
+        )
+        skillHosts.push(...picked.map((i) => (detectedHosts[i] as HostInfo).name))
+    }
+    return { enabled, default_endpoint: defaultEndpoint, default_model: defaultModel, models, skill_hosts: skillHosts }
+}
+
+/** Line-based fallback for when stderr is not a TTY (raw-mode widgets need it). */
+async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[]): Promise<InitAnswers> {
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
     try {
-        process.stderr.write('paidan init — detection complete. Human output is on stderr; stdout stays JSON.\n\nEndpoints:\n')
+        process.stderr.write('Endpoints:\n')
         const detectedEps: InitEndpointInfo[] = []
         for (const ep of info) {
             if (ep.detected) {
@@ -981,15 +1063,23 @@ async function promptInitAnswers(info: InitEndpointInfo[], hosts: HostInfo[]): P
         }
         let defaultEndpoint: string | null = null
         let defaultModel: string | null = null
+        const models: Record<string, string | null> = {}
         if (enabled.length > 0) {
             defaultEndpoint = await pickOne(rl, 'Default endpoint', enabled, enabled[0] as string)
-            const models = info.find((e) => e.name === defaultEndpoint)?.models ?? []
-            if (models.length > 0) {
-                const aliases = models.map((m) => m.alias)
-                defaultModel = await pickOne(rl, `Default model for ${defaultEndpoint}`, aliases, aliases[0] as string)
-            } else {
-                process.stderr.write(`(no discovered models for ${defaultEndpoint}; native default will be used)\n`)
+            // every enabled endpoint gets its own default model
+            for (const name of enabled) {
+                const found = info.find((e) => e.name === name)?.models ?? []
+                const aliases = found.map((m) => m.alias)
+                if (aliases.length === 0) {
+                    process.stderr.write(`(no discovered models for ${name}; native default will be used)\n`)
+                } else if (aliases.length === 1) {
+                    models[name] = aliases[0] as string
+                    process.stderr.write(`Default model for ${name}: ${aliases[0] as string} (only discovered model)\n`)
+                } else {
+                    models[name] = await pickOne(rl, `Default model for ${name}`, aliases, aliases[0] as string)
+                }
             }
+            defaultModel = models[defaultEndpoint] ?? null
         }
         const skillHosts: string[] = []
         const detectedHosts = hosts.filter((h) => h.detected)
@@ -1001,7 +1091,7 @@ async function promptInitAnswers(info: InitEndpointInfo[], hosts: HostInfo[]): P
             const picked = await pickMulti(rl, 'Install skill into hosts', detectedHosts.length)
             skillHosts.push(...picked.map((i) => (detectedHosts[i] as HostInfo).name))
         }
-        return { enabled, default_endpoint: defaultEndpoint, default_model: defaultModel, skill_hosts: skillHosts }
+        return { enabled, default_endpoint: defaultEndpoint, default_model: defaultModel, models, skill_hosts: skillHosts }
     } finally {
         rl.close()
     }
