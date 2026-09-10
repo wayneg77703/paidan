@@ -9,7 +9,7 @@ This repo is maintained mostly by AI agents. This file is your onboarding: the i
 3. **Never touch user credentials.** No copying, staging, or proxying of credential material. Endpoints run against the agent's own native config.
 4. **paidan never writes to an agent's native home.** If a required native setting is missing, refuse with a doctor-style repair hint; do not silently patch user config.
 5. **Data never flows into the repo.** The repo contains zero machine paths and zero credentials. Machine config lives in `%APPDATA%\paidan\`.
-6. **Zero runtime dependencies.** Node stdlib only (usage DB = `node:sqlite`). DevDependencies limited to `typescript` + `@types/node`.
+6. **Zero runtime dependencies.** Node stdlib only (usage DB = `node:sqlite`). DevDependencies limited to `typescript` + `@types/node`. Consequence: cancel is `taskkill /T /F` on Windows — Node cannot create Job Objects without FFI, so orphaned grandchildren after a force-kill are an accepted limitation, not a planned feature.
 7. **All CLI output is JSON** on stdout; human prose goes to stderr.
 8. **No daemon, no telemetry, no auto-update.**
 

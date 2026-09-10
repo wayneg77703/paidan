@@ -1,7 +1,8 @@
 // Detached worker launch + explicit process-tree termination.
 // Submit spawns `node dist/worker.js <run_id>` detached; the CLI never babysits.
-// Cancel on Windows is a taskkill /T transitional implementation —
-// TODO: replace with Windows Job Object-based reaping (planned, documented gap).
+// Cancel on Windows is taskkill /T /F, permanently: Node stdlib cannot create
+// Job Objects (no FFI) and zero-dependency is invariant 6 — orphaned
+// grandchildren after a force-kill are an accepted limitation (contracts §5).
 
 import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
