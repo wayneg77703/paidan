@@ -57,14 +57,14 @@
     "fs.read": {
       "status": "supported",
       "via": "view_file requires a native read_file allow rule (request-review default auto-denies it headless, verified 2026-09-10); on Windows 1.2.0 only the unscoped form read_file(*) matched — every scoped path form tested (drive-stripped dir, dir/*, full-drive, backslash) failed to authorize view_file, an upstream limitation to revisit on upgrades. grep_search/list_dir work unlisted. Production native settings carry read_file(*).",
-      "verified_at": "2026-09-10",
-      "version": "1.2.0"
+      "verified_at": "2026-09-11",
+      "version": "1.2.1"
     },
     "fs.write": {
       "status": "soft",
       "via": "RECALIBRATED 2026-09-10 on agy 1.2.0 (supersedes the 1.1.28 scoped-rule story AND the same-day intermediate 'unscoped-only' note, which was mechanism-confounded): write_to_file is artifact-confined upstream — a non-artifact target dies at permission conversion ('not a valid artifact path; artifacts must be in brain/<conversation>/', invalid_args) BEFORE any write_file rule is evaluated, so write_file allow rules are irrelevant to deliverable writes. Deliverables actually ride run_command (shell), gated by command(*); and run_command starts in agy's own scratch dir (~/.gemini/antigravity-cli/scratch, pwd-verified), NOT the run cwd — models must be told absolute paths (paidan injects a cwd hint into the task text, command.prompt_cwd_hint). SOFT because deliverable writes are shell-ridden and not path-governed; reliability depends on the model using absolute paths. read-only (--mode plan) produced no writes (P2 pass on 1.2.0). Evidence: 4-variant rule matrix + 3 raw-stream direct runs + brain transcript of run_20260910_ca92a967.",
-      "verified_at": "2026-09-10",
-      "version": "1.2.0"
+      "verified_at": "2026-09-11",
+      "version": "1.2.1"
     },
     "shell.exec": {
       "status": "soft",
@@ -83,11 +83,11 @@
       "verified_at": "2026-09-10"
     },
     "presets": {
-      "read-only": "supported",
+      "read-only": "soft",
       "workspace-write": "supported",
       "unattended": "supported"
     },
-    "presets_notes": "Mapping: read-only=--mode plan, workspace-write=--mode accept-edits, unattended=--mode accept-edits (+ native command(*) rule). 1.2.0 reality: write_to_file is artifact-confined upstream (brain/<conversation>/ only); deliverable writes ride run_command (shell, command(*) gated) whose start dir is agy's scratch (~/.gemini/antigravity-cli/scratch), so paidan appends a cwd/absolute-path hint to the task text (prompt_cwd_hint). Native settings are user-maintained; paidan never writes them (invariant 4). shell.exec and (since 1.2.0) fs.write are both soft: the shell leg is neither path-anchored nor path-governed; unattended submits carry a soft warning.",
+    "presets_notes": "Mapping: read-only=--mode plan, workspace-write=--mode accept-edits, unattended=--mode accept-edits (+ native command(*) rule). 1.2.0 reality: write_to_file is artifact-confined upstream (brain/<conversation>/ only); deliverable writes ride run_command (shell, command(*) gated) whose start dir is agy's scratch (~/.gemini/antigravity-cli/scratch), so paidan appends a cwd/absolute-path hint to the task text (prompt_cwd_hint). Native settings are user-maintained; paidan never writes them (invariant 4). shell.exec and (since 1.2.0) fs.write are both soft: the shell leg is neither path-anchored nor path-governed; unattended submits carry a soft warning. [2026-09-11, agy 1.2.1: probe P2 came back indeterminate — the read-only probe run was cancelled before terminal evidence (no attributable refusal); plan-mode headless may now wait instead of auto-denying as it did on 1.1.28/1.2.0 (t2a). Demoted to soft pending a dedicated recheck. P1/P3 pass on 1.2.1.]",
     "denial_evidence": {
       "status": "supported",
       "via": "three in-band channels, all live-verified 2026-09-10: (1) result.denied_actions[] e.g. {action:write_file,display_name:WriteToFile} for ask/plan auto-denies; (2) step_update state=ERROR tool_info.error TOOL_ERROR messages ('permission check failed ... Matches user-configured deny rule', 'user denied permission ...') for explicit rules; (3) stderr 'jetski: no output produced — a tool required the \"<action>\" permission ... auto-denied'. Empty response with SUCCESS is a legal terminal shape and stays evidence, not automatic failure",
@@ -103,8 +103,8 @@
     ],
     "cross_process": true,
     "notes": "Session handle = conversation_id (UUID) from the init/result events. Cross-process resume via --conversation <id> verified 2026-09-10 (1.2.0): recalled prior content exactly, and resolution is machine-wide — the same id resumed from a DIFFERENT cwd too (supersedes the 2026-09-09 probe report's cwd-scoped assumption for explicit ids). --continue/-c picks the most recent conversation of the current cwd (verified). mode_args are re-spliced on resume (no resume_argv): --mode and --conversation coexist in one argv (suite adapter shape; a resumed run re-tiers from the new invocation). Concurrent resume of the same conversation was not probed; treat as forbidden (transcript interleaving, claude-analog).",
-    "verified_at": "2026-09-10",
-    "version": "1.2.0"
+    "verified_at": "2026-09-11",
+    "version": "1.2.1"
   },
   "models": {
     "command": [
