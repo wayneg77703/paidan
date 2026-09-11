@@ -38,7 +38,6 @@ test('full lifecycle: init -> assistant -> result yields session, result text, p
     p.acceptStdoutLine(resultLine())
     const r = p.finish('', '')
     assert.equal(r.sessionId, '11111111-2222-3333-4444-555555555555')
-    assert.equal(r.resumeHint, 'claude --resume 11111111-2222-3333-4444-555555555555')
     // result event text is authoritative over accumulated assistant text
     assert.equal(r.finalText, 'DONE')
     assert.equal(r.degraded, false)

@@ -21,25 +21,19 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { UsageSummary } from '../engine/types.js'
-import type { DiscoverModelsResult, EndpointStreamParser, ModelEntry } from './parser-api.js'
+import type { DiscoverModelsResult, EndpointParseResult, EndpointStreamParser, ModelEntry } from './parser-api.js'
 import { EndpointRegistry } from './registry.js'
 import { finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn } from './spawn.js'
 
 const execFileAsync = promisify(execFile)
 
-export interface OpencodeParseResult {
-    finalText: string
-    sessionId: string | null
-    resumeHint: string | null
-    /** null = no provable usage (never fabricate zeros) */
-    usage: UsageSummary | null
+export interface OpencodeParseResult extends EndpointParseResult {
+/** null = no provable usage (never fabricate zeros) */
     /** in-band type:error events double as refusal evidence (still warnings too) */
-    refusals: string[]
-    degraded: boolean
-    warnings: string[]
 }
 
 export interface OpencodeRunParser extends EndpointStreamParser {
+
     finish(tailStdout: string, tailStderr: string): OpencodeParseResult
 }
 
@@ -145,7 +139,6 @@ export function createOpencodeRunParser(): OpencodeRunParser {
             return {
                 finalText: finalParts.join('\n'),
                 sessionId,
-                resumeHint: sessionId ? `opencode run --session ${sessionId}` : null,
                 usage,
                 refusals,
                 degraded,

@@ -13,22 +13,16 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import type { UsageSummary } from '../engine/types.js'
-import type { DiscoverModelsResult, EndpointStreamParser, LedgerReadResult, NativeDefaults } from './parser-api.js'
+import type { DiscoverModelsResult, EndpointParseResult, EndpointStreamParser, LedgerReadResult, NativeDefaults } from './parser-api.js'
 import { captureKimiLedgerCursor, readKimiLedgerUsage, type KimiLedgerCursor } from './kimi-ledger.js'
 
-export interface KimiParseResult {
-    finalText: string
-    sessionId: string | null
-    resumeHint: string | null
-    /** print stdout carries no usage rows; the worker reads the native ledger (kimi-ledger.ts) */
-    usage: UsageSummary | null
+export interface KimiParseResult extends EndpointParseResult {
+/** print stdout carries no usage rows; the worker reads the native ledger (kimi-ledger.ts) */
     /** kimi's refusal evidence is stderr-carried (detectKimiRefusals); none in-band */
-    refusals: string[]
-    degraded: boolean
-    warnings: string[]
 }
 
 export interface KimiPrintParser extends EndpointStreamParser {
+
     finish(tailStdout: string, tailStderr: string): KimiParseResult
 }
 
@@ -41,7 +35,6 @@ const SAFETY_RE = /failed to run prompt:\s*Provider safety policy blocked(?: the
 export function createKimiPrintParser(): KimiPrintParser {
     let finalText = ''
     let sessionId: string | null = null
-    let resumeHint: string | null = null
     let stderrSessionId: string | null = null
     let degraded = false
     const warnings: string[] = []
@@ -63,9 +56,9 @@ export function createKimiPrintParser(): KimiPrintParser {
             finalText += o.content
         } else if (o.role === 'meta' && o.type === 'session.resume_hint' && typeof o.session_id === 'string') {
             sessionId = o.session_id
-            if (typeof o.command === 'string') resumeHint = o.command
         }
-        // every other row is recorded by the caller's event log, not by the parser
+        // other rows are ignored by the parser; the worker logs semantic events and
+        // stdout chunk metadata, not every raw row
     }
 
     function parseStderrLine(line: string): void {
@@ -89,7 +82,6 @@ export function createKimiPrintParser(): KimiPrintParser {
             return {
                 finalText,
                 sessionId: sessionId ?? stderrSessionId,
-                resumeHint,
                 usage: null,
                 refusals: [],
                 degraded,

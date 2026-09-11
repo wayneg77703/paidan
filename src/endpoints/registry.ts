@@ -19,7 +19,6 @@ export interface CapabilityStatus {
 export interface EndpointManifest {
     schema_version: '1.0.0'
     name: string
-    family?: string
     detect: {
         bin: string
         version_args?: string[]
@@ -65,7 +64,6 @@ export interface EndpointManifest {
     models?: {
         command: string[] | null
         parse?: string
-        connections?: unknown[]
     }
     /** effort/intensity selection: delivered via argv (arg) and/or env; a value is spliced whenever one is configured (absent = no effort selection for this endpoint) */
     effort?: {
@@ -74,7 +72,6 @@ export interface EndpointManifest {
         arg?: string[]
         /** env-delivered form (values contain {effort}); applied on top of command.env/mode_env — e.g. kimi KIMI_MODEL_THINKING_EFFORT, which has no CLI flag */
         env?: Record<string, string>
-        default?: string | null
         status?: string
         verified_at?: string
         version?: string
@@ -513,14 +510,14 @@ export async function discoverAndCacheModels(
     if (!mod.discoverModels) return null
     const found = await mod.discoverModels({ configBin })
     const safe = filterSafeAliases(found.models)
-    const notes = [...found.notes, 'selection = --model ?? config.json defaults.models[endpoint] ?? defaults.model; no cross-connection fallback']
+    const notes = [...found.notes, 'selection = --model ?? config.json defaults.models[endpoint] ?? endpoint native default; no cross-connection fallback']
     if (safe.dropped > 0) notes.push(`dropped ${safe.dropped} alias(es) failing the argv-safety charset`)
     const entry: CachedModels = {
         schema_version: '1.0.0',
         endpoint: manifest.name,
         fetched_at: new Date().toISOString(),
         version,
-        source: manifest.models.parse ?? 'parser-module',
+        source: manifest.models.parse,
         models: safe.models,
         notes,
     }

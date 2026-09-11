@@ -13,24 +13,18 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import type { UsageSummary } from '../engine/types.js'
-import type { DiscoverModelsResult, EndpointStreamParser, NativeDefaults } from './parser-api.js'
+import type { DiscoverModelsResult, EndpointParseResult, EndpointStreamParser, NativeDefaults } from './parser-api.js'
 
 const REQUIRED_ENVELOPE_FIELDS = ['sessionId', 'traceId', 'turnId', 'usage', 'projection', 'response'] as const
 const MAX_TURNS = 12
 
-export interface ZcodeParseResult {
-    finalText: string
-    sessionId: string | null
-    resumeHint: string | null
-    /** envelope usage mapped to provider-source tokens; null when absent/invalid */
-    usage: UsageSummary | null
+export interface ZcodeParseResult extends EndpointParseResult {
+/** envelope usage mapped to provider-source tokens; null when absent/invalid */
     /** no in-band refusal shape observed for zcode 0.16.5; always empty */
-    refusals: string[]
-    degraded: boolean
-    warnings: string[]
 }
 
 export interface ZcodePrintParser extends EndpointStreamParser {
+
     finish(tailStdout: string, tailStderr: string): ZcodeParseResult
 }
 
@@ -119,13 +113,12 @@ export function createZcodePrintParser(): ZcodePrintParser {
             const full = (stdoutLines.join('\n') + (tailStdout ? `\n${tailStdout}` : '')).replace(/^\uFEFF/, '').trim()
             if (full.length === 0) {
                 // startup/auth failures print nothing to stdout; the exit code decides
-                return { finalText: '', sessionId: null, resumeHint: null, usage: null, refusals: [], degraded, warnings }
+                return { finalText: '', sessionId: null, usage: null, refusals: [], degraded, warnings }
             }
             const parsed = parseEnvelope(full)
             return {
                 finalText: parsed.finalText,
                 sessionId: parsed.sessionId,
-                resumeHint: parsed.sessionId ? `zcode --resume ${parsed.sessionId}` : null,
                 usage: parsed.usage,
                 refusals: [],
                 degraded,

@@ -526,7 +526,7 @@ interface TerminalWrite {
     session_handle: string | null
 }
 
-/** result.json once, state transition, usage row — redacted before hitting disk. */
+/** result.json once, state transition, usage row — redacted before hitting disk. State and usage derive from the WINNING result record: when the CLI's cancel fallback settled result.json first, this side adopts it instead of writing its own state over it (codex F2). */
 async function finalize(
     store: RunStore,
     runId: string,
@@ -535,7 +535,7 @@ async function finalize(
     write: TerminalWrite,
     redactor: ReturnType<typeof createRedactor>,
 ): Promise<void> {
-    const result = redactor.redactJson({
+    const draft = redactor.redactJson({
         schema_version: '1.0.0',
         run_id: runId,
         state: write.state,
@@ -546,40 +546,50 @@ async function finalize(
         session_handle: write.session_handle,
         terminal_at: now(),
     }) as unknown as RunResult
+    let winner = draft
+    let own = true
     try {
-        await store.writeResult(result)
+        ;({ winner, own } = await store.settleResult(draft))
     } catch (err) {
         await store.appendEvent(runId, {
-            ts: now(), type: 'worker-error', note: `writeResult failed: ${err instanceof Error ? err.message : String(err)}`,
+            ts: now(), type: 'worker-error', note: `settleResult failed: ${err instanceof Error ? err.message : String(err)}`,
+        })
+    }
+    if (!own) {
+        await store.appendEvent(runId, {
+            ts: now(), type: 'note', note: `result.json already settled as ${winner.state}; adopting it (this side drafted ${write.state})`,
         })
     }
     const current = await store.readState(runId)
     if (current && !isTerminal(current.state)) {
         try {
-            await store.writeState(transitionRecord(current, write.state, result.terminal_at))
+            await store.writeState(transitionRecord(current, winner.state, winner.terminal_at))
         } catch (err) {
             await store.appendEvent(runId, {
-                ts: now(), type: 'worker-error', note: `state transition to ${write.state} failed: ${err instanceof Error ? err.message : String(err)}`,
+                ts: now(), type: 'worker-error', note: `state transition to ${winner.state} failed: ${err instanceof Error ? err.message : String(err)}`,
             })
         }
     }
-    try {
-        const db = new UsageDb(nodePath.join(store.dataDir, 'usage.db'))
-        db.record({
-            run_id: runId,
-            endpoint,
-            connection: model && model.includes('/') ? model.split('/')[0] ?? null : null,
-            model,
-            input_tokens: write.usage.input_tokens,
-            cached_input_tokens: write.usage.cached_input_tokens,
-            output_tokens: write.usage.output_tokens,
-            cost: write.usage.cost,
-            source: write.usage.source,
-            recorded_at: result.terminal_at,
-        })
-        db.close()
-    } catch {
-        await store.appendEvent(runId, { ts: now(), type: 'worker-error', note: 'usage.db write failed' }).catch(() => {})
+    if (own) {
+        // usage is this side's own settlement; a losing drafter must not bill its numbers
+        try {
+            const db = new UsageDb(nodePath.join(store.dataDir, 'usage.db'))
+            db.record({
+                run_id: runId,
+                endpoint,
+                connection: model && model.includes('/') ? model.split('/')[0] ?? null : null,
+                model,
+                input_tokens: winner.usage.input_tokens,
+                cached_input_tokens: winner.usage.cached_input_tokens,
+                output_tokens: winner.usage.output_tokens,
+                cost: winner.usage.cost,
+                source: winner.usage.source,
+                recorded_at: winner.terminal_at,
+            })
+            db.close()
+        } catch {
+            await store.appendEvent(runId, { ts: now(), type: 'worker-error', note: 'usage.db write failed' }).catch(() => {})
+        }
     }
 }
 

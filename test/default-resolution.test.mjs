@@ -91,15 +91,15 @@ test('loadConfig: defaults.models parses; non-string entries and typos are hard 
     }
 })
 
-test('run resolves --model ?? defaults.models[endpoint] ?? defaults.model', async () => {
+test('run resolves --model ?? defaults.models[endpoint] ?? native; the global defaults.model key is gone from the schema', async () => {
     const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-models-'))
     try {
         const { work, home, env } = await mkEnv(root)
         await fs.writeFile(nodePath.join(home, 'config.json'), JSON.stringify({
             endpoints: { enabled: ['fake-sleeper'] },
-            defaults: { endpoint: 'fake-sleeper', model: 'global-m', models: { 'fake-sleeper': 'per-ep-m' } },
+            defaults: { endpoint: 'fake-sleeper', models: { 'fake-sleeper': 'per-ep-m' } },
         }))
-        // per-endpoint entry wins over the global default
+        // per-endpoint entry applies
         const run1 = await paidan(env, ['run', '--endpoint', 'fake-sleeper', '--cwd', work, '--task', 'x'])
         assert.equal(run1.ok, true, JSON.stringify(run1))
         const req1 = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run1.run_id, 'request.json'), 'utf8'))
@@ -111,16 +111,26 @@ test('run resolves --model ?? defaults.models[endpoint] ?? defaults.model', asyn
         const req2 = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run2.run_id, 'request.json'), 'utf8'))
         assert.equal(req2.model, 'flag-m')
         await paidan(env, ['cancel', run2.run_id])
-        // without a per-endpoint entry the global default still applies
+        // no per-endpoint entry -> native default (null), never a global fallback
         await fs.writeFile(nodePath.join(home, 'config.json'), JSON.stringify({
             endpoints: { enabled: ['fake-sleeper'] },
-            defaults: { endpoint: 'fake-sleeper', model: 'global-m' },
+            defaults: { endpoint: 'fake-sleeper' },
         }))
         const run3 = await paidan(env, ['run', '--endpoint', 'fake-sleeper', '--cwd', work, '--task', 'x'])
         assert.equal(run3.ok, true, JSON.stringify(run3))
         const req3 = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run3.run_id, 'request.json'), 'utf8'))
-        assert.equal(req3.model, 'global-m')
+        assert.equal(req3.model, null)
         await paidan(env, ['cancel', run3.run_id])
+        // the removed global key strips with a warning (migration), never applies
+        await fs.writeFile(nodePath.join(home, 'config.json'), JSON.stringify({
+            endpoints: { enabled: ['fake-sleeper'] },
+            defaults: { endpoint: 'fake-sleeper', model: 'global-m' },
+        }))
+        const run4 = await paidan(env, ['run', '--endpoint', 'fake-sleeper', '--cwd', work, '--task', 'x'])
+        assert.equal(run4.ok, true, JSON.stringify(run4))
+        const req4 = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run4.run_id, 'request.json'), 'utf8'))
+        assert.equal(req4.model, null)
+        await paidan(env, ['cancel', run4.run_id])
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }
@@ -131,8 +141,12 @@ test('loadConfig: defaults.effort / defaults.efforts parse; bad shapes are hard 
     try {
         const p = nodePath.join(root, 'config.json')
         await fs.writeFile(p, JSON.stringify({ defaults: { effort: 'high', efforts: { omp: 'max' } } }))
+        // the global effort key was removed from the schema — strips with a warning (migration), value never applies
+        const migrated = loadConfig(p)
+        assert.equal('effort' in migrated.defaults, false)
+        assert.deepEqual(migrated.defaults.efforts, { omp: 'max' })
+        await fs.writeFile(p, JSON.stringify({ defaults: { efforts: { omp: 'max' } } }))
         const cfg = loadConfig(p)
-        assert.equal(cfg.defaults.effort, 'high')
         assert.deepEqual(cfg.defaults.efforts, { omp: 'max' })
         await fs.writeFile(p, JSON.stringify({ defaults: { efforts: { omp: 5 } } }))
         assert.throws(() => loadConfig(p), /defaults\.efforts\.omp/)
@@ -145,13 +159,13 @@ test('loadConfig: defaults.effort / defaults.efforts parse; bad shapes are hard 
     }
 })
 
-test('run resolves --effort ?? defaults.efforts[endpoint] ?? defaults.effort; bad values rejected at submit', async () => {
+test('run resolves --effort ?? defaults.efforts[endpoint] ?? native; bad values rejected at submit', async () => {
     const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-effort-'))
     try {
         const { work, home, env } = await mkEnv(root)
         await fs.writeFile(nodePath.join(home, 'config.json'), JSON.stringify({
             endpoints: { enabled: ['fake-sleeper'] },
-            defaults: { endpoint: 'fake-sleeper', effort: 'low', efforts: { 'fake-sleeper': 'high' } },
+            defaults: { endpoint: 'fake-sleeper', efforts: { 'fake-sleeper': 'high' } },
         }))
         // per-endpoint entry wins
         const run1 = await paidan(env, ['run', '--endpoint', 'fake-sleeper', '--cwd', work, '--task', 'x'])
@@ -227,11 +241,11 @@ test('run with a configured model against an endpoint without model_arg is MODEL
             PAIDAN_DATA_DIR: nodePath.join(root, 'data'),
             PAIDAN_ENDPOINTS_DIR: endpointsDir,
         }
-        // a global defaults.model poisons endpoints that cannot take one headless —
+        // a per-endpoint default against an endpoint that cannot take a model headless —
         // the gate must name the repair, not leak a ManifestError flavor
         await fs.writeFile(nodePath.join(home, 'config.json'), JSON.stringify({
             endpoints: { enabled: ['fake-nomodel'] },
-            defaults: { endpoint: 'fake-nomodel', model: 'some-model' },
+            defaults: { endpoint: 'fake-nomodel', models: { 'fake-nomodel': 'some-model' } },
         }))
         const res = await paidan(env, ['run', '--endpoint', 'fake-nomodel', '--cwd', work, '--task', 'x'])
         assert.equal(res.ok, false)

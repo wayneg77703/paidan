@@ -130,28 +130,41 @@ export function planEndpointDefaultQuestions(ep: InitEndpointInfo, config: Paida
     const name = ep.name
     const aliases = ep.models.map((m) => m.alias)
     const nativeModelLabel = nativeModelLabelFor(ep.native?.model)
-    const existingModel = config.defaults.models[name] ?? (name === config.defaults.endpoint ? config.defaults.model : null)
+    const existingModel = config.defaults.models[name] ?? null
     let model: EndpointDefaultQuestions['model']
-    if (ep.model_selectable === false || aliases.length === 0) {
-        // nothing to ask: the native config owns the model (no headless selection,
-        // or discovery found nothing — an override without a menu entry would be
-        // a silent behavior change, so a found-nothing run keeps/stays native)
-        model = { kind: ep.model_selectable === false ? 'skip-no-selection' : 'skip-none' }
+    if (ep.model_selectable === false) {
+        model = { kind: 'skip-no-selection' }
+    } else if (aliases.length === 0) {
+        if (existingModel) {
+            // discovery came back empty but a hand-set default exists — silently
+            // dropping it would lose config the user wrote (codex F3); ask
+            // keep-vs-native instead, preselecting keep (enter = keep)
+            model = {
+                kind: 'ask',
+                options: [nativeModelLabel, `(keep current: ${existingModel})`],
+                fallback: `(keep current: ${existingModel})`,
+                staleModelValue: existingModel,
+            }
+        } else {
+            model = { kind: 'skip-none' }
+        }
     } else {
         // every model-selectable endpoint asks, single-candidate included: a
         // wizard-side default is an override layer that silently changes native
         // behavior (a single-candidate auto-pick once masked a hand-tuned opus).
         // First choice = native; a configured value inside the lineup preselects;
-        // a configured value OUTSIDE the lineup (hand-set, discovery missed it)
-        // stays selectable via a "(keep current: X)" entry.
+        // a configured value OUTSIDE the lineup stays selectable via a
+        // "(keep current: X)" entry, and that entry is the fallback — enter keeps
+        // the current value, native is always an explicit pick (codex F3).
         const staleModelValue = existingModel && !aliases.includes(existingModel) ? existingModel : null
-        const fallback = existingModel && aliases.includes(existingModel) ? existingModel : nativeModelLabel
+        const keepLabel = staleModelValue ? `(keep current: ${staleModelValue})` : null
+        const fallback = existingModel && aliases.includes(existingModel) ? existingModel : (keepLabel ?? nativeModelLabel)
         model = {
             kind: 'ask',
             options: [
                 nativeModelLabel,
                 ...aliases,
-                ...(staleModelValue ? [`(keep current: ${staleModelValue})`] : []),
+                ...(keepLabel ? [keepLabel] : []),
             ],
             fallback,
             staleModelValue,
@@ -160,7 +173,7 @@ export function planEndpointDefaultQuestions(ep: InitEndpointInfo, config: Paida
     let effort: EndpointDefaultQuestions['effort']
     const effOpts = ep.effort_options ?? null
     if (effOpts && effOpts.length > 0) {
-        const existingEff = config.defaults.efforts[name] ?? config.defaults.effort
+        const existingEff = config.defaults.efforts[name] ?? null
         const staleValue = existingEff && !effOpts.includes(existingEff) ? existingEff : null
         const fallback = existingEff && effOpts.includes(existingEff) ? existingEff : nativeEffortLabelFor(ep.native?.effort)
         effort = { kind: 'ask', options: [nativeEffortLabelFor(ep.native?.effort), ...effOpts], fallback, staleValue }
@@ -242,22 +255,23 @@ export function initConfigToJson(cfg: InitConfig): Record<string, unknown> {
 
 /**
  * Merge fresh init answers into an existing config.json document: only
- * endpoints.enabled and the wizard-owned defaults keys (endpoint, model,
- * models, efforts) are replaced; machine-local keys the wizard does not own
- * (endpoints.overrides, dataDir, defaults.run_timeout_sec, the hand-set
- * global defaults.effort, ...) survive a re-init verbatim.
+ * endpoints.enabled and the wizard-owned defaults keys (endpoint, models,
+ * efforts) are replaced; machine-local keys the wizard does not own
+ * (endpoints.overrides, dataDir, defaults.run_timeout_sec, ...) survive a
+ * re-init verbatim.
  */
 export function mergeInitConfig(existing: Record<string, unknown>, cfg: InitConfig): Record<string, unknown> {
     const fresh = initConfigToJson(cfg)
     const existingEndpoints = (existing.endpoints ?? {}) as Record<string, unknown>
     const existingDefaults = { ...((existing.defaults ?? {}) as Record<string, unknown>) }
     // wizard-owned keys (WIZARD_DEFAULTS_KEYS, single source in config.ts) are
-    // cleared first so a stale one never survives an answer that no longer sets
-    // it. 'model' is cleared deliberately: the wizard never writes the global
-    // model (it poisons endpoints with no headless model selection), so re-init
-    // self-heals a hand-set value. The global 'effort' is NOT wizard-owned
-    // (no global effort menu) and survives like the machine-local keys.
+    // cleared first so a stale one never survives an answer that no longer sets it.
+    // The removed global `model`/`effort` fallback keys are stripped here too:
+    // they left the config schema (2026-09-11) and a legacy document carrying
+    // one would fail the next loadConfig — one re-init self-heals it.
     for (const key of WIZARD_DEFAULTS_KEYS) delete existingDefaults[key]
+    delete existingDefaults.model
+    delete existingDefaults.effort
     const mergedDefaults = { ...existingDefaults, ...((fresh.defaults ?? {}) as Record<string, unknown>) }
     const out: Record<string, unknown> = {
         ...existing,

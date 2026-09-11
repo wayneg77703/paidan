@@ -48,7 +48,6 @@ test('normal envelope: response/sessionId/usage extracted, not degraded', () => 
     const r = p.finish(tail === '' ? '' : tail, '')
     assert.equal(r.finalText, 'ok')
     assert.equal(r.sessionId, 'sess_48fc4a92-47cb-4865-8ab6-715d8396b5cb')
-    assert.equal(r.resumeHint, 'zcode --resume sess_48fc4a92-47cb-4865-8ab6-715d8396b5cb')
     assert.equal(r.degraded, false)
     assert.deepEqual(r.usage, {
         input_tokens: 17001,

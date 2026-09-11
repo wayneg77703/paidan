@@ -426,26 +426,41 @@ export class RunStore {
         return next
     }
 
-    /** result.json is written once; a conflicting second write is corruption, an identical one is a no-op. */
-    async writeResult(result: RunResult): Promise<void> {
-        // result.json is written ONCE. A read-then-write check would race the
-        // CLI cancel fallback (both sides can pass the existence check and
-        // silently clobber each other — reproduced 10/10), so creation goes
-        // through a hard link: link(2) is the atomic create-if-absent primitive
-        // on win32 and POSIX alike. The complete file is written to a tmp name
-        // first, so a crash never leaves a partial result.json behind.
+    /**
+     * result.json is written once — this is the single settlement primitive for
+     * terminal records. Creation goes through a hard link: link(2) is the atomic
+     * create-if-absent primitive on win32 and POSIX alike (a read-then-write
+     * check raced the CLI cancel fallback 10/10 in reproduction). The complete
+     * file is written to a tmp name first, so a crash never leaves a partial
+     * result.json behind.
+     *
+     * Returns the WINNING record: `own:true` when this call's record landed
+     * (fresh link or byte-identical), `own:false` when a different record was
+     * already on disk — callers derive state and usage from the winner instead
+     * of their own draft (codex F2: CLI and worker each swallowing the conflict
+     * and writing their own state produced result/state divergence in both
+     * directions).
+     */
+    async settleResult(result: RunResult): Promise<{ winner: RunResult; own: boolean }> {
         const final = this.resultPath(result.run_id)
         await fs.mkdir(this.runDir(result.run_id), { recursive: true })
         const tmp = nodePath.join(this.runDir(result.run_id), `.result.json.${process.pid}.${randomBytes(4).toString('hex')}.tmp`)
         await fs.writeFile(tmp, JSON.stringify(result, null, 2), 'utf8')
         try {
             await fs.link(tmp, final)
+            // hard link succeeded: the tmp name is now a second directory entry
+            // for the same inode — remove it so the run dir keeps exactly one
+            await fs.rm(tmp, { force: true }).catch(() => {})
+            return { winner: result, own: true }
         } catch (err) {
             await fs.rm(tmp, { force: true }).catch(() => {})
             if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
             const existing = await readJsonFile<RunResult>(final)
-            if (existing && JSON.stringify(existing) === JSON.stringify(result)) return
-            throw new StoreCorruptError(`result.json already exists for ${result.run_id}`)
+            if (existing && JSON.stringify(existing) === JSON.stringify(result)) {
+                return { winner: existing, own: true }
+            }
+            if (existing) return { winner: existing, own: false }
+            throw new StoreCorruptError(`result.json link failed for ${result.run_id} but no readable record exists`)
         }
     }
 

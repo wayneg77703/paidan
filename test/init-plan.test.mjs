@@ -60,12 +60,12 @@ test('buildInitConfig: per-endpoint efforts are validated against declared optio
         skill_hosts: [],
     })
     assert.deepEqual(native.defaults.efforts, {})
-    // merge: the global effort fallback is wizard-cleared now (P1-02: a surviving
-    // global silently overrides a "native" wizard choice and poisons endpoints
-    // without an effort block); per-endpoint efforts are cleared; machine keys survive
+    // merge: the global effort/model fallback keys no longer exist in the schema —
+    // mergeInitConfig works on raw documents, so a legacy doc carrying one is
+    // simply not re-emitted (the wizard-owned keys are cleared); machine keys survive
     const merged = mergeInitConfig(
-        { endpoints: { enabled: ['claude-code'] }, defaults: { endpoint: 'claude-code', effort: 'high', efforts: { 'claude-code': 'max' }, run_timeout_sec: 900 } },
-        { endpoints: { enabled: ['claude-code'] }, defaults: { endpoint: 'claude-code', model: null, models: {}, efforts: {} } },
+        { endpoints: { enabled: ['claude-code'] }, defaults: { endpoint: 'claude-code', efforts: { 'claude-code': 'max' }, run_timeout_sec: 900 } },
+        { endpoints: { enabled: ['claude-code'] }, defaults: { endpoint: 'claude-code', models: {}, efforts: {} } },
     )
     assert.deepEqual(merged.defaults, { endpoint: 'claude-code', run_timeout_sec: 900 })
 })
@@ -277,13 +277,13 @@ test('mergeInitConfig clears stale wizard-owned defaults and replaces models who
     const { mergeInitConfig } = await import('../dist/engine/init-plan.js')
     const existing = {
         endpoints: { enabled: ['codex', 'kimi-code'] },
-        defaults: { endpoint: 'codex', model: 'gpt-5', models: { codex: 'gpt-5', 'kimi-code': 'k3' }, run_timeout_sec: 900 },
+        defaults: { endpoint: 'codex', models: { codex: 'gpt-5', 'kimi-code': 'k3' }, run_timeout_sec: 900 },
     }
     // re-init: default moves to claude-code (no discovered models -> no model keys),
     // kimi-code disabled -> its models entry must not survive
     const merged = mergeInitConfig(existing, {
         endpoints: { enabled: ['codex', 'claude-code'] },
-        defaults: { endpoint: 'claude-code', model: null, models: { codex: 'gpt-6' } },
+        defaults: { endpoint: 'claude-code', models: { codex: 'gpt-6' } },
     })
     assert.deepEqual(merged.defaults, { endpoint: 'claude-code', models: { codex: 'gpt-6' }, run_timeout_sec: 900 })
     // nothing enabled at all -> wizard keys cleared, machine keys kept, empty defaults dropped

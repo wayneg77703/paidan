@@ -17,7 +17,6 @@ test('normal stream-json: text accumulates, session hint extracted, not degraded
     const r = p.finish('', '')
     assert.equal(r.finalText, 'Hello, world.')
     assert.equal(r.sessionId, 'session_abc123def')
-    assert.equal(r.resumeHint, 'kimi -r session_abc123def')
     assert.equal(r.degraded, false)
     assert.equal(r.usage, null)
 })

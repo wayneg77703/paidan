@@ -116,14 +116,18 @@ test('result.json is write-once: identical rewrite is a no-op, conflicting rewri
             session_handle: null,
             terminal_at: new Date().toISOString(),
         }
-        await store.writeResult(result)
-        await store.writeResult(result) // identical: no-op
-        await assert.rejects(
-            store.writeResult({ ...result, final_text: 'different' }),
-            (err) => err instanceof StoreCorruptError,
-        )
+        const fresh = await store.settleResult(result)
+        assert.equal(fresh.own, true)
+        const again = await store.settleResult(result) // identical: idempotent own:true
+        assert.equal(again.own, true)
+        const conflict = await store.settleResult({ ...result, final_text: 'different' })
+        assert.equal(conflict.own, false)
+        assert.equal(conflict.winner.state, 'unknown')
         const read = await store.readResult(request.run_id)
         assert.equal(read.state, 'unknown')
+        // settlement leaves no stray tmp directory entries
+        const entries = await fs.readdir(store.runDir(request.run_id))
+        assert.ok(!entries.some((e) => e.includes('.tmp')), `stray tmp: ${entries.join(',')}`)
     } finally {
         await fs.rm(dir, { recursive: true, force: true })
     }
@@ -222,7 +226,7 @@ test('a stale create lock (creator crashed) is broken, not waited on', async () 
     }
 })
 
-test('writeResult: concurrent conflicting writes — exactly one wins, the other gets StoreCorruptError', async () => {
+test('settleResult: concurrent conflicting writes — exactly one wins, the other adopts it (own:false)', async () => {
     const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-wr-'))
     try {
         const store = new RunStore(root, {})
@@ -234,21 +238,23 @@ test('writeResult: concurrent conflicting writes — exactly one wins, the other
             session_handle: null, terminal_at: new Date().toISOString(),
         })
         await fs.mkdir(store.runDir('run_20260910_deadbeef'), { recursive: true })
-        const [r1, r2] = await Promise.allSettled([
-            store.writeResult(mk('completed', 'from-worker')),
-            store.writeResult(mk('cancelled', 'from-cli-fallback')),
+        const [r1, r2] = await Promise.all([
+            store.settleResult(mk('completed', 'from-worker')),
+            store.settleResult(mk('cancelled', 'from-cli-fallback')),
         ])
-        const statuses = [r1.status, r2.status].sort()
-        assert.deepEqual(statuses, ['fulfilled', 'rejected'])
-        const reason = (r1.status === 'rejected' ? r1 : r2).reason
-        assert.ok(reason instanceof StoreCorruptError, `expected StoreCorruptError, got ${reason}`)
+        // exactly one own:true; the loser gets own:false with the winner's record
+        const owners = [r1, r2].filter((r) => r.own)
+        assert.equal(owners.length, 1)
+        const loser = r1.own ? r2 : r1
+        assert.equal(loser.own, false)
+        assert.equal(loser.winner.state, (owners[0]).winner.state)
         // the surviving record is exactly one of the two candidates
         const final = JSON.parse(await fs.readFile(store.resultPath('run_20260910_deadbeef'), 'utf8'))
         assert.ok(['completed', 'cancelled'].includes(final.state))
-        // a sequential conflicting write still throws (existing behavior)
-        await assert.rejects(store.writeResult(mk('failed', 'late-conflict')), StoreCorruptError)
-        // an identical re-write is a no-op, not an error
-        await store.writeResult(final)
+        // a sequential conflicting write adopts the on-disk winner (own:false)
+        const late = await store.settleResult(mk('failed', 'late-conflict'))
+        assert.equal(late.own, false)
+        assert.equal(late.winner.state, final.state)
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }

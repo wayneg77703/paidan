@@ -1,7 +1,6 @@
 {
   "schema_version": "1.0.0",
   "name": "claude-code",
-  "family": "anthropic",
   "detect": {
     "bin": "claude",
     "version_args": [
@@ -111,8 +110,7 @@
   "models": {
     "command": null,
     "parse": "claude-docs-aliases",
-    "connections": [],
-    "notes": "Static docs-sourced alias list (sonnet/opus/haiku/fable) from the official model-config page, checked 2026-09-11 — claude has NO model-enumeration command (2.1.260: model list is not a subcommand). Aliases track the latest model per tier; pin a full name by hand for a fixed version. Gateway availability varies (403s seen for fable on one gateway). Current connection on this machine: ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL self-hosted gateway via native settings.json env."
+    "notes": "Static docs-sourced alias list (sonnet/opus/haiku/fable) from the official model-config page, checked 2026-09-11 — claude has NO model-enumeration command (2.1.260: model list is not a subcommand). Aliases track the latest model per tier; pin a full name (e.g. claude-opus-5) by hand for a fixed version — note the argv-safety charset currently rejects bracketed suffixes like [1m], so only plain aliases/full names are selectable. Gateway availability varies (403s seen for fable on one gateway). Current connection on this machine: ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL self-hosted gateway via native settings.json env."
   },
   "parser": "claude-stream-json",
   "parser_notes": "stdout NDJSON (stream-json): system/init carries session_id; assistant events carry message.content[] text parts; the single terminal result event carries result text, session_id (cross-checked against init), usage (input/output/cache tokens), total_cost_usd and permission_denials. Non-JSON lines / mid-line EOF / conflicting session ids degrade the parser (terminal judgment then cannot be exit-code-based).",
@@ -134,7 +132,6 @@
       "--effort",
       "{effort}"
     ],
-    "default": null,
     "status": "supported",
     "verified_at": "2026-09-10",
     "version": "2.1.260",

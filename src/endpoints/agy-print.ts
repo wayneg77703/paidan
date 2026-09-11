@@ -16,23 +16,16 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import type { UsageSummary } from '../engine/types.js'
-import type { DiscoverModelsResult, EndpointStreamParser, ModelEntry, NativeDefaults } from './parser-api.js'
+import type { DiscoverModelsResult, EndpointParseResult, EndpointStreamParser, ModelEntry, NativeDefaults } from './parser-api.js'
 import { EndpointRegistry } from './registry.js'
 import { finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn } from './spawn.js'
 
 const execFileAsync = promisify(execFile)
 
-export interface AgyParseResult {
-    finalText: string
-    sessionId: string | null
-    resumeHint: string | null
-    usage: UsageSummary | null // null when no result event carried usage; never fabricated
-    refusals: string[] // in-band refusal evidence (denied_actions, permission TOOL_ERRORs)
-    degraded: boolean
-    warnings: string[]
-}
+export interface AgyParseResult extends EndpointParseResult {}
 
 export interface AgyPrintParser extends EndpointStreamParser {
+
     finish(tailStdout: string, tailStderr: string): AgyParseResult
 }
 
@@ -140,7 +133,6 @@ export function createAgyPrintParser(): AgyPrintParser {
             return {
                 finalText: resultText ?? fallbackText,
                 sessionId,
-                resumeHint: sessionId ? `agy -p "<next prompt>" --conversation ${sessionId}` : null,
                 usage, refusals, degraded, warnings,
             }
         },

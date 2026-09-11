@@ -16,21 +16,15 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import type { UsageSummary } from '../engine/types.js'
-import type { DiscoverModelsResult, EndpointStreamParser, NativeDefaults } from './parser-api.js'
+import type { DiscoverModelsResult, EndpointParseResult, EndpointStreamParser, NativeDefaults } from './parser-api.js'
 
-export interface ClaudeParseResult {
-    finalText: string
-    sessionId: string | null
-    resumeHint: string | null
-    /** null when no result event was seen; never fabricated */
-    usage: UsageSummary | null
+export interface ClaudeParseResult extends EndpointParseResult {
+/** null when no result event was seen; never fabricated */
     /** in-band permission denials as refusal evidence (also kept as warnings) */
-    refusals: string[]
-    degraded: boolean
-    warnings: string[]
 }
 
 export interface ClaudeStreamJsonParser extends EndpointStreamParser {
+
     finish(tailStdout: string, tailStderr: string): ClaudeParseResult
 }
 
@@ -145,7 +139,6 @@ export function createClaudeStreamJsonParser(): ClaudeStreamJsonParser {
             return {
                 finalText: resultText ?? assistantText,
                 sessionId,
-                resumeHint: sessionId ? `claude --resume ${sessionId}` : null,
                 usage,
                 refusals: deniedTools.map((tool) => `permission-denied:${tool}`),
                 degraded,

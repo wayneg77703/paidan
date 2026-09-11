@@ -1,7 +1,6 @@
 {
   "schema_version": "1.0.0",
   "name": "codex",
-  "family": "codex",
   "detect": {
     "bin": "codex",
     "version_args": [
@@ -120,8 +119,7 @@
   "models": {
     "command": null,
     "parse": "codex-native-config",
-    "connections": [],
-    "notes": "v0: heuristic read of the native $CODEX_HOME/config.toml top-level `model` key (codex has no CLI model-list surface; `app-server model/list` is experimental). Connection label chatgpt-login when ~/.codex/auth.json exists (probe report 2026-09-09 §4: one active ChatGPT-login connection on this machine; the CODEX_API_KEY path is unconfigured). Selection = config.json defaults.model or the codex native default; no cross-connection fallback."
+    "notes": "Discovery = the native $CODEX_HOME/config.toml top-level `model` key (listed first) plus the official lineup from learn.chatgpt.com/docs/models (checked 2026-09-11; gpt-5.4 family retired, gpt-5.2/5.3-codex deprecated and not listed; spark is Pro-plan only). Connection label chatgpt-login when ~/.codex/auth.json exists. codex has no CLI model-list surface (app-server model/list is experimental)."
   },
   "effort": {
     "options": [
@@ -135,7 +133,6 @@
       "-c",
       "model_reasoning_effort={effort}"
     ],
-    "default": null,
     "status": "supported",
     "verified_at": "2026-09-11",
     "version": "0.154.0",

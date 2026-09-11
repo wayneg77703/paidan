@@ -18,7 +18,6 @@ test('normal run: last agent_message wins, thread_id is the session handle, prov
     const r = p.finish('', '')
     assert.equal(r.finalText, 'done')
     assert.equal(r.sessionId, '01a087fe-9732-7520-b210-75d94a4cd4b9')
-    assert.equal(r.resumeHint, null)
     assert.equal(r.degraded, false)
     assert.deepEqual(r.usage, {
         input_tokens: 79038,

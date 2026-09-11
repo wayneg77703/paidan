@@ -48,7 +48,7 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 - 永不把凭据搬进任务正文、参数或配置；端点用各 agent 自己的原生配置与调用方 env 运行，paidan 不代理、不暂存凭据。
 - paidan 不写任何 agent 的原生 home；缺原生设置时按 `doctor` 的 `repair_hint` 报告，不擅自改用户配置。
 - 模型/连接失败（配额、认证等）时**永不静默切换路径**：拒绝并报告，不自动换模型、换端点、换账期、升权。注意区分：失败时刻的自动 fallback 被禁止；用户/宿主**显式**选择换模型换档位（每次委派时明示）是正常操作，不属于此条。端点自身的 fallback 机制（如 claude 原生 `--fallback-model`、网关侧切换）归端点与用户配置管，paidan 不知情也不拦截。
-- 不传 `--model` 时生效值为 `--model ?? config defaults.models.<端点> ?? defaults.model ?? 端点原生默认`（不跨连接）；dsh/zcode 这类端点没有 headless 模型选择（模型归其原生配置管），给它们配了模型会被 `MODEL_UNSUPPORTED` 拒绝。需要核对时用 `paidan models --endpoint <name>` 查询；各端点原生 home 当前实际用什么模型/强度，`paidan doctor` 的 `native_defaults` 只读可见。
+- 不传 `--model` 时生效值为 `--model ?? config defaults.models.<端点> ?? 端点原生默认`（无全局回退键；不跨连接）；dsh/zcode 这类端点没有 headless 模型选择（模型归其原生配置管），给它们配了模型会被 `MODEL_UNSUPPORTED` 拒绝。需要核对时用 `paidan models --endpoint <name>` 查询；各端点原生 home 当前实际用什么模型/强度，`paidan doctor` 的 `native_defaults` 只读可见。
 
 ## 错误处理
 

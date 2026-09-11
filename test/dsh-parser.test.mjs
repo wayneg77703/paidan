@@ -27,7 +27,6 @@ test('normal run: whole stdout is the final text, no session, no usage, never de
     const r = p.finish('', '')
     assert.equal(r.finalText, 'DONE')
     assert.equal(r.sessionId, null)
-    assert.equal(r.resumeHint, null)
     assert.equal(r.usage, null)
     assert.equal(r.degraded, false)
     assert.deepEqual(r.refusals, [])

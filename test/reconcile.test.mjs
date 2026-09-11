@@ -84,7 +84,7 @@ test('worker dead but result.json holds a terminal state -> adopt it, not attent
     try {
         const pid = await deadPid()
         const runId = await runningWithWorker(store, { pid, started_at: OLD, endpoint_pid: null })
-        await store.writeResult({
+        await store.settleResult({
             schema_version: '1.0.0',
             run_id: runId,
             state: 'completed',

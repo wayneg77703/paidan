@@ -1,7 +1,6 @@
 {
   "schema_version": "1.0.0",
   "name": "opencode",
-  "family": "opencode",
   "detect": {
     "bin": "opencode",
     "version_args": [
@@ -116,7 +115,6 @@
       "models"
     ],
     "parse": "opencode-models-command",
-    "connections": [],
     "notes": "Live enumeration via `opencode models` (root help 1.18.29: 'list all available models'; plain `provider/model` lines, verified 2026-09-10: 7 free `opencode/*` Zen models + 28+ `opencode-go/*` models on this machine). connection = provider prefix: `opencode` = 免凭据 Zen free group, `opencode-go` = Go subscription credential (native auth.json — paidan never reads it), BYOK providers appear when natively configured. Selection = config.json defaults.model or the native default; no cross-connection fallback."
   },
   "parser": "opencode-run",
@@ -136,7 +134,6 @@
       "--variant",
       "{effort}"
     ],
-    "default": null,
     "status": "supported",
     "verified_at": "2026-09-10",
     "version": "1.18.30",

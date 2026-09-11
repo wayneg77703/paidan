@@ -18,21 +18,16 @@
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
-import type { DiscoverModelsResult, EndpointStreamParser } from './parser-api.js'
+import type { DiscoverModelsResult, EndpointParseResult, EndpointStreamParser } from './parser-api.js'
 
-export interface DshParseResult {
-    finalText: string
-    sessionId: string | null
-    resumeHint: string | null
-    /** dsh never reports usage on the headless stream; always null */
+export interface DshParseResult extends EndpointParseResult {
+/** dsh never reports usage on the headless stream; always null */
     usage: null
     /** in-band refusal evidence from the final text (denial signatures) */
-    refusals: string[]
-    degraded: boolean
-    warnings: string[]
 }
 
 export interface DshHeadlessParser extends EndpointStreamParser {
+
     finish(tailStdout: string, tailStderr: string): DshParseResult
 }
 
@@ -75,7 +70,6 @@ export function createDshHeadlessParser(): DshHeadlessParser {
             return {
                 finalText,
                 sessionId: null,
-                resumeHint: null,
                 usage: null,
                 refusals: refusalSignals(finalText),
                 degraded: false,

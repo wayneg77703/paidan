@@ -54,7 +54,6 @@ test('full lifecycle: init -> agent_response -> result yields session, text, pro
     p.acceptStdoutLine(resultLine())
     const r = p.finish('', '')
     assert.equal(r.sessionId, CONV)
-    assert.equal(r.resumeHint, `agy -p "<next prompt>" --conversation ${CONV}`)
     assert.equal(r.finalText, 'DONE\n') // result.response is authoritative
     assert.equal(r.degraded, false)
     assert.deepEqual(r.refusals, [])

@@ -17,7 +17,6 @@ test('normal run: text is the final answer, sessionID is the handle, single step
     const r = p.finish('', '')
     assert.equal(r.finalText, 'ok')
     assert.equal(r.sessionId, SES)
-    assert.equal(r.resumeHint, `opencode run --session ${SES}`)
     assert.equal(r.degraded, false)
     assert.deepEqual(r.usage, {
         input_tokens: 6599,
@@ -104,7 +103,6 @@ test('session drift: multiple distinct sessionID values degrade and drop the han
     const r = p.finish('', '')
     assert.equal(r.degraded, true)
     assert.equal(r.sessionId, null)
-    assert.equal(r.resumeHint, null)
     assert.ok(r.warnings.some((w) => w.includes('session drift')))
 })
 

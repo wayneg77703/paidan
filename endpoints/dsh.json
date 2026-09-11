@@ -1,7 +1,6 @@
 {
   "schema_version": "1.0.0",
   "name": "dsh",
-  "family": "dsh",
   "detect": {
     "bin": "dsh",
     "version_args": [
@@ -91,7 +90,6 @@
   "models": {
     "command": null,
     "parse": "dsh-native-settings",
-    "connections": [],
     "notes": "v0: heuristic read of the native $DSH_HOME|~/.dsh/settings.yaml `agent-default-model` block (provider/model/reasoningEffort); dsh is profile-only — no CLI model-list surface and no headless model flag. Credentials are apiKeyEnv references inside settings.yaml; paidan reads names only, never values (invariant 3). Selection = native profile default; no cross-connection fallback."
   },
   "parser": "dsh-headless",

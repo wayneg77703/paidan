@@ -21,7 +21,6 @@ import {
 import {
     defaultInitAnswers,
     buildInitConfig,
-    initConfigToJson,
     mergeInitConfig,
     parseMultiSelect,
     planEndpointDefaultQuestions,
@@ -140,14 +139,14 @@ function pickEndpoint(ctx: Ctx, flag: string | undefined): EndpointManifest {
     return manifest
 }
 
-/** Model selection: --model flag ?? per-endpoint default ?? global default. Never cross-connection. */
+/** Model selection: --model flag ?? per-endpoint default ?? null (endpoint native default; there is deliberately no global fallback). Never cross-connection. */
 function resolveModel(ctx: Ctx, endpoint: string, flag: string | undefined): string | null {
-    return flag ?? ctx.config.defaults.models[endpoint] ?? ctx.config.defaults.model
+    return flag ?? ctx.config.defaults.models[endpoint] ?? null
 }
 
-/** Effort selection: --effort flag ?? per-endpoint default ?? global default ?? null (native default). */
+/** Effort selection: --effort flag ?? per-endpoint default ?? null (native default; no global fallback). */
 function resolveEffort(ctx: Ctx, endpoint: string, flag: string | undefined): string | null {
-    return flag ?? ctx.config.defaults.efforts[endpoint] ?? ctx.config.defaults.effort
+    return flag ?? ctx.config.defaults.efforts[endpoint] ?? null
 }
 
 /** Submit-time model gate: a resolved model an endpoint cannot take headless is a config error, named with the repair. */
@@ -156,7 +155,7 @@ function checkModelSupported(manifest: EndpointManifest, model: string | null): 
     throw new CliError(
         'MODEL_UNSUPPORTED',
         `endpoint "${manifest.name}" has no headless model selection (its native config owns the model), but "${model}" is configured.` +
-        ` Repair: remove defaults.models.${manifest.name} / defaults.model from config.json, or don't pass --model.`,
+        ` Repair: remove defaults.models.${manifest.name} from config.json, or don't pass --model.`,
     )
 }
 
@@ -505,12 +504,13 @@ async function verbCancel(ctx: Ctx, args: string[]): Promise<void> {
         const endpointPid = state.worker?.endpoint_pid ?? null
         const term = endpointPid
             ? await terminateRecordedEndpoint(endpointPid, state.worker?.endpoint_pid_start)
-            : { killed: true, note: null }
+            : { killed: true, note: null } // no recorded pid = no endpoint process to kill
         if (term.killed) {
-            await writeCancelledDirect(ctx.store, state, 'cancelled while attention (worker absent)')
-            emitOk({ run_id: runId, state: 'cancelled', ...(term.note ? { note: term.note } : {}) })
+            const settledState = await writeCancelledDirect(ctx.store, state, 'cancelled while attention (worker absent)')
+            emitOk({ run_id: runId, state: settledState, ...(settledState === 'attention' ? { needs_attention: true, note: 'result.json could not be settled; run left in attention' } : term.note ? { note: term.note } : {}) })
         } else {
-            await ctx.store.writeState(transitionRecord(state, 'attention', now()))
+            // already attention — an attention->attention "transition" is not a
+            // state machine edge; keep the record as-is instead of throwing
             emitOk({
                 run_id: runId,
                 state: 'attention',
@@ -532,38 +532,45 @@ async function verbCancel(ctx: Ctx, args: string[]): Promise<void> {
     const endpointPid = final?.worker?.endpoint_pid ?? null
     const term = endpointPid
         ? await terminateRecordedEndpoint(endpointPid, final?.worker?.endpoint_pid_start)
-        : { killed: false, note: 'no recorded endpoint pid' }
+        : { killed: true, note: null } // no recorded pid = no endpoint process to kill
     const latest = await ctx.store.readState(runId)
-    if (term.killed && latest && !isTerminal(latest.state)) {
-        await writeCancelledDirect(ctx.store, latest, 'cancel finalized by CLI after worker did not respond within 15s')
-    } else if (!term.killed && latest && !isTerminal(latest.state)) {
-        await ctx.store.writeState(transitionRecord(latest, 'attention', now()))
+    if (latest && !isTerminal(latest.state)) {
+        if (term.killed) {
+            const settledState = await writeCancelledDirect(ctx.store, latest, 'cancel finalized by CLI after worker did not respond within 15s')
+            const after = await ctx.store.readState(runId)
+            emitOk({
+                run_id: runId,
+                state: settledState === 'attention' ? (after?.state ?? 'attention') : settledState,
+                needs_attention: settledState === 'attention' || undefined,
+                note: ['worker did not finalize within 15s; CLI closed the run', term.note].filter(Boolean).join('; '),
+            })
+            return
+        }
+        // kill not confirmed and the run is not attention yet: flag it (an
+        // attention->attention repeat later is a no-op, never a throw)
+        if (latest.state !== 'attention') {
+            await ctx.store.writeState(transitionRecord(latest, 'attention', now())).catch(() => {})
+        }
     }
     const after = await ctx.store.readState(runId)
     emitOk({
         run_id: runId,
-        state: after?.state ?? 'cancelled',
+        state: after?.state ?? 'attention',
         needs_attention: after?.state === 'attention' || undefined,
         note: [
-            term.killed ? 'worker did not finalize within 15s; CLI closed the run' : 'worker did not finalize within 15s and the fallback kill was not confirmed; run left in attention',
+            'worker did not finalize within 15s and the fallback kill was not confirmed; run left in attention',
             term.note,
         ].filter(Boolean).join('; '),
     })
 }
 
-async function writeCancelledDirect(store: RunStore, state: RunStateRecord, note: string): Promise<void> {
+/** Cancel-side settlement: result.json is the authority. Returns the settled terminal state, or 'attention' when result.json could not be settled at all (never claim a terminal state we could not record). */
+async function writeCancelledDirect(store: RunStore, state: RunStateRecord, note: string): Promise<'cancelled' | 'attention' | RunResult['state']> {
     const terminalAt = new Date().toISOString()
-    // result.json is the terminal authority: when the worker raced us and already
-    // wrote a terminal result, adopt its state instead of stamping cancelled over
-    // it (codex P1-06: state/result divergence survives nothing — reconcile
-    // skips terminal states and would never repair it)
-    const existing = await store.readResult(state.run_id).catch(() => null)
-    let finalState: 'cancelled' | RunResult['state'] = 'cancelled'
-    if (existing && isTerminal(existing.state)) finalState = existing.state
-    const result: RunResult = {
+    const draft: RunResult = {
         schema_version: '1.0.0',
         run_id: state.run_id,
-        state: finalState,
+        state: 'cancelled',
         exit_code: null,
         final_text: '',
         evidence: {
@@ -576,18 +583,22 @@ async function writeCancelledDirect(store: RunStore, state: RunStateRecord, note
         session_handle: state.session.handle,
         terminal_at: terminalAt,
     }
-    if (finalState === 'cancelled') {
+    const settled = await store.settleResult(draft).catch(() => null)
+    if (settled === null) {
+        // result.json could not be settled (corrupt/unreadable): keep the run in
+        // attention rather than claiming a terminal state nothing backs
         try {
-            await store.writeResult(result)
-        } catch {
-            // worker raced us to result.json; its record wins
-        }
+            if (state.state !== 'attention') await store.writeState(transitionRecord(state, 'attention', terminalAt))
+        } catch { /* state unchanged; reconcile will flag it */ }
+        return 'attention'
     }
+    const winnerState = settled.winner.state
     try {
-        await store.writeState(transitionRecord(state, finalState, terminalAt))
+        if (state.state !== winnerState) await store.writeState(transitionRecord(state, winnerState, settled.winner.terminal_at))
     } catch {
         // already transitioned by the worker
     }
+    return winnerState
 }
 
 async function verbList(ctx: Ctx, args: string[]): Promise<void> {
@@ -846,7 +857,7 @@ async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
     // P1/P3 share one tier: the most conservative supported preset (never a
     // hardcoded one — e.g. zcode enforces only unattended headless)
     const probePreset = pickProbePreset(manifest)
-    /** cancel a probe run that outlived its wait: marker -> 15s -> fallback kill -> close out. Returns the (possibly still non-terminal) state. */
+    /** cancel a probe run that outlived its wait: marker -> 15s -> fallback kill -> close out. An unconfirmed kill does NOT close the run (same rule as verbCancel — codex F2). */
     const cancelProbeRun = async (runId: string): Promise<RunStateRecord | null> => {
         const st = await ctx.store.readState(runId)
         if (!st || isTerminal(st.state)) return st
@@ -854,10 +865,17 @@ async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
         let s = await waitForTerminal(ctx.store, runId, 15)
         if (!s || !isTerminal(s.state)) {
             const pid = s?.worker?.endpoint_pid ?? null
-            if (pid) await terminateRecordedEndpoint(pid, s?.worker?.endpoint_pid_start)
-            const latest = await ctx.store.readState(runId)
-            if (latest && !isTerminal(latest.state)) {
-                await writeCancelledDirect(ctx.store, latest, 'probe wait timed out; cancelled by probe')
+            const term = pid
+                ? await terminateRecordedEndpoint(pid, s?.worker?.endpoint_pid_start)
+                : { killed: true, note: null } // no recorded pid = no endpoint process to kill
+            if (term.killed) {
+                const latest = await ctx.store.readState(runId)
+                if (latest && !isTerminal(latest.state)) {
+                    await writeCancelledDirect(ctx.store, latest, 'probe wait timed out; cancelled by probe')
+                }
+            } else if (s && s.state !== 'attention') {
+                // unconfirmed kill: leave it flagged, cwd cleanup will see non-terminal
+                await ctx.store.writeState(transitionRecord(s, 'attention', new Date().toISOString())).catch(() => {})
             }
             s = await ctx.store.readState(runId)
         }
@@ -1327,7 +1345,7 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config
             if (q.model.kind === 'skip-no-selection') {
                 process.stderr.write(`(no headless model selection for ${name}; its native config owns the model${q.nativeModel ? ` (currently ${q.nativeModel})` : ''})\n`)
             } else if (q.model.kind === 'skip-none') {
-                process.stderr.write(`(no discovered models for ${name}; native default will be used; a hand-set default survives in config.json)\n`)
+                process.stderr.write(`(no discovered models for ${name} and no configured default; native default will be used)\n`)
             } else {
                 if (q.model.staleModelValue) {
                     process.stderr.write(`(configured model "${q.model.staleModelValue}" for ${name} is not in the discovered lineup; keep it explicitly or pick another)\n`)
@@ -1416,7 +1434,7 @@ async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[], confi
                 if (q.model.kind === 'skip-no-selection') {
                     process.stderr.write(`(no headless model selection for ${name}; its native config owns the model${q.nativeModel ? ` (currently ${q.nativeModel})` : ''})\n`)
                 } else if (q.model.kind === 'skip-none') {
-                    process.stderr.write(`(no discovered models for ${name}; native default will be used; a hand-set default survives in config.json)\n`)
+                    process.stderr.write(`(no discovered models for ${name} and no configured default; native default will be used)\n`)
                 } else {
                     if (q.model.staleModelValue) {
                         process.stderr.write(`(configured model "${q.model.staleModelValue}" for ${name} is not in the discovered lineup; keep it explicitly or pick another)\n`)

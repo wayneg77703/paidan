@@ -1,7 +1,6 @@
 {
   "schema_version": "1.0.0",
   "name": "zcode",
-  "family": "zcode",
   "detect": {
     "bin": "zcode",
     "version_args": [
@@ -40,7 +39,7 @@
       "ZCODE_MODEL": "{native_default}",
       "ZCODE_BASE_URL": "{native_default}",
       "ANTHROPIC_API_KEY": "{native_default}",
-      "_env_notes": "{native_default} = paidan never sets the variable; values pass through from the caller env if present. The auth triple (ZCODE_MODEL/ZCODE_BASE_URL/ANTHROPIC_API_KEY) is zcode's native headless credential surface (adapter buildInvocation, zcode.mjs:275-277): the CLI 0.16.5 headless path does NOT read the desktop's .zcode/v2/config.json provider registry by itself (probed 2026-09-10: without the triple, stderr 'Error: Model config is missing...', exit 1). paidan never reads or stages credentials (invariant 3/4) — the triple must come from the caller's own environment or a natively configured ~/.zcode/cli/config.json (model.main)."
+      "_env_notes": "{native_default} = paidan never sets the variable; values pass through from the caller env if present. The auth triple (ZCODE_MODEL/ZCODE_BASE_URL/ANTHROPIC_API_KEY) is zcode's native headless credential surface (adapter buildInvocation, zcode.mjs:275-277): the CLI 0.16.5 headless path does NOT read the desktop's .zcode/v2/config.json provider registry by itself (probed 2026-09-10: without the triple, stderr 'Error: Model config is missing...', exit 1). paidan never reads or stages credentials (invariant 3/4) — the triple must come from the caller's own environment or a natively configured ~/.zcode/cli/config.json (its top-level \"model\" string, e.g. \"builtin:bigmodel-coding-plan/GLM-5.3\")."
     },
     "verified_at": "2026-09-10",
     "version": "0.16.5"
@@ -101,7 +100,6 @@
   "models": {
     "command": null,
     "parse": "zcode-native-config",
-    "connections": [],
     "notes": "v0: heuristic read-only scan of the desktop's native .zcode/v2/config.json provider registry (enabled providers -> provider/model aliases; connection = provider id, e.g. builtin:bigmodel-coding-plan/GLM-5.3). Selection is by ZCODE_MODEL env in the caller's environment or the CLI's own model.main; paidan has no argv model flag (0.16.5 has none for headless) and never picks across connections. bigmodel-coding-plan quota is separate from the general endpoint (2026-09-09 report §5)."
   },
   "parser": "zcode-print",

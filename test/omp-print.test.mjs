@@ -26,7 +26,6 @@ test('normal run: session id is the handle, finalText from turn_end, sole-turn u
     const r = p.finish('', '')
     assert.equal(r.finalText, 'ok')
     assert.equal(r.sessionId, '01a08873-065c-7281-98b2-ca60c2402dc9')
-    assert.equal(r.resumeHint, 'omp -r 01a08873-065c-7281-98b2-ca60c2402dc9')
     assert.equal(r.degraded, false)
     assert.deepEqual(r.refusals, [])
     assert.deepEqual(r.usage, {
@@ -110,7 +109,6 @@ test('multiple distinct session ids: no trustworthy handle, warning only', () =>
     for (const line of [SESSION, other, TURN_OK]) p.acceptStdoutLine(line)
     const r = p.finish('', '')
     assert.equal(r.sessionId, null)
-    assert.equal(r.resumeHint, null)
     assert.ok(r.warnings.some((w) => w.includes('unique session id')))
     assert.equal(r.degraded, false)
 })
@@ -173,7 +171,9 @@ test('model discovery parses `omp models --json` selector/provider pairs honestl
         { alias: 'deepseek/deepseek-v4-pro', connection: 'deepseek' },
     ])
     assert.equal(notes.length, 0)
-    assert.deepEqual(parseOmpModelsJson('not json').models, [])
+    // broken output is a discovery failure (throws - the caller keeps the last
+    // good cache), NOT an honest empty catalog; a well-formed empty catalog stays empty
+    assert.throws(() => parseOmpModelsJson('not json'), /non-JSON/)
+    assert.throws(() => parseOmpModelsJson('{"other":1}'), /no models array/)
     assert.deepEqual(parseOmpModelsJson('{"models":[]}').models, [])
-    assert.deepEqual(parseOmpModelsJson('{"other":1}').models, [])
 })

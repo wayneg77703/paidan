@@ -134,9 +134,13 @@ Key rules, in two layers (know which is which):
 **Load-time hard errors** (`loadConfig`, everything in this layer blocks every
 verb with `CONFIG_INVALID`):
 
-- `dataDir` / `defaults.model` / `defaults.effort` / `overrides.<name>.bin`
-  must be non-empty strings **when present** — omit a key entirely for its
-  default; an explicit `null` is an error.
+- `dataDir` / `defaults.endpoint` / `overrides.<name>.bin` must be non-empty
+  strings **when present** — omit a key entirely for its default; an explicit
+  `null` is an error. There is deliberately **no** global `defaults.model` /
+  `defaults.effort` key (removed from the schema: both poisoned endpoints
+  without that selection surface); a config still carrying one is a
+  `CONFIG_INVALID` — delete the two keys (one re-run of `paidan init` also
+  strips them from an existing config).
 - Unknown keys are rejected (typos never pass silently); `__proto__` and
   friends are rejected as dynamic keys.
 - `endpoints.enabled` must be an array of strings; `defaults.models` /
@@ -160,13 +164,12 @@ these loads fine and fails later at the named point):
 - `defaults.efforts.<name>` must be one of that endpoint's declared effort
   `options` (enforced at submit: `EFFORT_INVALID`; a block-less endpoint with
   a configured effort: `EFFORT_UNSUPPORTED`).
-- **The wizard never writes `defaults.model`** (a global model poisons
-  endpoints that cannot take one headless; a hand-set value is cleared on
-  re-init deliberately) — prefer per-endpoint `defaults.models` and leave the
-  global out entirely for "native default".
+- Model/effort defaults are per-endpoint only: omit `defaults.models.<ep>` /
+  `defaults.efforts.<ep>` for "native default" (the endpoint's own home
+  carries it).
 
-Resolution order at run time: `--model ?? defaults.models[ep] ?? defaults.model`;
-`--effort ?? defaults.efforts[ep] ?? defaults.effort ?? native default`.
+Resolution order at run time: `--model ?? defaults.models[ep] ?? endpoint
+native default`; `--effort ?? defaults.efforts[ep] ?? native default`.
 
 ## 5. Verify and report
 

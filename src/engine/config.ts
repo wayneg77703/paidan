@@ -15,12 +15,9 @@ export interface PaidanConfig {
     }
     defaults: {
         endpoint: string | null
-        model: string | null
-        /** per-endpoint default models; wins over `model` for its endpoint */
+        /** per-endpoint default models (there is deliberately NO global fallback — it poisons endpoints with no headless model selection) */
         models: Record<string, string>
-        /** global default effort (native default when null) */
-        effort: string | null
-        /** per-endpoint default efforts; wins over `effort` for its endpoint */
+        /** per-endpoint default efforts (no global fallback either) */
         efforts: Record<string, string>
         run_timeout_sec: number | null
     }
@@ -39,9 +36,9 @@ export function effectiveRunTimeoutSec(flag: number | null, config: PaidanConfig
 
 const TOP_LEVEL_KEYS = new Set(['dataDir', 'endpoints', 'defaults', 'ttlDays'])
 const ENDPOINTS_KEYS = new Set(['enabled', 'overrides'])
-const DEFAULTS_KEYS = new Set(['endpoint', 'model', 'models', 'effort', 'efforts', 'run_timeout_sec'])
-/** defaults keys the init wizard owns and replaces wholesale on re-init. The global `effort` joined `model` as wizard-cleared (2026-09-11): both are global fallbacks that poison endpoints without that selection surface, and a surviving global effort silently overrides a "native" wizard choice (codex P1-02). The hand-set `run_timeout_sec` stays machine-local. */
-export const WIZARD_DEFAULTS_KEYS: readonly string[] = ['endpoint', 'model', 'models', 'effort', 'efforts']
+const DEFAULTS_KEYS = new Set(['endpoint', 'models', 'efforts', 'run_timeout_sec'])
+/** defaults keys the init wizard owns and replaces wholesale on re-init; everything else in `defaults` (run_timeout_sec) is machine-local. The global `model`/`effort` fallback keys were removed from the schema entirely (2026-09-11): they poisoned endpoints without that selection surface and silently overrode native choices. */
+export const WIZARD_DEFAULTS_KEYS: readonly string[] = ['endpoint', 'models', 'efforts']
 const OVERRIDE_KEYS = new Set(['bin'])
 // dynamic keys land in plain objects; these three would hit the prototype
 // machinery instead of becoming entries (pollution or silent drops)
@@ -77,7 +74,7 @@ function defaults(): PaidanConfig {
     return {
         dataDir: null,
         endpoints: { enabled: null, overrides: {} },
-        defaults: { endpoint: null, model: null, models: {}, effort: null, efforts: {}, run_timeout_sec: null },
+        defaults: { endpoint: null, models: {}, efforts: {}, run_timeout_sec: null },
         ttlDays: DEFAULT_TTL_DAYS,
     }
 }
@@ -160,18 +157,23 @@ export function loadConfig(configPath: string = defaultConfigPath()): PaidanConf
             throw new Error('config key "defaults" must be an object')
         }
         const df = obj.defaults as Record<string, unknown>
+        // removed-with-a-name keys get a migration strip + warning, NOT the
+        // unknown-key hard error: a config written by an older build (or copied
+        // from an old doc) must keep every verb usable — one re-run of
+        // `paidan init` strips them from the file for good
+        for (const removed of ['model', 'effort']) {
+            if (removed in df) {
+                delete df[removed]
+                process.stderr.write(`config: defaults.${removed} was removed from the schema and is ignored (global fallbacks poisoned endpoints without that selection surface); re-run paidan init to strip it from config.json
+`)
+            }
+        }
         assertKnownKeys(df, DEFAULTS_KEYS, 'defaults.')
         if (df.endpoint !== undefined) {
             if (typeof df.endpoint !== 'string' || df.endpoint.length === 0) {
                 throw new Error('config key "defaults.endpoint" must be a non-empty string')
             }
             out.defaults.endpoint = df.endpoint
-        }
-        if (df.model !== undefined) {
-            if (typeof df.model !== 'string' || df.model.length === 0) {
-                throw new Error('config key "defaults.model" must be a non-empty string')
-            }
-            out.defaults.model = df.model
         }
         if (df.models !== undefined) {
             if (!df.models || typeof df.models !== 'object' || Array.isArray(df.models)) {
@@ -184,12 +186,6 @@ export function loadConfig(configPath: string = defaultConfigPath()): PaidanConf
                 }
                 out.defaults.models[name] = m
             }
-        }
-        if (df.effort !== undefined) {
-            if (typeof df.effort !== 'string' || df.effort.length === 0) {
-                throw new Error('config key "defaults.effort" must be a non-empty string')
-            }
-            out.defaults.effort = df.effort
         }
         if (df.efforts !== undefined) {
             if (!df.efforts || typeof df.efforts !== 'object' || Array.isArray(df.efforts)) {

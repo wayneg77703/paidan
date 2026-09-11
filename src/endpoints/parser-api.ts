@@ -8,7 +8,6 @@ import type { UsageSummary } from '../engine/types.js'
 export interface EndpointParseResult {
     finalText: string
     sessionId: string | null
-    resumeHint: string | null
     /** null = the endpoint's stream carries no usage; never fabricate zeros */
     usage: UsageSummary | null
     /** in-band refusal evidence (permission denials, soft error items); merged

@@ -198,7 +198,6 @@ export function createOmpPrintParser(): EndpointStreamParser {
             return {
                 finalText: (turnFinals.at(-1) ?? agentFinals.at(-1) ?? '').trim(),
                 sessionId,
-                resumeHint: sessionId ? `omp -r ${sessionId}` : null,
                 usage,
                 refusals: [...new Set(refusals)],
                 degraded,
@@ -216,17 +215,17 @@ export function detectOmpRefusals(stderrText: string, _exitCode: number | null):
     return [...signals]
 }
 
-/** Pure parse of `omp models --json` output (machine-readable surface, omp models --help 18.1.14). */
+/** Pure parse of `omp models --json` output. Broken output (non-JSON / wrong shape) THROWS so the caller keeps the last good cache — a shape failure is a discovery failure, not an honest empty catalog (codex F7). A genuinely empty but well-formed catalog returns an empty list. */
 export function parseOmpModelsJson(text: string): DiscoverModelsResult {
     const notes: string[] = []
     let parsed: unknown
     try {
         parsed = JSON.parse(text)
     } catch {
-        return { models: [], notes: ['omp models --json returned non-JSON output'] }
+        throw new Error('omp models --json returned non-JSON output (discovery failed; keeping the last good cache)')
     }
     const list = (parsed as { models?: unknown } | null)?.models
-    if (!Array.isArray(list)) return { models: [], notes: ['omp models --json: no models array in output'] }
+    if (!Array.isArray(list)) throw new Error('omp models --json: no models array in output (discovery failed; keeping the last good cache)')
     const models: ModelEntry[] = []
     for (const entry of list) {
         const e = entry as Record<string, unknown>
