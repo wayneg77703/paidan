@@ -180,25 +180,18 @@ export function parseAgyModelsOutput(text: string): DiscoverModelsResult {
 // ---- Convention exports (parser-api.ts): the registry loads these by name ----
 export function createParser(): AgyPrintParser { return createAgyPrintParser() }
 
-export async function discoverModels(): Promise<DiscoverModelsResult> {
-    let manifest
-    try {
-        manifest = (await EndpointRegistry.load()).get('agy')
-    } catch (err) {
-        return { models: [], notes: [`endpoint manifest unavailable: ${err instanceof Error ? err.message : String(err)}`] }
+export async function discoverModels(opts?: { configBin?: string | null }): Promise<DiscoverModelsResult> {
+    const manifest = (await EndpointRegistry.load()).get('agy')
+    const spawnRes = await planEndpointSpawn(manifest, { configBin: opts?.configBin ?? null })
+    if (!spawnRes.plan) {
+        throw new Error(`agy binary not resolvable for \`agy models\`: ${spawnRes.notes.join('; ')}`)
     }
-    const spawnRes = await planEndpointSpawn(manifest, {})
-    if (!spawnRes.plan) return { models: [], notes: ['agy binary not resolvable for `agy models`', ...spawnRes.notes] }
-    try {
-        const r = await execFileAsync(spawnRes.plan.command, finalSpawnArgs(spawnRes.plan, ['models']), {
-            timeout: 60_000,
-            windowsHide: true,
-            windowsVerbatimArguments: needsVerbatimArgs(spawnRes.plan),
-        })
-        return parseAgyModelsOutput(r.stdout)
-    } catch (err) {
-        return { models: [], notes: [`agy models failed: ${err instanceof Error ? err.message : String(err)}`] }
-    }
+    const r = await execFileAsync(spawnRes.plan.command, finalSpawnArgs(spawnRes.plan, ['models']), {
+        timeout: 60_000,
+        windowsHide: true,
+        windowsVerbatimArguments: needsVerbatimArgs(spawnRes.plan),
+    })
+    return parseAgyModelsOutput(r.stdout)
 }
 
 /** Read-only native-defaults probe: the `model` key of the native antigravity-cli settings (the display name carries the thinking tier, e.g. "Gemini 3.8 Flash (High)"). */

@@ -40,8 +40,8 @@ export function effectiveRunTimeoutSec(flag: number | null, config: PaidanConfig
 const TOP_LEVEL_KEYS = new Set(['dataDir', 'endpoints', 'defaults', 'ttlDays'])
 const ENDPOINTS_KEYS = new Set(['enabled', 'overrides'])
 const DEFAULTS_KEYS = new Set(['endpoint', 'model', 'models', 'effort', 'efforts', 'run_timeout_sec'])
-/** defaults keys the init wizard owns and replaces wholesale on re-init (the hand-set global `effort` and `run_timeout_sec` are deliberately not wizard-owned). */
-export const WIZARD_DEFAULTS_KEYS: readonly string[] = ['endpoint', 'model', 'models', 'efforts']
+/** defaults keys the init wizard owns and replaces wholesale on re-init. The global `effort` joined `model` as wizard-cleared (2026-09-11): both are global fallbacks that poison endpoints without that selection surface, and a surviving global effort silently overrides a "native" wizard choice (codex P1-02). The hand-set `run_timeout_sec` stays machine-local. */
+export const WIZARD_DEFAULTS_KEYS: readonly string[] = ['endpoint', 'model', 'models', 'effort', 'efforts']
 const OVERRIDE_KEYS = new Set(['bin'])
 // dynamic keys land in plain objects; these three would hit the prototype
 // machinery instead of becoming entries (pollution or silent drops)

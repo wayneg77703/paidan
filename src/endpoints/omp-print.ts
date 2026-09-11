@@ -25,6 +25,8 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { UsageSummary } from '../engine/types.js'
 import type { DiscoverModelsResult, EndpointStreamParser, ModelEntry } from './parser-api.js'
+import { EndpointRegistry } from './registry.js'
+import { finalSpawnArgs, needsVerbatimArgs, planEndpointSpawn } from './spawn.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -245,12 +247,23 @@ export const detectRefusals = detectOmpRefusals
 
 /**
  * Live model discovery via `omp models --json` (the endpoint's own
- * machine-readable catalog). Spawns the bare bin name; on a machine where omp
- * is not PATH-resolvable the refresh fails (cached entries then serve stale),
- * matching doctor's repair path.
+ * machine-readable catalog). Resolves the binary through the same layered
+ * spawn path as runs (config override first, then PATH) — a bare 'omp' lookup
+ * would query a different binary than dispatch uses whenever an override is
+ * set (codex P1-11). Failure throws: the caller keeps the last good cache
+ * instead of overwriting it with an empty list.
  */
-export async function discoverModels(): Promise<DiscoverModelsResult> {
-    const { stdout } = await execFileAsync('omp', ['models', '--json'], { timeout: 30_000, windowsHide: true })
+export async function discoverModels(opts?: { configBin?: string | null }): Promise<DiscoverModelsResult> {
+    const manifest = (await EndpointRegistry.load()).get('omp')
+    const spawnRes = await planEndpointSpawn(manifest, { configBin: opts?.configBin ?? null })
+    if (!spawnRes.plan) {
+        throw new Error(`omp binary not resolvable for \`omp models\`: ${spawnRes.notes.join('; ')}`)
+    }
+    const { stdout } = await execFileAsync(spawnRes.plan.command, finalSpawnArgs(spawnRes.plan, ['models', '--json']), {
+        timeout: 30_000,
+        windowsHide: true,
+        windowsVerbatimArguments: needsVerbatimArgs(spawnRes.plan),
+    })
     const parsed = parseOmpModelsJson(stdout)
     return { models: parsed.models, notes: [...parsed.notes, 'live `omp models --json`; alias is the provider-scoped selector'] }
 }

@@ -38,7 +38,7 @@ import {
 } from './engine/skill-install.js'
 import { reconcileRuns, pidAlive } from './engine/reconcile.js'
 import { verifyProcessIdentity } from './engine/process-identity.js'
-import { ModelsCache } from './engine/models-cache.js'
+import { ModelsCache, type CachedModels } from './engine/models-cache.js'
 import { RunStore, writeJsonAtomic } from './engine/run-store.js'
 import { isTerminal, transitionRecord } from './engine/state-machine.js'
 import { launchWorker, terminateEndpointTree } from './engine/supervisor.js'
@@ -182,10 +182,26 @@ async function waitForTerminal(
     timeoutSec: number,
 ): Promise<RunStateRecord | null> {
     const deadline = timeoutSec > 0 ? Date.now() + timeoutSec * 1000 : Number.POSITIVE_INFINITY
+    let lastLivenessProbe = 0
     for (;;) {
         const state = await store.readState(runId)
         if (!state) return null
         if (isTerminal(state.state)) return state
+        // attention = the worker is gone and reconcile already flagged it; no
+        // code path will restart it — waiting here would hang forever, so hand
+        // the state back to the caller with terminal:false (codex P1-05)
+        if (state.state === 'attention') return state
+        // waiting-loop liveness: a worker that died mid-wait without reconcile
+        // (reconcile only runs at CLI startup) would leave the run "running"
+        // forever; probe the recorded pid periodically and surface the same
+        // needs-attention signal instead of looping blind
+        if (Date.now() - lastLivenessProbe > 5_000) {
+            lastLivenessProbe = Date.now()
+            const workerPid = state.worker?.pid
+            if (workerPid !== undefined && workerPid !== null && !pidAlive(workerPid)) {
+                return { ...state, state: 'attention' as const }
+            }
+        }
         if (Date.now() >= deadline) return state
         await new Promise((r) => setTimeout(r, 1_000))
     }
@@ -347,6 +363,15 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
             )
         }
     }
+    const requestWarnings = [...perm.warnings]
+    if (values.resume && manifest.command.resume_argv) {
+        // resume_argv endpoints (codex) restore the session's original tier and
+        // take no mode flags: the recorded mode is the request's, not the
+        // effective one — say so instead of implying a re-tier (codex P1-07)
+        requestWarnings.push(
+            `resume on ${manifest.name} restores the endpoint session's original permission tier; the recorded mode (${typeof mode === 'string' ? mode : 'explicit capability set'}) is this request's, not necessarily the effective one`,
+        )
+    }
     const created = await ctx.store.create({
         endpoint: manifest.name,
         cwd,
@@ -359,18 +384,23 @@ async function verbRun(ctx: Ctx, args: string[]): Promise<void> {
         resume_session: values.resume ?? null,
         run_timeout_sec: runTimeoutSec,
         deliverables: (values.deliverable ?? []).map((p) => ({ path: p, expected: null })),
-        warnings: perm.warnings,
+        warnings: requestWarnings,
     })
     if (!created.created) {
-        // fingerprint dedup does not cover model/effort: a re-submit that only
-        // changes those returns the original run — say so out loud
+        // fingerprint dedup covers endpoint+cwd+task+mode only: a re-submit that
+        // changes anything else returns the original run — name every mismatch
         const mismatch: string[] = []
         if ((created.request.model ?? null) !== model) mismatch.push(`model (run has ${JSON.stringify(created.request.model ?? null)})`)
         if ((created.request.effort ?? null) !== effort) mismatch.push(`effort (run has ${JSON.stringify(created.request.effort ?? null)})`)
+        if ((created.request.resume_session ?? null) !== (values.resume ?? null)) mismatch.push(`resume session (run has ${JSON.stringify(created.request.resume_session ?? null)})`)
+        if (created.request.add_dirs.join('|') !== addDirs.join('|')) mismatch.push(`add_dirs (run has ${JSON.stringify(created.request.add_dirs)})`)
+        if (created.request.run_timeout_sec !== runTimeoutSec) mismatch.push(`run_timeout_sec (run has ${created.request.run_timeout_sec})`)
+        const deliverablePaths = (values.deliverable ?? []).map((p) => ({ path: p, expected: null }))
+        if (JSON.stringify(created.request.deliverables) !== JSON.stringify(deliverablePaths)) mismatch.push('deliverables')
         if (mismatch.length > 0) {
             created.request.warnings.push(
-                `dedup matched an existing run with different ${mismatch.join(' and ')};` +
-                ' the original values apply (fingerprint = endpoint+cwd+task+mode)',
+                `dedup matched an existing run with different ${mismatch.join(', ')};` +
+                ' the original values apply — cancel it first if these changes matter (fingerprint = endpoint+cwd+task+mode)',
             )
         }
         emitOk({
@@ -428,21 +458,33 @@ async function verbGet(ctx: Ctx, args: string[]): Promise<void> {
 /**
  * Direct endpoint kill gated on PID-reuse identity (contracts §5): a start-token
  * mismatch is someone else's process — never taskkill it. Query failure degrades
- * to pid liveness with a note. Returns that note for the caller, or null.
+ * to pid liveness with a note. Returns {killed, note}: killed=false means the
+ * tree termination did NOT succeed (or identity said leave it alone) — the
+ * caller must not report the run as stopped (codex P1-06).
  */
 async function terminateRecordedEndpoint(
     endpointPid: number,
     recordedStart: string | null | undefined,
-): Promise<string | null> {
+): Promise<{ killed: boolean; note: string | null }> {
     const verdict = await verifyProcessIdentity(endpointPid, recordedStart)
     if (verdict === 'mismatch') {
-        return `endpoint pid ${endpointPid} start-token mismatch (pid reused by another process); not killed, treated as already gone`
+        return {
+            killed: false,
+            note: `endpoint pid ${endpointPid} start-token mismatch (pid reused by another process); not killed, treated as already gone`,
+        }
     }
-    if (!pidAlive(endpointPid)) return null
-    await terminateEndpointTree(endpointPid)
-    return verdict === 'unknown'
+    if (!pidAlive(endpointPid)) return { killed: true, note: null }
+    const term = await terminateEndpointTree(endpointPid)
+    const identityNote = verdict === 'unknown'
         ? 'endpoint identity could not be re-verified (query unavailable); killed on pid liveness alone'
         : null
+    if (!term.ok) {
+        return {
+            killed: false,
+            note: `endpoint tree termination failed (pid ${endpointPid}: ${term.error}); the endpoint may still be running — verify before re-dispatching`,
+        }
+    }
+    return { killed: true, note: identityNote }
 }
 
 async function verbCancel(ctx: Ctx, args: string[]): Promise<void> {
@@ -458,13 +500,24 @@ async function verbCancel(ctx: Ctx, args: string[]): Promise<void> {
 
     const now = () => new Date().toISOString()
     if (state.state === 'attention') {
-        // worker is gone; kill a possibly orphaned endpoint process, then close out
+        // worker is gone; kill a possibly orphaned endpoint process, then close out.
+        // An unconfirmed kill is NOT a cancellation: the endpoint may still run.
         const endpointPid = state.worker?.endpoint_pid ?? null
-        const note = endpointPid
+        const term = endpointPid
             ? await terminateRecordedEndpoint(endpointPid, state.worker?.endpoint_pid_start)
-            : null
-        await writeCancelledDirect(ctx.store, state, 'cancelled while attention (worker absent)')
-        emitOk({ run_id: runId, state: 'cancelled', ...(note ? { note } : {}) })
+            : { killed: true, note: null }
+        if (term.killed) {
+            await writeCancelledDirect(ctx.store, state, 'cancelled while attention (worker absent)')
+            emitOk({ run_id: runId, state: 'cancelled', ...(term.note ? { note: term.note } : {}) })
+        } else {
+            await ctx.store.writeState(transitionRecord(state, 'attention', now()))
+            emitOk({
+                run_id: runId,
+                state: 'attention',
+                needs_attention: true,
+                note: `cancel could not be confirmed: ${term.note ?? 'endpoint process state unknown'}; run left in attention`,
+            })
+        }
         return
     }
 
@@ -475,29 +528,42 @@ async function verbCancel(ctx: Ctx, args: string[]): Promise<void> {
         emitOk({ run_id: runId, state: final.state })
         return
     }
-    // worker wedged: direct fallback kill + close out
+    // worker wedged: direct fallback kill + close out (only on a confirmed kill)
     const endpointPid = final?.worker?.endpoint_pid ?? null
-    const identityNote = endpointPid
+    const term = endpointPid
         ? await terminateRecordedEndpoint(endpointPid, final?.worker?.endpoint_pid_start)
-        : null
+        : { killed: false, note: 'no recorded endpoint pid' }
     const latest = await ctx.store.readState(runId)
-    if (latest && !isTerminal(latest.state)) {
+    if (term.killed && latest && !isTerminal(latest.state)) {
         await writeCancelledDirect(ctx.store, latest, 'cancel finalized by CLI after worker did not respond within 15s')
+    } else if (!term.killed && latest && !isTerminal(latest.state)) {
+        await ctx.store.writeState(transitionRecord(latest, 'attention', now()))
     }
     const after = await ctx.store.readState(runId)
     emitOk({
         run_id: runId,
         state: after?.state ?? 'cancelled',
-        note: ['worker did not finalize within 15s; CLI closed the run', identityNote].filter(Boolean).join('; '),
+        needs_attention: after?.state === 'attention' || undefined,
+        note: [
+            term.killed ? 'worker did not finalize within 15s; CLI closed the run' : 'worker did not finalize within 15s and the fallback kill was not confirmed; run left in attention',
+            term.note,
+        ].filter(Boolean).join('; '),
     })
 }
 
 async function writeCancelledDirect(store: RunStore, state: RunStateRecord, note: string): Promise<void> {
     const terminalAt = new Date().toISOString()
+    // result.json is the terminal authority: when the worker raced us and already
+    // wrote a terminal result, adopt its state instead of stamping cancelled over
+    // it (codex P1-06: state/result divergence survives nothing — reconcile
+    // skips terminal states and would never repair it)
+    const existing = await store.readResult(state.run_id).catch(() => null)
+    let finalState: 'cancelled' | RunResult['state'] = 'cancelled'
+    if (existing && isTerminal(existing.state)) finalState = existing.state
     const result: RunResult = {
         schema_version: '1.0.0',
         run_id: state.run_id,
-        state: 'cancelled',
+        state: finalState,
         exit_code: null,
         final_text: '',
         evidence: {
@@ -510,13 +576,15 @@ async function writeCancelledDirect(store: RunStore, state: RunStateRecord, note
         session_handle: state.session.handle,
         terminal_at: terminalAt,
     }
-    try {
-        await store.writeResult(result)
-    } catch {
-        // worker raced us to result.json; its record wins
+    if (finalState === 'cancelled') {
+        try {
+            await store.writeResult(result)
+        } catch {
+            // worker raced us to result.json; its record wins
+        }
     }
     try {
-        await store.writeState(transitionRecord(state, 'cancelled', terminalAt))
+        await store.writeState(transitionRecord(state, finalState, terminalAt))
     } catch {
         // already transitioned by the worker
     }
@@ -581,11 +649,10 @@ async function verbModels(ctx: Ctx, args: string[]): Promise<void> {
     }
 
     try {
-        const spawnRes = await planEndpointSpawn(manifest, {
-            configBin: ctx.config.endpoints.overrides[manifest.name]?.bin ?? null,
-        })
+        const configBin = ctx.config.endpoints.overrides[manifest.name]?.bin ?? null
+        const spawnRes = await planEndpointSpawn(manifest, { configBin })
         const version = spawnRes.plan ? await detectVersion(manifest, spawnRes.plan) : null
-        const entry = await discoverAndCacheModels(manifest, cache, version)
+        const entry = await discoverAndCacheModels(manifest, cache, version, configBin)
         if (!entry) {
             throw new CliError('UNSUPPORTED', `endpoint "${manifest.name}" has no model discovery in v0`)
         }
@@ -619,12 +686,30 @@ async function verbModels(ctx: Ctx, args: string[]): Promise<void> {
     }
 }
 
+/** Version values declared anywhere in the manifest (permission caps, command, resume, effort) — the drift reference set. */
+function manifestVersionValues(manifest: EndpointManifest): string[] {
+    const found = new Set<string>()
+    const push = (v: unknown) => {
+        if (typeof v === 'string' && v.length > 0) found.add(v)
+    }
+    push((manifest.command as { version?: unknown }).version)
+    push(manifest.resume?.version)
+    push(manifest.effort?.version)
+    for (const value of Object.values(manifest.permission)) {
+        if (value && typeof value === 'object' && 'version' in value) push((value as { version?: unknown }).version)
+    }
+    return [...found]
+}
+
 async function verbDoctor(ctx: Ctx): Promise<void> {
     const enabled = ctx.config.endpoints.enabled
     const modelsCache = new ModelsCache(ctx.dataDir)
     const endpoints = []
+    const issues: string[] = []
     for (const manifest of ctx.registry.list()) {
-        if (enabled && !enabled.includes(manifest.name)) continue
+        // list every manifest with an enabled flag — a disabled or not-yet-enabled
+        // endpoint is information, not something to hide (codex P2-03)
+        const isEnabled = enabled === null || enabled.includes(manifest.name)
         const configBin = ctx.config.endpoints.overrides[manifest.name]?.bin ?? null
         const spawnRes = await planEndpointSpawn(manifest, { configBin })
         let version: string | null = null
@@ -633,6 +718,16 @@ async function verbDoctor(ctx: Ctx): Promise<void> {
             version = await detectVersion(manifest, spawnRes.plan)
             if (version === null) versionError = 'version probe failed or timed out'
         }
+        // drift = the installed version is not any version the manifest was
+        // verified against — run `paidan probe --endpoint <name>` to recalibrate
+        const knownVersions = manifestVersionValues(manifest)
+        let drift: boolean | 'unknown' | null = null
+        if (!spawnRes.plan) drift = null
+        else if (version === null) drift = 'unknown'
+        else drift = knownVersions.length > 0 && !knownVersions.includes(version)
+        if (!spawnRes.plan) issues.push(`${manifest.name}: bin not resolvable (see repair_hint)`)
+        else if (drift === true) issues.push(`${manifest.name}: version ${version} is not any manifest-verified version (known: ${knownVersions.join(', ')}) — run paidan probe --endpoint ${manifest.name}`)
+        else if (drift === 'unknown') issues.push(`${manifest.name}: version probe failed — drift state unknown`)
         const cached = await modelsCache.read(manifest.name)
         const modelsCacheInfo = cached
             ? {
@@ -653,16 +748,20 @@ async function verbDoctor(ctx: Ctx): Promise<void> {
             : null
         endpoints.push({
             name: manifest.name,
+            enabled: isEnabled,
             bin: manifest.detect.bin,
             bin_resolved: spawnRes.plan?.endpoint_bin ?? null,
             resolved_from: spawnRes.plan?.resolved_from ?? null,
             version,
             version_error: versionError,
+            drift,
+            manifest_versions: knownVersions,
             spawn_notes: spawnRes.notes,
             repair_hint: spawnRes.plan
                 ? null
                 : `set endpoints.overrides.${manifest.name}.bin in ${ctx.configPath} to the native binary or JS bundle, or install a PATH shim`,
             models_cache: modelsCacheInfo,
+            effort_options: manifest.effort?.options ?? null,
             permission,
             native_preflight: nativePreflight,
             // read-only: what the endpoint's own home currently carries (the
@@ -679,6 +778,16 @@ async function verbDoctor(ctx: Ctx): Promise<void> {
         usageDbStatus = { path: nodePath.join(ctx.dataDir, 'usage.db'), ok: true }
     } catch (err) {
         usageDbStatus.error = err instanceof Error ? err.message : String(err)
+        issues.push(`usage.db: ${(err instanceof Error ? err.message : String(err)).slice(0, 120)}`)
+    }
+    // host skill state (read-only detection; installs only ever happen in init)
+    let hosts: Array<{ name: string; detected: boolean; skills_dir: string; installed: boolean }> = []
+    try {
+        const registry = await loadHostRegistry(pkgRoot)
+        const home = process.env.PAIDAN_HOST_HOME || os.homedir()
+        hosts = (await detectHosts(registry, home)).map((h) => ({ name: h.name, detected: h.detected, skills_dir: h.skills_dir, installed: h.installed }))
+    } catch {
+        hosts = []
     }
     emitOk({
         config_path: ctx.configPath,
@@ -689,6 +798,10 @@ async function verbDoctor(ctx: Ctx): Promise<void> {
         node: process.version,
         platform: process.platform,
         endpoints,
+        hosts,
+        // human-readable summary of what needs attention; ok:true only means
+        // the doctor itself ran — read these per endpoint (codex P2-03)
+        issues,
         usage_db: usageDbStatus,
     })
 }
@@ -704,9 +817,12 @@ async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
     })
     const manifest = pickEndpoint(ctx, values.endpoint)
     const timeoutSec = values.timeout ? Number(values.timeout) : 300
+    if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) {
+        throw new CliError('ARGS_INVALID', '--timeout must be a positive number of seconds')
+    }
     const configBin = ctx.config.endpoints.overrides[manifest.name]?.bin ?? null
     const spawnRes = await planEndpointSpawn(manifest, { configBin })
-    const probes: Array<{ name: string; verdict: 'pass' | 'fail' | 'skip'; detail: string }> = []
+    const probes: Array<{ name: string; verdict: 'pass' | 'fail' | 'skip' | 'indeterminate'; detail: string; run_ids?: string[] }> = []
     if (!spawnRes.plan) {
         emitOk({
             endpoint: manifest.name,
@@ -721,39 +837,65 @@ async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
     // P1/P3 share one tier: the most conservative supported preset (never a
     // hardcoded one — e.g. zcode enforces only unattended headless)
     const probePreset = pickProbePreset(manifest)
+    /** cancel a probe run that outlived its wait: marker -> 15s -> fallback kill -> close out. Returns the (possibly still non-terminal) state. */
+    const cancelProbeRun = async (runId: string): Promise<RunStateRecord | null> => {
+        const st = await ctx.store.readState(runId)
+        if (!st || isTerminal(st.state)) return st
+        await writeJsonAtomic(ctx.store.cancelMarkerPath(runId), { requested_at: new Date().toISOString() })
+        let s = await waitForTerminal(ctx.store, runId, 15)
+        if (!s || !isTerminal(s.state)) {
+            const pid = s?.worker?.endpoint_pid ?? null
+            if (pid) await terminateRecordedEndpoint(pid, s?.worker?.endpoint_pid_start)
+            const latest = await ctx.store.readState(runId)
+            if (latest && !isTerminal(latest.state)) {
+                await writeCancelledDirect(ctx.store, latest, 'probe wait timed out; cancelled by probe')
+            }
+            s = await ctx.store.readState(runId)
+        }
+        return s
+    }
     const runProbeTask = async (
         task: string,
-        opts: { cwd?: string; deliverables?: Array<{ path: string; expected: string | null }>; resume?: string; mode?: PermissionPreset },
-    ) => {
-        const ownCwd = opts.cwd === undefined
-        const cwd = opts.cwd ?? (await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-probe-')))
-        try {
-            const probeModel = resolveModel(ctx, manifest.name, undefined)
-            checkModelSupported(manifest, probeModel)
-            const probeEffort = resolveEffort(ctx, manifest.name, undefined)
-            checkEffort(manifest, probeEffort)
-            const created = await ctx.store.create({
-                endpoint: manifest.name,
-                cwd,
-                add_dirs: [],
-                task_file: null,
-                task_text: task,
-                mode: opts.mode ?? probePreset ?? 'workspace-write',
-                model: probeModel,
-                effort: probeEffort,
-                resume_session: opts.resume ?? null,
-                run_timeout_sec: effectiveRunTimeoutSec(null, ctx.config),
-                deliverables: opts.deliverables ?? [],
-                warnings: [],
-            })
-            const runId = created.request.run_id
-            await launchWorkerFor(ctx, runId)
-            const state = await waitForTerminal(ctx.store, runId, timeoutSec)
-            const result = await resultOrNull(ctx.store, runId)
-            return { runId, state, result }
-        } finally {
-            if (ownCwd) await fs.rm(cwd, { recursive: true, force: true }).catch(() => {})
+        opts: { cwd: string; deliverables?: Array<{ path: string; expected: string | null }>; resume?: string; mode?: PermissionPreset },
+    ): Promise<{ runId: string; state: RunStateRecord | null; result: RunResult | null; timedOut: boolean }> => {
+        const probeModel = resolveModel(ctx, manifest.name, undefined)
+        checkModelSupported(manifest, probeModel)
+        const probeEffort = resolveEffort(ctx, manifest.name, undefined)
+        checkEffort(manifest, probeEffort)
+        const created = await ctx.store.create({
+            endpoint: manifest.name,
+            cwd: opts.cwd,
+            add_dirs: [],
+            task_file: null,
+            task_text: task,
+            mode: opts.mode ?? probePreset ?? 'workspace-write',
+            model: probeModel,
+            effort: probeEffort,
+            resume_session: opts.resume ?? null,
+            run_timeout_sec: effectiveRunTimeoutSec(null, ctx.config),
+            deliverables: opts.deliverables ?? [],
+            warnings: [],
+        })
+        const runId = created.request.run_id
+        await launchWorkerFor(ctx, runId)
+        let state = await waitForTerminal(ctx.store, runId, timeoutSec)
+        // a wait timeout is NOT an execution end: cancel before reporting, and
+        // keep the scratch cwd when anything may still be executing (codex P1-10)
+        const timedOut = !state || !isTerminal(state.state)
+        if (timedOut) state = (await cancelProbeRun(runId)) ?? state
+        const result = await resultOrNull(ctx.store, runId)
+        return { runId, state, result, timedOut }
+    }
+    /** best-effort scratch cleanup that never deletes a cwd a run may still occupy */
+    const cleanProbeCwd = async (cwd: string, ...runs: Array<{ runId: string; timedOut: boolean }>): Promise<boolean> => {
+        for (const r of runs) {
+            if (r.timedOut) {
+                const st = await ctx.store.readState(r.runId).catch(() => null)
+                if (!st || !isTerminal(st.state)) return false
+            }
         }
+        await fs.rm(cwd, { recursive: true, force: true }).catch(() => {})
+        return true
     }
 
     // P1 write contract
@@ -761,16 +903,19 @@ async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
         probes.push({ name: 'P1-write', verdict: 'skip', detail: 'endpoint supports no permission preset' })
     } else {
         const token = `paidan-probe-${Date.now()}`
+        const p1cwd = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-probe-'))
         try {
-            const { state, result } = await runProbeTask(
+            const r = await runProbeTask(
                 `Create a file named probe-write.txt in the current directory whose entire content is exactly: ${token} Then reply "done".`,
-                { deliverables: [{ path: 'probe-write.txt', expected: token }] },
+                { cwd: p1cwd, deliverables: [{ path: 'probe-write.txt', expected: token }] },
             )
-            const found = result?.evidence.deliverables.every((d) => d.found) ?? false
+            const found = r.result?.evidence.deliverables.every((d) => d.found) ?? false
+            const cleaned = await cleanProbeCwd(p1cwd, r)
             probes.push({
                 name: 'P1-write',
-                verdict: state?.state === 'completed' && found ? 'pass' : 'fail',
-                detail: `preset=${probePreset} state=${state?.state ?? 'none'} deliverable_found=${found}`,
+                verdict: r.state?.state === 'completed' && found && !r.timedOut ? 'pass' : r.timedOut ? 'indeterminate' : 'fail',
+                run_ids: [r.runId],
+                detail: `preset=${probePreset} state=${r.state?.state ?? 'none'} deliverable_found=${found}${r.timedOut ? ' wait_timed_out (run cancelled)' : ''}${cleaned ? '' : ` scratch kept: ${p1cwd}`}`,
             })
         } catch (err) {
             probes.push({ name: 'P1-write', verdict: 'fail', detail: err instanceof Error ? err.message : String(err) })
@@ -787,25 +932,32 @@ async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
             probes.push({ name: 'P2-readonly-refusal', verdict: 'fail', detail: err instanceof Error ? err.message : String(err) })
         }
     } else {
-        // Live P2: under the read-only preset the file must NOT be created,
-        // and the refusal should be observable in terminal evidence.
+        // Live P2: "no file" alone proves nothing — auth failure, a wedged run or
+        // a parser miss all look the same. pass needs the task terminal AND
+        // attributable refusal evidence; anything else is indeterminate (codex P1-09)
         const p2cwd = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-probe-p2-'))
         try {
-            const { state, result } = await runProbeTask(
+            const r = await runProbeTask(
                 'Create a file named probe-ro.txt in the current directory with content "x", then reply "done".',
                 { cwd: p2cwd, mode: 'read-only' },
             )
-            const created = await fs.stat(nodePath.join(p2cwd, 'probe-ro.txt')).then(() => true, () => false)
-            const refusals = result?.evidence.refusals ?? []
+            const fileCreated = await fs.stat(nodePath.join(p2cwd, 'probe-ro.txt')).then(() => true, () => false)
+            const refusals = r.result?.evidence.refusals ?? []
+            const terminal = r.state !== null && isTerminal(r.state.state)
+            let verdict: 'pass' | 'fail' | 'indeterminate'
+            if (fileCreated) verdict = 'fail'
+            else if (!terminal || r.timedOut) verdict = 'indeterminate'
+            else if (refusals.length > 0) verdict = 'pass'
+            else verdict = 'indeterminate'
+            const cleaned = await cleanProbeCwd(p2cwd, r)
             probes.push({
                 name: 'P2-readonly-refusal',
-                verdict: !created ? 'pass' : 'fail',
-                detail: `file_created=${created} state=${state?.state ?? 'none'} refusals=${refusals.join('|') || 'none-observed'}`,
+                verdict,
+                run_ids: [r.runId],
+                detail: `file_created=${fileCreated} state=${r.state?.state ?? 'none'} refusals=${refusals.join('|') || 'none-observed'}${verdict === 'indeterminate' ? ' — no attributable refusal evidence, permission enforcement unverified' : ''}${r.timedOut ? ' wait_timed_out (run cancelled)' : ''}${cleaned ? '' : ` scratch kept: ${p2cwd}`}`,
             })
         } catch (err) {
             probes.push({ name: 'P2-readonly-refusal', verdict: 'fail', detail: err instanceof Error ? err.message : String(err) })
-        } finally {
-            await fs.rm(p2cwd, { recursive: true, force: true }).catch(() => {})
         }
     }
 
@@ -822,36 +974,43 @@ async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
             const first = await runProbeTask(`Remember the codename "${token}". Reply with exactly: ok`, { cwd: p3cwd, mode: probePreset })
             const handle = first.result?.session_handle ?? first.state?.session.handle ?? null
             if (!handle) {
-                probes.push({ name: 'P3-resume', verdict: 'fail', detail: 'first run produced no session handle' })
+                const cleaned = await cleanProbeCwd(p3cwd, first)
+                probes.push({ name: 'P3-resume', verdict: first.timedOut ? 'indeterminate' : 'fail', run_ids: [first.runId], detail: `first run produced no session handle (state=${first.state?.state ?? 'none'}${first.timedOut ? ', wait timed out' : ''})${cleaned ? '' : ` scratch kept: ${p3cwd}`}` })
             } else {
                 const second = await runProbeTask(
                     'What is the codename I asked you to remember? Reply with just the codename.',
                     { cwd: p3cwd, resume: handle, mode: probePreset },
                 )
                 const recalled = second.result?.final_text.includes(token) ?? false
+                const cleaned = await cleanProbeCwd(p3cwd, first, second)
                 probes.push({
                     name: 'P3-resume',
-                    verdict: recalled ? 'pass' : 'fail',
-                    detail: `preset=${probePreset} session=${handle} recalled=${recalled} state=${second.state?.state ?? 'none'}`,
+                    verdict: recalled && !first.timedOut && !second.timedOut ? 'pass' : (first.timedOut || second.timedOut) ? 'indeterminate' : 'fail',
+                    run_ids: [first.runId, second.runId],
+                    detail: `preset=${probePreset} session=${handle} recalled=${recalled} state=${second.state?.state ?? 'none'}${first.timedOut || second.timedOut ? ' wait_timed_out (run cancelled)' : ''}${cleaned ? '' : ` scratch kept: ${p3cwd}`}`,
                 })
             }
         } catch (err) {
             probes.push({ name: 'P3-resume', verdict: 'fail', detail: err instanceof Error ? err.message : String(err) })
-        } finally {
-            await fs.rm(p3cwd, { recursive: true, force: true }).catch(() => {})
         }
     }
 
-    // refresh verified_at on pass (version drift policy in AGENTS.md)
+    // refresh verified_at on pass (version drift policy in AGENTS.md); the
+    // receipt records whether the manifest write actually happened (a global
+    // npm install dir may be read-only) instead of only stderr (codex P1-08)
     const today = localToday()
+    let verifiedRefresh: Record<string, unknown> = { attempted: false }
     if (probes.some((p) => p.verdict === 'pass')) {
         try {
             await refreshManifestVerifiedAt(ctx.registry.dir, manifest.name, probes, today, version)
+            verifiedRefresh = { attempted: true, ok: true, dir: ctx.registry.dir }
         } catch (err) {
-            process.stderr.write(`probe: manifest verified_at refresh failed: ${err instanceof Error ? err.message : String(err)}\n`)
+            const message = err instanceof Error ? err.message : String(err)
+            process.stderr.write(`probe: manifest verified_at refresh failed: ${message}\n`)
+            verifiedRefresh = { attempted: true, ok: false, error: message }
         }
     }
-    emitOk({ endpoint: manifest.name, bin: plan.endpoint_bin, resolved_from: plan.resolved_from, version, probes })
+    emitOk({ endpoint: manifest.name, bin: plan.endpoint_bin, resolved_from: plan.resolved_from, version, probes, verified_at_refresh: verifiedRefresh })
 }
 
 /** Local calendar date for verified_at (not UTC — the field answers "when, for this user"). */
@@ -909,19 +1068,23 @@ async function readEndpointNativeDefaults(manifest: EndpointManifest): Promise<N
     }
 }
 
-/** Detection + model discovery for every manifest; live discovery writes the models cache through. */
-async function gatherEndpointInfo(ctx: Ctx): Promise<InitEndpointInfo[]> {
+/** Detection + model discovery for every manifest. Discovery entries are collected in memory only (persist:false) — an aborted or surveyed init writes nothing; the caller persists after committing answers (codex P1-04). */
+async function gatherEndpointInfo(ctx: Ctx): Promise<{ info: InitEndpointInfo[]; pendingCache: CachedModels[]; cache: ModelsCache }> {
     const cache = new ModelsCache(ctx.dataDir)
     const out: InitEndpointInfo[] = []
+    const pendingCache: CachedModels[] = []
     for (const manifest of ctx.registry.list()) {
-        const spawnRes = await planEndpointSpawn(manifest, {
-            configBin: ctx.config.endpoints.overrides[manifest.name]?.bin ?? null,
-        })
+        const configBin = ctx.config.endpoints.overrides[manifest.name]?.bin ?? null
+        const spawnRes = await planEndpointSpawn(manifest, { configBin })
         const detected = spawnRes.plan !== null
         const version = spawnRes.plan ? await detectVersion(manifest, spawnRes.plan) : null
         let models: InitEndpointInfo['models'] = []
         try {
-            models = (await discoverAndCacheModels(manifest, cache, version))?.models ?? []
+            const entry = await discoverAndCacheModels(manifest, cache, version, configBin, { persist: false })
+            if (entry) {
+                models = entry.models
+                pendingCache.push(entry)
+            }
         } catch {
             // discovery is best-effort during init; notes stay with the cache
         }
@@ -936,7 +1099,7 @@ async function gatherEndpointInfo(ctx: Ctx): Promise<InitEndpointInfo[]> {
             repair: detected ? null : (spawnRes.notes.at(-1) ?? null),
         })
     }
-    return out
+    return { info: out, pendingCache, cache }
 }
 
 async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
@@ -946,13 +1109,29 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
         options: {
             yes: { type: 'boolean', default: false },
             effort: { type: 'string' },
+            hosts: { type: 'string' },
         },
     })
-    const info = await gatherEndpointInfo(ctx)
+    const hostsFilter = values.hosts !== undefined
+        ? values.hosts.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
+        : null
+    if (hostsFilter !== null && !values.yes) {
+        throw new CliError('ARGS_INVALID', '--hosts applies to the --yes path (the interactive wizard picks hosts with checkboxes)')
+    }
+    const { info, pendingCache, cache } = await gatherEndpointInfo(ctx)
     const hostInfo = await gatherHostInfo()
+    if (hostsFilter !== null) {
+        const detectedNames = new Set(hostInfo.hosts.filter((h) => h.detected).map((h) => h.name))
+        const unknown = hostsFilter.filter((h) => !detectedNames.has(h))
+        if (unknown.length > 0) {
+            throw new CliError('ARGS_INVALID', `--hosts names not detected on this machine: ${unknown.join(', ')} (detected: ${[...detectedNames].join(', ') || 'none'})`)
+        }
+    }
 
     if (!process.stdin.isTTY && !values.yes) {
-        // non-TTY callers (pipes, agents) get state + guidance, never a hanging prompt
+        // non-TTY callers (pipes, agents) get state + guidance, never a hanging
+        // prompt; the survey itself wrote nothing (model caches persist only
+        // after a completed init)
         process.stdout.write(JSON.stringify({
             ok: false,
             error: { code: 'INIT_INTERACTIVE_REQUIRED', message: 'init is interactive on a TTY; use --yes for defaults or edit config.json directly' },
@@ -961,7 +1140,7 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
                 config_exists: existsSync(ctx.configPath),
                 endpoints: info,
                 hosts: hostInfo.hosts.map((h) => ({ name: h.name, detected: h.detected, skills_dir: h.skills_dir })),
-                non_interactive: 'paidan init --yes enables all detected endpoints and leaves every model/effort at the endpoint\'s native default (the agent\'s own home carries them; --yes --effort <level> additionally applies that level to every endpoint whose options include it); the skill is installed into every detected host',
+                non_interactive: 'paidan init --yes enables all detected endpoints and leaves every model/effort at the endpoint\'s native default (the agent\'s own home carries them; --yes --effort <level> additionally applies that level to every endpoint whose options include it; --hosts <names> restricts the skill install to those hosts); the skill is installed into every detected host unless --hosts narrows it',
             },
         }) + '\n')
         return 1
@@ -969,21 +1148,27 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
 
     let answers: InitAnswers
     if (values.yes) {
-        answers = defaultInitAnswers(info, hostInfo.hosts.filter((h) => h.detected).map((h) => h.name), values.effort)
+        answers = defaultInitAnswers(info, hostInfo.hosts.filter((h) => h.detected).map((h) => h.name), values.effort, hostsFilter)
     } else {
         try {
             answers = await promptInitAnswers(info, hostInfo.hosts, ctx.config)
         } catch (err) {
             if (err instanceof PromptAbort) {
                 process.stdout.write(
-                    JSON.stringify({ ok: false, error: { code: 'INIT_ABORTED', message: 'init aborted by user (Ctrl+C); nothing written' } }) + '\n',
+                    JSON.stringify({
+                        ok: false,
+                        error: {
+                            code: 'INIT_ABORTED',
+                            message: 'init aborted by user (Ctrl+C); config, skills and this survey\'s model caches were not written',
+                        },
+                    }) + '\n',
                 )
                 return 130
             }
             throw err
         }
     }
-    const cfg = buildInitConfig(info, answers)
+    const cfg = buildInitConfig(info, answers, ctx.config)
     const selectedHosts = selectSkillHosts(hostInfo.hosts, answers.skill_hosts)
 
     if (existsSync(ctx.configPath)) {
@@ -991,14 +1176,20 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
         await fs.copyFile(ctx.configPath, `${ctx.configPath}.bak-${Date.now()}`).catch(() => {})
     }
     // re-init merges: the wizard owns endpoints.enabled + the wizard-owned
-    // defaults keys (endpoint/model/models/efforts); machine-local keys
+    // defaults keys (endpoint/model/models/effort/efforts); machine-local keys
     // it does not own (endpoints.overrides, dataDir, defaults.run_timeout_sec,
-    // the hand-set global defaults.effort, ...) survive
+    // ...) survive. The global model/effort fallbacks are deliberately cleared:
+    // they poison endpoints without that selection surface and a surviving
+    // global silently overrides a "native" wizard choice.
     let existingRaw: Record<string, unknown> = {}
     if (existsSync(ctx.configPath)) {
         existingRaw = JSON.parse(await fs.readFile(ctx.configPath, 'utf8')) as Record<string, unknown>
     }
-    await writeJsonAtomic(ctx.configPath, mergeInitConfig(existingRaw, cfg))
+    const merged = mergeInitConfig(existingRaw, cfg)
+    await writeJsonAtomic(ctx.configPath, merged)
+    // the survey's model caches persist only now — an aborted or surveyed
+    // (non-TTY) init wrote nothing at all (codex P1-04)
+    for (const entry of pendingCache) await cache.write(entry).catch(() => {})
 
     const skills: SkillInstallResult[] = []
     if (selectedHosts.length > 0 && hostInfo.source) {
@@ -1031,6 +1222,9 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
         written: true,
         enabled: answers.enabled,
         defaults: cfg.defaults,
+        // what actually applies after the merge — machine keys and the cleared
+        // global fallbacks are visible here, not just the wizard's own answers
+        effective_defaults: (merged.defaults ?? {}) as Record<string, unknown>,
         endpoints: info.map((e) => ({ name: e.name, detected: e.detected, version: e.version, models: e.models.length })),
         ...effortReport,
         skills,
@@ -1079,11 +1273,11 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config
             if (q.model.kind === 'skip-no-selection') {
                 process.stderr.write(`(no headless model selection for ${name}; its native config owns the model${q.nativeModel ? ` (currently ${q.nativeModel})` : ''})\n`)
             } else if (q.model.kind === 'skip-none') {
-                process.stderr.write(`(no discovered models for ${name}; native default will be used)\n`)
-            } else if (q.model.kind === 'auto') {
-                models[name] = q.model.value
-                process.stderr.write(`Default model for ${name}: ${q.model.value} (only discovered model)\n`)
+                process.stderr.write(`(no discovered models for ${name}; native default will be used; a hand-set default survives in config.json)\n`)
             } else {
+                if (q.model.staleModelValue) {
+                    process.stderr.write(`(configured model "${q.model.staleModelValue}" for ${name} is not in the discovered lineup; keep it explicitly or pick another)\n`)
+                }
                 const idx = await menuSelect(
                     `Default model for ${name}`,
                     q.model.options.map((alias) => ({
@@ -1092,7 +1286,10 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config
                     })),
                     q.model.options.indexOf(q.model.fallback),
                 )
-                models[name] = q.model.options[idx] as string
+                const choice = q.model.options[idx] as string
+                if (choice === q.nativeModelLabel) models[name] = null
+                else if (q.model.staleModelValue && choice === `(keep current: ${q.model.staleModelValue})`) models[name] = q.model.staleModelValue
+                else models[name] = choice
             }
             if (q.effort.kind === 'skip') {
                 process.stderr.write(`(no effort selection for ${name}; ${q.nativeEffortNote})\n`)
@@ -1118,7 +1315,9 @@ async function promptInitRaw(info: InitEndpointInfo[], hosts: HostInfo[], config
             detectedHosts.map((h) => ({
                 label: h.name,
                 hint: `${h.skills_dir}${h.installed ? ' — already installed' : ''}`,
-                checked: true,
+                // preselect what is actually installed; a newly detected host is
+                // opt-in (explicit selection, never a silent write to a new home)
+                checked: h.installed,
             })),
         )
         skillHosts.push(...picked.map((i) => (detectedHosts[i] as HostInfo).name))
@@ -1163,12 +1362,15 @@ async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[], confi
                 if (q.model.kind === 'skip-no-selection') {
                     process.stderr.write(`(no headless model selection for ${name}; its native config owns the model${q.nativeModel ? ` (currently ${q.nativeModel})` : ''})\n`)
                 } else if (q.model.kind === 'skip-none') {
-                    process.stderr.write(`(no discovered models for ${name}; native default will be used)\n`)
-                } else if (q.model.kind === 'auto') {
-                    models[name] = q.model.value
-                    process.stderr.write(`Default model for ${name}: ${q.model.value} (only discovered model)\n`)
+                    process.stderr.write(`(no discovered models for ${name}; native default will be used; a hand-set default survives in config.json)\n`)
                 } else {
-                    models[name] = await pickOne(rl, `Default model for ${name}`, q.model.options, q.model.fallback)
+                    if (q.model.staleModelValue) {
+                        process.stderr.write(`(configured model "${q.model.staleModelValue}" for ${name} is not in the discovered lineup; keep it explicitly or pick another)\n`)
+                    }
+                    const choice = await pickOne(rl, `Default model for ${name}`, q.model.options, q.model.fallback)
+                    if (choice === q.nativeModelLabel) models[name] = null
+                    else if (q.model.staleModelValue && choice === `(keep current: ${q.model.staleModelValue})`) models[name] = q.model.staleModelValue
+                    else models[name] = choice
                 }
                 if (q.effort.kind === 'skip') {
                     process.stderr.write(`(no effort selection for ${name}; ${q.nativeEffortNote})\n`)
@@ -1188,7 +1390,9 @@ async function promptInitLine(info: InitEndpointInfo[], hosts: HostInfo[], confi
             detectedHosts.forEach((h, i) => {
                 process.stderr.write(`  ${i + 1}) ${h.name} (${h.skills_dir}${h.installed ? ' — already installed' : ''})\n`)
             })
-            const picked = await pickMulti(rl, 'Install skill into hosts', detectedHosts.length)
+            const picked = await pickMulti(rl, 'Install skill into hosts', detectedHosts.length,
+                // default keeps installed hosts only; newly detected hosts are opt-in
+                detectedHosts.map((h, i) => (h.installed ? i : -1)).filter((i) => i >= 0))
             skillHosts.push(...picked.map((i) => (detectedHosts[i] as HostInfo).name))
         }
         return { enabled, default_endpoint: defaultEndpoint, models, efforts, skill_hosts: skillHosts }
@@ -1225,13 +1429,56 @@ async function pickOne(rl: readline.Interface, title: string, options: string[],
 
 // ---------- entry ----------
 
+/** Per-verb flag reference for `paidan help <verb>` (human text on stderr; stdout stays JSON). */
+const VERB_HELP: Record<string, string> = {
+    init: 'init [--yes] [--effort <level>] [--hosts <name,name>]\n' +
+        '  interactive wizard on a TTY; --yes = enable all detected endpoints, every model/effort\n' +
+        '  stays at the endpoint native default, skill into every detected host;\n' +
+        '  --yes --effort <level> applies that level where declared; --yes --hosts <names>\n' +
+        '  restricts the skill install to those hosts',
+    run: 'run --endpoint <name> --cwd <abs> (--task <text> | --task-file <file>)\n' +
+        '  [--mode read-only|workspace-write|unattended | --capabilities <json>] [--model <alias>]\n' +
+        '  [--effort <level>] [--resume <session_handle>] [--add-dir <path>]... [--deliverable <rel>]...\n' +
+        '  [--run-timeout <sec>] (0 disables; default 1800 or defaults.run_timeout_sec)',
+    get: 'get <run_id> [--wait] [--timeout <sec>]\n' +
+        '  --wait blocks until terminal/attention or --timeout; attention returns immediately',
+    cancel: 'cancel <run_id>   (explicit only; no-op on terminal runs)',
+    list: 'list [--state completed,failed,cancelled,unknown,attention] [--limit N]',
+    models: 'models --endpoint <name> [--refresh]   (cache-first; --refresh re-queries live)',
+    doctor: 'doctor   (detection, versions, drift, native_defaults, hosts, issues)',
+    probe: 'probe --endpoint <name> [--timeout <sec>]\n' +
+        '  P1 write / P2 read-only refusal / P3 resume contract probes; real agent calls',
+}
+
 async function main(): Promise<number> {
     const [verb, ...rest] = process.argv.slice(2)
+    if (verb === '--version' || verb === '-v' || verb === 'version') {
+        const pkg = JSON.parse(await fs.readFile(nodePath.join(pkgRoot, 'package.json'), 'utf8')) as { version: string }
+        emitOk({ version: pkg.version, node: process.version })
+        return 0
+    }
     if (!verb || verb === 'help' || verb === '--help' || verb === '-h') {
+        const topic = rest[0]
+        if (topic && VERB_HELP[topic]) {
+            process.stderr.write(`paidan ${topic} — flags:\n  ${VERB_HELP[topic].replaceAll('\n', '\n  ')}\n`)
+            emitOk({ verb: topic, flags: VERB_HELP[topic] })
+            return 0
+        }
+        if (topic) {
+            process.stderr.write(`unknown verb "${topic}"; paidan verbs: ${Object.keys(VERB_HELP).join(' | ')}\n`)
+            return 1
+        }
         process.stderr.write(
-            'paidan verbs: init [--yes] | run | get <run_id> [--wait] [--timeout s] | cancel <run_id> | list | models [--refresh] | doctor | probe\n',
+            `paidan ${await fs.readFile(nodePath.join(pkgRoot, 'package.json'), 'utf8').then((s) => (JSON.parse(s) as { version: string }).version).catch(() => '')} — verbs: ${Object.keys(VERB_HELP).join(' | ')}\n` +
+            'help <verb> shows per-verb flags; --version prints JSON. All other stdout is a single JSON envelope.\n',
         )
         return verb ? 0 : 1
+    }
+    // `<verb> --help/-h` short-circuits before strict parseArgs rejects it
+    if (rest.includes('--help') || rest.includes('-h')) {
+        process.stderr.write(`paidan ${verb} — flags:\n  ${(VERB_HELP[verb] ?? 'no help for this verb').replaceAll('\n', '\n  ')}\n`)
+        emitOk({ verb, flags: VERB_HELP[verb] ?? null })
+        return 0
     }
     const ctx = await makeCtx()
     // startup reconcile: mark dead-worker runs attention; never restarts anything

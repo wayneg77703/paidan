@@ -60,12 +60,52 @@ test('buildInitConfig: per-endpoint efforts are validated against declared optio
         skill_hosts: [],
     })
     assert.deepEqual(native.defaults.efforts, {})
-    // merge: global effort survives (not wizard-owned), per-endpoint efforts are cleared
+    // merge: the global effort fallback is wizard-cleared now (P1-02: a surviving
+    // global silently overrides a "native" wizard choice and poisons endpoints
+    // without an effort block); per-endpoint efforts are cleared; machine keys survive
     const merged = mergeInitConfig(
         { endpoints: { enabled: ['claude-code'] }, defaults: { endpoint: 'claude-code', effort: 'high', efforts: { 'claude-code': 'max' }, run_timeout_sec: 900 } },
         { endpoints: { enabled: ['claude-code'] }, defaults: { endpoint: 'claude-code', model: null, models: {}, efforts: {} } },
     )
-    assert.deepEqual(merged.defaults, { endpoint: 'claude-code', effort: 'high', run_timeout_sec: 900 })
+    assert.deepEqual(merged.defaults, { endpoint: 'claude-code', run_timeout_sec: 900 })
+})
+
+test('model questions: native first choice, single candidate still asked, keep-current for out-of-lineup values', async () => {
+    const { planEndpointDefaultQuestions } = await import('../dist/engine/init-plan.js')
+    const config = { dataDir: null, endpoints: { enabled: null, overrides: {} }, defaults: { endpoint: null, model: null, models: {}, effort: null, efforts: {}, run_timeout_sec: null }, ttlDays: 30 }
+    // multi-candidate: native first, configured-in-lineup value preselects
+    const multi = planEndpointDefaultQuestions(
+        { name: 'kimi-code', detected: true, version: null, models: [{ alias: 'kimi-code/k3', connection: null }, { alias: 'kimi-code/k3-256k', connection: null }], model_selectable: true, native: { model: 'kimi-code/k3', effort: null } },
+        config,
+    )
+    assert.equal(multi.model.kind, 'ask')
+    if (multi.model.kind !== 'ask') return
+    assert.deepEqual(multi.model.options, ['(native default, currently kimi-code/k3)', 'kimi-code/k3', 'kimi-code/k3-256k'])
+    assert.equal(multi.model.fallback, '(native default, currently kimi-code/k3)')
+    // single candidate: still asked (no auto-pick — an auto-pick is a silent native override)
+    const single = planEndpointDefaultQuestions(
+        { name: 'codex', detected: true, version: null, models: [{ alias: 'gpt-6-astra', connection: null }], model_selectable: true, native: null },
+        config,
+    )
+    assert.equal(single.model.kind, 'ask')
+    if (single.model.kind !== 'ask') return
+    assert.equal(single.model.options[0], '(native default)')
+    // configured value outside the lineup: keep-current entry, not a silent drop
+    const stale = planEndpointDefaultQuestions(
+        { name: 'kimi-code', detected: true, version: null, models: [{ alias: 'kimi-code/k3', connection: null }], model_selectable: true, native: null },
+        { ...config, defaults: { ...config.defaults, models: { 'kimi-code': 'kimi-code/k4-secret' } } },
+    )
+    assert.equal(stale.model.kind, 'ask')
+    if (stale.model.kind !== 'ask') return
+    assert.equal(stale.model.staleModelValue, 'kimi-code/k4-secret')
+    assert.ok(stale.model.options.includes('(keep current: kimi-code/k4-secret)'))
+    // buildInitConfig admits the kept current value with the config passed
+    const cfg = buildInitConfig(
+        [{ name: 'kimi-code', detected: true, version: null, models: [{ alias: 'kimi-code/k3', connection: null }], model_selectable: true }],
+        { enabled: ['kimi-code'], default_endpoint: 'kimi-code', models: { 'kimi-code': 'kimi-code/k4-secret' }, skill_hosts: [] },
+        { ...config, defaults: { ...config.defaults, models: { 'kimi-code': 'kimi-code/k4-secret' } } },
+    )
+    assert.equal(cfg.defaults.models['kimi-code'], 'kimi-code/k4-secret')
 })
 
 test('--yes defaults: enable detected only, default = first detected; models stay native (no override layer)', () => {
@@ -95,6 +135,14 @@ test('--yes --effort <level>: applied only to endpoints whose declared options i
     assert.deepEqual(none.efforts, {})
     const cfg = buildInitConfig(INFO, answers)
     assert.deepEqual(cfg.defaults.efforts, { 'claude-code': 'high' })
+})
+
+test('--yes --hosts <names>: the skill installs into exactly that subset (an agent-collected answer must be faithful)', () => {
+    const detected = ['kimi-code', 'codex', 'zcode']
+    const answers = defaultInitAnswers(INFO, detected, undefined, ['kimi-code', 'zcode'])
+    assert.deepEqual(answers.skill_hosts, ['kimi-code', 'zcode'])
+    // no filter -> every detected host
+    assert.deepEqual(defaultInitAnswers(INFO, detected).skill_hosts, detected)
 })
 
 test('buildInitConfig rejects impossible answers', () => {

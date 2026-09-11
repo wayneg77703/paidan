@@ -121,10 +121,9 @@
     "file": "{home}/.gemini/antigravity-cli/settings.json",
     "require_allow": [
       "read_file(*)",
-      "write_file(*)",
       "command(*)"
     ],
-    "notes": "Read-only check of the user-maintained native permission rules (2026-09-10 calibration: unscoped forms are the only ones that match on Windows 1.2.0). read_file(*) gates view_file (fs.read); command(*) gates run_command (shell.exec, which deliverable writes actually ride); write_file(*) is listed because the 1.1.28-era workspace-write story referenced it, though 1.2.0 confines write_to_file to brain/<conversation>/ artifacts regardless. Missing rules surface as a submit warning and a doctor status; paidan never writes this file (invariant 4)."
+    "notes": "Read-only check of the user-maintained native permission rules (2026-09-10/11 calibration). read_file(*) gates view_file (fs.read); command(*) gates run_command — which is what deliverable writes actually ride on agy 1.2.0 (write_to_file is confined to brain/<conversation>/ artifacts, so a write_file allow rule is irrelevant to deliverables and is deliberately NOT required; requiring it would push users to widen permissions for no effect — codex P1-12). Missing rules surface as a submit warning and a doctor status; paidan never writes this file (invariant 4)."
   },
   "parser_notes": "stdout NDJSON: init (conversation_id, cwd, permission_mode) -> step_update (agent_response text_delta accumulation; tool ERROR events carry permission TOOL_ERRORs) -> exactly one terminal result (status, response, conversation_id cross-checked against init, usage input/output/cache_read tokens, denied_actions). finalText = result.response, falling back to accumulated agent_response deltas with a warning when no result event arrives. Non-JSON lines, mid-line EOF and conflicting conversation ids degrade the parser. detectRefusals reads the stderr jetski auto-deny line and the print-timeout marker (partial output + exit 0 + SUCCESS; 1.2.0 timeout semantics). Evidence: live captures 2026-09-10 (tmp/agy-native-probe/out/, 1.1.x era) plus the same-day 1.2.0 recalibration runs, and suite adapter operations/governance/harnesses/runtime/adapters/agy.mjs.",
   "capabilities": {

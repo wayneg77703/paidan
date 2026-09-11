@@ -15,17 +15,23 @@
 ## 1. Get and install paidan
 
 ```bash
-git clone https://github.com/<owner>/paidan.git
+npm i -g paidan   # Node >= 24 required
+paidan doctor     # PATH now has `paidan`
+```
+
+Verify: `paidan doctor` prints a JSON envelope with `ok: true` (read the
+per-endpoint `resolved_from`/`repair_hint` and the top-level `issues` —
+`ok: true` only means the doctor itself ran).
+
+From source (before the package is published, or for a fork):
+
+```bash
+git clone https://github.com/<owner>/paidan.git   # fill the real owner once public
 cd paidan
 npm install        # devDeps only (typescript + @types/node)
 npm run build
 npm i -g .
-paidan doctor      # PATH now has `paidan`
 ```
-
-Once the package is published to npm, the one-liner is `npm i -g paidan`
-(no clone needed). Verify: `paidan doctor` prints a JSON envelope with
-`ok: true`.
 
 On a machine with **zero** agents detected, `init` still succeeds and writes
 an empty `endpoints.enabled` — install any agent and re-run `paidan init`;
@@ -74,6 +80,7 @@ Present these five questions (this is exactly the interactive wizard's set):
    their native config owns the model)
 4. **Default effort per enabled endpoint?** — only where the endpoint
    declares an effort block: today **claude-code** (low/medium/high/xhigh/max),
+   **codex** (minimal/low/medium/high/xhigh), **kimi-code** (low/high/max),
    **omp** (off/minimal/low/medium/high/xhigh/max/auto), **opencode**
    (minimal/high/max). Everything else keeps its native default.
 5. **Install the paidan skill into which hosts?** (from `state.hosts`;
@@ -93,11 +100,13 @@ paidan init        # checkboxes: space toggles, enter confirms
 **B. Agent-driven (you collected the answers in step 3)**
 
 ```bash
-paidan init --yes  # enables all detected endpoints and leaves every
+paidan init --yes [--hosts <name,name>] [--effort <level>]
+                   # enables all detected endpoints and leaves every
                    # model/effort at the endpoint's native default (the agent's
-                   # own home carries them); installs the skill into all
-                   # detected hosts — a baseline you now adjust. Add
-                   # --effort <level> to apply that level to every endpoint
+                   # own home carries them). --hosts restricts the skill
+                   # install to exactly those hosts (matches the user's step-3
+                   # answer; without it every detected host gets the skill).
+                   # --effort <level> applies that level to every endpoint
                    # whose options include it.
 ```
 
@@ -164,11 +173,11 @@ Resolution order at run time: `--model ?? defaults.models[ep] ?? defaults.model`
 ```bash
 paidan doctor    # every enabled endpoint should show resolved + a version;
                  # usage.db ok
-paidan run --endpoint <default> --cwd <scratch-dir> --task "reply with ok" --deliverable ok.txt
+paidan run --endpoint <default> --cwd <scratch-dir>   --task "Create a file named ok.txt in the current directory whose entire content is exactly: ok. Then reply done."   --deliverable ok.txt
 paidan get <run_id> --wait
 ```
 
 Report back to the user: which endpoints are enabled, what the defaults are,
 which hosts received the skill, anything you had to override, and the one
 test run's terminal state. If an endpoint is not detected, quote the
-`repair` hint from `paidan doctor` instead of improvising a fix.
+`repair_hint` field from `paidan doctor` instead of improvising a fix.

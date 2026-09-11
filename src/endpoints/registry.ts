@@ -59,6 +59,8 @@ export interface EndpointManifest {
         args?: string[]
         cross_process?: boolean
         notes?: string
+        verified_at?: string
+        version?: string
     }
     models?: {
         command: string[] | null
@@ -491,14 +493,25 @@ export function filterSafeAliases<T extends { alias: string }>(models: readonly 
 
 /**
  * Live model discovery + argv-safety filter + cache write-through — the one
- * code path for `models --refresh` and init-time detection. Returns null when
- * the endpoint has no discovery surface.
+ * code path for `models --refresh` and init-time detection. configBin keeps
+ * discovery on the same binary dispatch uses (override-aware, codex P1-11);
+ * a discovery failure propagates so callers keep the last good cache instead
+ * of an overwrite with an empty list. persist:false collects the entry in
+ * memory only — init's survey phase uses it so an aborted wizard writes
+ * nothing at all (codex P1-04); the caller persists after committing.
+ * Returns null when the endpoint has no discovery surface.
  */
-export async function discoverAndCacheModels(manifest: EndpointManifest, cache: ModelsCache, version: string | null): Promise<CachedModels | null> {
+export async function discoverAndCacheModels(
+    manifest: EndpointManifest,
+    cache: ModelsCache,
+    version: string | null,
+    configBin: string | null = null,
+    opts: { persist?: boolean } = {},
+): Promise<CachedModels | null> {
     if (!manifest.models?.parse) return null
     const mod = await loadParserModule(manifest.parser)
     if (!mod.discoverModels) return null
-    const found = await mod.discoverModels()
+    const found = await mod.discoverModels({ configBin })
     const safe = filterSafeAliases(found.models)
     const notes = [...found.notes, 'selection = --model ?? config.json defaults.models[endpoint] ?? defaults.model; no cross-connection fallback']
     if (safe.dropped > 0) notes.push(`dropped ${safe.dropped} alias(es) failing the argv-safety charset`)
@@ -512,7 +525,7 @@ export async function discoverAndCacheModels(manifest: EndpointManifest, cache: 
         notes,
     }
     // success writes through, even with an empty model list (no borrowing)
-    await cache.write(entry)
+    if (opts.persist !== false) await cache.write(entry)
     return entry
 }
 

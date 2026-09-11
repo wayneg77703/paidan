@@ -192,30 +192,21 @@ export const detectRefusals = detectOpencodeRefusals
 
 /**
  * Live model discovery: spawn `opencode models` through the same layered
- * resolution as runs (registry manifest -> planEndpointSpawn). Never reads the
- * native auth.json (invariant 3). Failure returns an honest empty list.
+ * resolution as runs (registry manifest -> planEndpointSpawn, config override
+ * first — codex P1-11). Never reads the native auth.json (invariant 3).
+ * Failure throws: the caller keeps the last good cache instead of
+ * overwriting it with an empty list.
  */
-export async function discoverModels(): Promise<DiscoverModelsResult> {
-    let manifest
-    try {
-        manifest = (await EndpointRegistry.load()).get('opencode')
-    } catch (err) {
-        return { models: [], notes: [`endpoint manifest unavailable: ${err instanceof Error ? err.message : String(err)}`] }
-    }
-    const spawnRes = await planEndpointSpawn(manifest, {})
+export async function discoverModels(opts?: { configBin?: string | null }): Promise<DiscoverModelsResult> {
+    const manifest = (await EndpointRegistry.load()).get('opencode')
+    const spawnRes = await planEndpointSpawn(manifest, { configBin: opts?.configBin ?? null })
     if (!spawnRes.plan) {
-        return { models: [], notes: ['opencode binary not resolvable for `opencode models`', ...spawnRes.notes] }
+        throw new Error(`opencode binary not resolvable for \`opencode models\`: ${spawnRes.notes.join('; ')}`)
     }
-    let stdout: string
-    try {
-        const r = await execFileAsync(spawnRes.plan.command, finalSpawnArgs(spawnRes.plan, ['models']), {
-            timeout: 60_000,
-            windowsHide: true,
-            windowsVerbatimArguments: needsVerbatimArgs(spawnRes.plan),
-        })
-        stdout = r.stdout
-    } catch (err) {
-        return { models: [], notes: [`opencode models failed: ${err instanceof Error ? err.message : String(err)}`] }
-    }
-    return parseModelsOutput(stdout)
+    const r = await execFileAsync(spawnRes.plan.command, finalSpawnArgs(spawnRes.plan, ['models']), {
+        timeout: 60_000,
+        windowsHide: true,
+        windowsVerbatimArguments: needsVerbatimArgs(spawnRes.plan),
+    })
+    return parseModelsOutput(r.stdout)
 }

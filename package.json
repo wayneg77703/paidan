@@ -22,7 +22,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pretest": "npm run build",
     "test": "node --test test/*.test.mjs",
-    "smoke": "node test/smoke.mjs"
+    "smoke": "node test/smoke.mjs",
+    "prepack": "npm run build"
   },
   "license": "MIT",
   "author": "paidan contributors",

@@ -41,7 +41,7 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 ## 续接（resume）
 
 - `paidan run --endpoint <name> --cwd <与首次相同> --resume <session_handle> --task-file <新任务>`；`session_handle` 取自上次 `get` 结果的 `result.session_handle`（或 `run.session.handle`）。
-- resume 恢复原会话的权限档（如 codex `exec resume` 不收 `-s`/`--add-dir`）；kimi/zcode 会话按 cwd 绑定，必须同 cwd。dsh 无 resume。
+- resume 的权限档分两类端点：**恢复原档型**（codex `exec resume` 不收 `-s`/`--add-dir`，恢复会话原 sandbox，本次 `--mode` 只记在请求里不生效，提交回执会带警告）；**重定档型**（claude 等 flag 拼接路径会重传本次 mode；agy 本次调用可重新定档）。kimi/zcode 会话按 cwd 绑定，必须同 cwd。dsh 无 resume。
 
 ## 红线（不可越过）
 
@@ -52,4 +52,4 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 
 ## 错误处理
 
-先读 `error.code` + `error.message`，不只看进程退出码。常见码：`ENDPOINT_UNKNOWN` / `ENDPOINT_DISABLED`（未在 config 启用）/ `PERMISSION_UNSUPPORTED` / `MODE_INVALID` / `TASK_REQUIRED` / `TASK_TOO_LONG`（argv 投递超长度上限，改 --task-file 或换 stdin 投递端点）/ `SPAWN_UNSUPPORTED`（端点只能经 cmd shim 解析且为 argv 投递，按 message 设 overrides.bin 或装原生 exe）/ `MODEL_UNSUPPORTED`（端点无 headless 模型选择却配了模型，按 message 从 config 删除对应键）/ `EFFORT_UNSUPPORTED`（端点无 effort 选择）/ `EFFORT_INVALID`（档位不在端点 options 内）/ `RUN_NOT_FOUND` / `CONFIG_INVALID` / `WORKER_SPAWN_FAILED`。端点相关问题先 `paidan doctor` 看探测状态与 `repair_hint`，再决定报告或修复。
+先读 `error.code` + `error.message`，不只看进程退出码。常见码：`ENDPOINT_UNKNOWN` / `ENDPOINT_DISABLED`（未在 config 启用）/ `PERMISSION_UNSUPPORTED` / `MODE_INVALID` / `TASK_REQUIRED` / `TASK_TOO_LONG`（argv 投递端点的最终命令行超长——缩短正文或改用 stdin/file 投递的端点；`--task-file` 只改变 paidan 读正文的方式，**不解除** argv 端点的长度上限）/ `SPAWN_UNSUPPORTED`（端点只能经 cmd shim 解析且为 argv 投递，按 message 设 overrides.bin 或装原生 exe）/ `MODEL_UNSUPPORTED`（端点无 headless 模型选择却配了模型，按 message 从 config 删除对应键）/ `EFFORT_UNSUPPORTED`（端点无 effort 选择）/ `EFFORT_INVALID`（档位不在端点 options 内）/ `RUN_NOT_FOUND` / `CONFIG_INVALID` / `WORKER_SPAWN_FAILED`。端点相关问题先 `paidan doctor` 看探测状态、`drift` 与 `issues`，再决定报告或修复；`get --wait` 返回 `attention` 或 `needs_attention` 时立即向用户报告（worker 已失联，不会自愈）。

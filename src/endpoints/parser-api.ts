@@ -46,7 +46,7 @@ export interface NativeDefaults {
 export interface EndpointParserModule {
     createParser(): EndpointStreamParser
     detectRefusals(stderrText: string, exitCode: number | null): string[]
-    discoverModels?(): Promise<DiscoverModelsResult>
+    discoverModels?(opts?: { configBin?: string | null }): Promise<DiscoverModelsResult>
     /**
      * Optional read-only probe of the endpoint's native home: what model/effort
      * the agent's own configuration currently carries. Displayed by init/doctor
