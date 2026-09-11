@@ -40,6 +40,14 @@ export interface NativeDefaults {
     model?: string | null
     /** the native config's current effort/thinking level; null = unset */
     effort?: string | null
+    /**
+     * Headless-credential visibility for endpoints whose CLI needs an auth/env
+     * bundle paidan must never touch (zcode's ZCODE_MODEL/ZCODE_BASE_URL/
+     * ANTHROPIC_API_KEY triple or native cli config model section). true =
+     * visible from this process; false = none visible (the caller's run-time
+     * env may still carry it); undefined = the endpoint has no such surface.
+     */
+    credential_ready?: boolean
     notes?: string[]
 }
 

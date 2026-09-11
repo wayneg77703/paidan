@@ -746,6 +746,15 @@ async function verbDoctor(ctx: Ctx): Promise<void> {
         const nativePreflight = manifest.native_preflight
             ? await checkNativePreflight(manifest.native_preflight)
             : null
+        const nativeDefaults = await readEndpointNativeDefaults(manifest)
+        if (nativeDefaults?.credential_ready === false) {
+            issues.push(
+                `${manifest.name}: no headless credentials visible to paidan${spawnRes.plan ? ' (bin resolved)' : ' (bin not resolved yet either — see repair_hint first)'}.` +
+                ' Its CLI needs an auth/env bundle paidan must never touch.' +
+                ' zcode repair: set the native ~/.zcode/cli/config.json model section (recommended; desktop login then works headless),' +
+                ' or export ZCODE_MODEL/ZCODE_BASE_URL/ANTHROPIC_API_KEY in the delegating caller — runs without either fail with the endpoint\'s own auth error',
+            )
+        }
         endpoints.push({
             name: manifest.name,
             enabled: isEnabled,
@@ -766,7 +775,7 @@ async function verbDoctor(ctx: Ctx): Promise<void> {
             native_preflight: nativePreflight,
             // read-only: what the endpoint's own home currently carries (the
             // "native default" reality — paidan never writes it)
-            native_defaults: await readEndpointNativeDefaults(manifest),
+            native_defaults: nativeDefaults,
             parser: manifest.parser,
             capabilities: manifest.capabilities ?? {},
         })
@@ -1147,9 +1156,44 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
     }
 
     let answers: InitAnswers
+    const recordedOverrides: Record<string, string> = {}
     if (values.yes) {
         answers = defaultInitAnswers(info, hostInfo.hosts.filter((h) => h.detected).map((h) => h.name), values.effort, hostsFilter)
     } else {
+        // bin-override intake for undetected endpoints: turns "not detected ->
+        // hand-edit JSON -> re-run" into one in-wizard step (the recorded path
+        // is paidan's own config — credentials are never asked for or touched)
+        if (info.some((e) => !e.detected)) {
+            const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
+            try {
+                for (const ep of info.filter((e) => !e.detected)) {
+                    const answer = (await rl.question(`bin path for "${ep.name}" (paidan writes it to endpoints.overrides; empty = skip): `)).trim().replace(/^"|"$/g, '')
+                    if (answer.length === 0) continue
+                    const manifest = ctx.registry.get(ep.name)
+                    const spawnRes = await planEndpointSpawn(manifest, { configBin: answer })
+                    if (!spawnRes.plan) {
+                        process.stderr.write(`  ${ep.name}: that path did not resolve either (${spawnRes.notes.at(-1) ?? 'no plan'}); not recorded\n`)
+                        continue
+                    }
+                    recordedOverrides[ep.name] = answer
+                    ep.detected = true
+                    ep.version = await detectVersion(manifest, spawnRes.plan)
+                    ep.repair = null
+                    try {
+                        const entry = await discoverAndCacheModels(manifest, cache, ep.version, answer, { persist: false })
+                        if (entry) {
+                            ep.models = entry.models
+                            pendingCache.push(entry)
+                        }
+                    } catch {
+                        // best-effort; the endpoint still enablable without a model menu
+                    }
+                    process.stderr.write(`  ${ep.name}: resolved via override (${spawnRes.plan.resolved_from}); it can now be enabled\n`)
+                }
+            } finally {
+                rl.close()
+            }
+        }
         try {
             answers = await promptInitAnswers(info, hostInfo.hosts, ctx.config)
         } catch (err) {
@@ -1186,6 +1230,16 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
         existingRaw = JSON.parse(await fs.readFile(ctx.configPath, 'utf8')) as Record<string, unknown>
     }
     const merged = mergeInitConfig(existingRaw, cfg)
+    // in-wizard bin overrides land in endpoints.overrides (machine config paidan
+    // owns; other endpoints' overrides and all machine keys are untouched)
+    if (Object.keys(recordedOverrides).length > 0) {
+        const endpoints = { ...((merged.endpoints ?? {}) as Record<string, unknown>) }
+        endpoints.overrides = { ...((endpoints.overrides ?? {}) as Record<string, unknown>) }
+        for (const [name, bin] of Object.entries(recordedOverrides)) {
+            ;(endpoints.overrides as Record<string, { bin: string }>)[name] = { bin }
+        }
+        merged.endpoints = endpoints
+    }
     await writeJsonAtomic(ctx.configPath, merged)
     // the survey's model caches persist only now — an aborted or surveyed
     // (non-TTY) init wrote nothing at all (codex P1-04)

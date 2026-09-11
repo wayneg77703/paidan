@@ -203,7 +203,13 @@ export async function discoverModels(): Promise<DiscoverModelsResult> {
     return discoverZcodeModels(json)
 }
 
-/** Read-only native-defaults probe: the `model` string of the native CLI config (a "builtin:<connection>/<model>" alias — the connection half is credential-bound, which is why paidan does not deliver zcode models). */
+/** Headless-credential visibility: the env triple (paidan never sets it) or the native cli config model section. */
+export function zcodeCredentialReady(env: NodeJS.ProcessEnv, nativeModel: string | null): boolean {
+    const envReady = Boolean(env.ZCODE_MODEL && env.ZCODE_BASE_URL && env.ANTHROPIC_API_KEY)
+    return envReady || nativeModel !== null
+}
+
+/** Read-only native-defaults probe: the `model` string of the native CLI config (a "builtin:<connection>/<model>" alias — the connection half is credential-bound, which is why paidan does not deliver zcode models); `credential_ready` reports headless-auth visibility. */
 export async function readNativeDefaults(): Promise<NativeDefaults> {
     const nativeRoot = process.env.USERPROFILE ?? os.homedir()
     let raw: string | null = null
@@ -212,12 +218,24 @@ export async function readNativeDefaults(): Promise<NativeDefaults> {
     } catch {
         raw = null
     }
-    if (raw === null) return { model: null, effort: null, notes: ['native zcode cli/config.json not found'] }
+    if (raw === null) {
+        return {
+            model: null,
+            effort: null,
+            credential_ready: zcodeCredentialReady(process.env, null),
+            notes: ['native zcode cli/config.json not found'],
+        }
+    }
     try {
         const o = JSON.parse(raw) as Record<string, unknown>
         const model = typeof o.model === 'string' && o.model.length > 0 ? o.model : null
-        return { model, effort: null }
+        return { model, effort: null, credential_ready: zcodeCredentialReady(process.env, model) }
     } catch {
-        return { model: null, effort: null, notes: ['native zcode cli/config.json is not valid JSON'] }
+        return {
+            model: null,
+            effort: null,
+            credential_ready: zcodeCredentialReady(process.env, null),
+            notes: ['native zcode cli/config.json is not valid JSON'],
+        }
     }
 }

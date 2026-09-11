@@ -164,3 +164,12 @@ test('model discovery scans native v2 config honestly (no credentials read out)'
     assert.deepEqual(discoverZcodeModels(null).models, [])
     assert.deepEqual(discoverZcodeModels('{broken').models, [])
 })
+
+test('zcodeCredentialReady: env triple or native model section, either satisfies', async () => {
+    const { zcodeCredentialReady } = await import('../dist/endpoints/zcode-print.js')
+    assert.equal(zcodeCredentialReady({}, null), false)
+    assert.equal(zcodeCredentialReady({ ZCODE_MODEL: 'm' }, null), false)
+    assert.equal(zcodeCredentialReady({ ZCODE_MODEL: 'm', ZCODE_BASE_URL: 'u' }, null), false)
+    assert.equal(zcodeCredentialReady({ ZCODE_MODEL: 'm', ZCODE_BASE_URL: 'u', ANTHROPIC_API_KEY: 'k' }, null), true)
+    assert.equal(zcodeCredentialReady({}, 'builtin:bigmodel-coding-plan/GLM-5.3'), true)
+})
