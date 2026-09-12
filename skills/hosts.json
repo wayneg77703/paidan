@@ -33,9 +33,9 @@
     },
     {
       "name": "codex",
-      "skills_dir": "{home}/.codex/skills",
-      "verified_at": "2026-09-10",
-      "notes": "Codex user-scope skills directory (<name>/SKILL.md with name/description frontmatter; observed populated on this machine 2026-09-10).",
+      "skills_dir": "{home}/.agents/skills",
+      "verified_at": "2026-09-13",
+      "notes": "Codex 现行官方 USER 级位置(2026-09 官方文档);~/.codex/skills 为 deprecated 但仍被扫描的兼容位置,既有副本无需清理。",
       "frontmatter_fields": [
         "name",
         "description"
@@ -45,10 +45,11 @@
       "name": "dsh",
       "skills_dir": "{home}/.dsh/skills",
       "verified_at": "2026-09-10",
-      "notes": "dsh user-scope skills directory (<name>/SKILL.md layout; observed populated on this machine 2026-09-10).",
+      "notes": "dsh user-scope skills directory (<name>/SKILL.md layout; observed populated on this machine 2026-09-10).(2026-09-13:dsh 官方文档化 whenToUse 为可选字段,保留。)",
       "frontmatter_fields": [
         "name",
-        "description"
+        "description",
+        "whenToUse"
       ]
     },
     {
