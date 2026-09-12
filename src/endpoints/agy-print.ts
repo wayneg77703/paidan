@@ -1,6 +1,6 @@
 // agy (Antigravity CLI) print-mode output parser ("agy-print"). Parser only.
 // Verified against live 1.1.28 stream captures (2026-09-10 native zero-copy
-// probe, tmp/agy-native-probe/out/): stdout NDJSON = init{conversation_id,
+// probe; raw captures distilled, scratch deleted 2026-09-13): stdout NDJSON = init{conversation_id,
 // init:{cwd,tools,permission_mode}} -> step_update (agent_response text_delta;
 // tool ERROR with tool_info.error TOOL_ERROR for rule-based denials) -> one
 // terminal result{conversation_id,status,response,usage:{input_tokens,
