@@ -1,6 +1,6 @@
 // Golden fixtures for the opencode-run parser (src/endpoints/opencode-run.ts).
 // Event shapes mirror opencode 1.18.29 live streams captured 2026-09-10 plus
-// the suite fixtures (harnesses/fixtures/opencode-cli); no real agent is touched.
+// the retired suite fixtures (archived 2026-09-12; opencode-cli golden captures); no real agent is touched.
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'

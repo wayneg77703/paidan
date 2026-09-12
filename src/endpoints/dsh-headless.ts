@@ -1,7 +1,7 @@
 // dsh headless plain-text parser ("dsh-headless"). Parser only.
 // Verified against dsh 0.1.2-rc.1 (2026-09-10) and the suite's dsh knowledge
-// (operations/governance/harnesses/runtime/adapters/dsh.mjs extractFacts,
-// contracts/dsh-headless.json, suite probe runs 23476842/466b67d9 2026-09-09):
+// (the retired external-agent-suite dsh adapter + contracts, archived 2026-09-12;
+// extractFacts semantics; suite probe runs 23476842/466b67d9 2026-09-09):
 //  - stdout is PLAIN TEXT: the final assistant message and nothing else
 //    (adapter rule: final = stdout.trim()); reasoning streams to stderr as
 //    `dsh: reasoning:` blocks and carries no parser state.

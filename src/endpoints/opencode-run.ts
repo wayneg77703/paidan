@@ -1,6 +1,6 @@
 // opencode run --format json NDJSON parser ("opencode-run"). Parser only.
-// Verified against the suite adapter (operations/governance/harnesses/runtime/
-// adapters/opencode.mjs analyzeNdjson + contracts/opencode-cli.json) and live
+// Verified against the retired external-agent-suite opencode adapter + contracts
+// (archived 2026-09-12; analyzeNdjson) and live
 // opencode 1.18.29 runs (2026-09-10):
 //  - stdout is NDJSON: step_start / tool_use / step_finish / text / reasoning /
 //    error; every event carries a top-level sessionID (ses_...). text events

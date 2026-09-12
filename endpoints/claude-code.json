@@ -36,7 +36,7 @@
         "bypassPermissions"
       ]
     },
-    "mode_args_notes": "Evidence: code.claude.com/docs/en/cli-reference + 2026-09-09 native probe (tmp/agent-probe-20260909/claude*/). `-p` always starts at the default (Manual) tier; --permission-mode re-tiers per run. read-only = default tier + `--permission-prompts none` (2.1.259+): with no answer channel headless, every permission prompt is denied, so Write/Bash are refused while built-in read-only tools stay auto-allowed (P2 live: Write denied, permission_denials populated). workspace-write = acceptEdits (Edit/Write auto-accepted; Bash still prompts and is denied headless). unattended = bypassPermissions (everything auto-accepted; shell.exec verified live 2026-09-10, v2.1.260). There is NO env var for permission mode, and project-level settings defaultMode=auto/bypass do not apply to -p.",
+    "mode_args_notes": "Evidence: code.claude.com/docs/en/cli-reference + 2026-09-09 native probe set agent-probe (operator scratch, distilled here). `-p` always starts at the default (Manual) tier; --permission-mode re-tiers per run. read-only = default tier + `--permission-prompts none` (2.1.259+): with no answer channel headless, every permission prompt is denied, so Write/Bash are refused while built-in read-only tools stay auto-allowed (P2 live: Write denied, permission_denials populated). workspace-write = acceptEdits (Edit/Write auto-accepted; Bash still prompts and is denied headless). unattended = bypassPermissions (everything auto-accepted; shell.exec verified live 2026-09-10, v2.1.260). There is NO env var for permission mode, and project-level settings defaultMode=auto/bypass do not apply to -p.",
     "model_arg": [
       "--model",
       "{model}"

@@ -1,7 +1,7 @@
 // codex exec --json event-stream parser ("codex-exec"). Parser only.
 // Verified against codex-cli 0.153.3 live runs (2026-09-10) and the suite
-// adapter's codex knowledge (operations/governance/harnesses/runtime/adapters/
-// codex.mjs, analyzeEvents/extractCodexUsage semantics):
+// adapter's codex knowledge (the retired external-agent-suite codex adapter, archived 2026-09-12;
+// analyzeEvents/extractCodexUsage semantics):
 //  - stdout is NDJSON: thread.started {thread_id} (the session handle; last
 //    observation wins), turn.started, item.started/item.updated/item.completed,
 //    turn.completed {usage}, turn.failed, top-level error.

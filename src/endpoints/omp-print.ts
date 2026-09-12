@@ -1,7 +1,7 @@
 // omp print-mode NDJSON parser ("omp-print"). Parser only.
 // Verified against oh-my-pi 18.1.14 live runs (2026-09-10) and the suite
-// adapter (operations/governance/harnesses/runtime/adapters/omp.mjs
-// analyzeNdjson/classifyOmpStderr + contracts/omp-cli.json):
+// adapter (the retired external-agent-suite omp adapter + contracts, archived 2026-09-12;
+// analyzeNdjson/classifyOmpStderr):
 //  - `-p --mode json` stdout is NDJSON: session {id} (exactly one per run),
 //    agent_start, turn_start, message_start/update/end, tool_execution_start/
 //    update/end, turn_end {message{content,usage,stopReason}, toolResults[]},

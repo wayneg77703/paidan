@@ -1,6 +1,6 @@
 // Golden fixtures for the agy-print parser (src/endpoints/agy-print.ts).
 // No real agent is touched; fixtures mirror the agy 1.1.28 stream shape
-// captured live on 2026-09-10 (tmp/agy-native-probe/out/: t1-hello,
+// captured live on 2026-09-10 (operator-scratch probe set agy-native: t1-hello,
 // t2a-plan-only, t2b-deny-acceptedits, t6b-sandbox-shell, t7-timeout2).
 
 import assert from 'node:assert/strict'

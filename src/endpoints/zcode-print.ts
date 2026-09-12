@@ -1,6 +1,6 @@
 // zcode print-mode output parser ("zcode-print"). Parser only.
 // Verified against ZCode CLI 0.16.5 live output (2026-09-10) and the suite
-// adapter (operations/governance/harnesses/runtime/adapters/zcode.mjs):
+// adapter (the retired external-agent-suite zcode adapter, archived 2026-09-12):
 //  - with --json, stdout is exactly ONE pretty-printed JSON envelope:
 //    {sessionId ("sess_..."), traceId, turnId, response, usage, projection}
 //    (required-field list per extractFacts, zcode.mjs:432); usage is camelCase.

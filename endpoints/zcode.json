@@ -31,7 +31,7 @@
         "yolo"
       ]
     },
-    "argv_notes": "Evidence: suite adapter operations/governance/harnesses/runtime/adapters/zcode.mjs:258-265 (buildInvocation) and contracts/zcode-cli.json required_invocation.argv_order: headless print is `-p <prompt> --mode yolo --json --cwd <cwd> --disallowed-tools <space-joined denylist>`; `--resume <sessionId>` is appended when continuing. CLI 0.16.5 --help (probed 2026-09-10) confirms -p/--print, --mode build|edit|plan|yolo (default yolo for --prompt), --json, --disallowed-tools as comma-or-space list. Dead flags that must never be emitted: --max-turns, --permission-mode, --allowed-tools (adapter DEAD_FLAGS, zcode.mjs:29; they parse but are inert). --cwd is omitted: the worker already spawns with cwd=request.cwd and zcode sessions are cwd-bound (cwd_arg below is informational only in v0).",
+    "argv_notes": "Evidence: the retired external-agent-suite zcode adapter:258-265 (buildInvocation) + contracts required_invocation.argv_order, archived 2026-09-12: headless print is `-p <prompt> --mode yolo --json --cwd <cwd> --disallowed-tools <space-joined denylist>`; `--resume <sessionId>` is appended when continuing. CLI 0.16.5 --help (probed 2026-09-10) confirms -p/--print, --mode build|edit|plan|yolo (default yolo for --prompt), --json, --disallowed-tools as comma-or-space list. Dead flags that must never be emitted: --max-turns, --permission-mode, --allowed-tools (the retired suite adapter's DEAD_FLAGS list, archived 2026-09-12; they parse but are inert). --cwd is omitted: the worker already spawns with cwd=request.cwd and zcode sessions are cwd-bound (cwd_arg below is informational only in v0).",
     "cwd_arg": null,
     "env": {
       "ZCODE_CLI_DISABLE_AUTO_UPDATE": "1",

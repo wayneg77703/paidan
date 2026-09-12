@@ -25,7 +25,7 @@
       "--add-dir",
       "{dir}"
     ],
-    "argv_notes": "Evidence: kimi-job-runner/src/kimi-process.ts buildKimiArgs (lines 160-181): print mode is `-p <prompt> --output-format stream-json`; model is `-m`; extra dirs are `--add-dir`. `-p` fixes auto permission and is mutually exclusive with --yolo/--auto/--plan (startup refusal), so no permission flag is ever passed here.",
+    "argv_notes": "Evidence: the operator-local kimi job runner's buildKimiArgs (kimi-process.ts:160-181, 2026-09): print mode is `-p <prompt> --output-format stream-json`; model is `-m`; extra dirs are `--add-dir`. `-p` fixes auto permission and is mutually exclusive with --yolo/--auto/--plan (startup refusal), so no permission flag is ever passed here.",
     "cwd_arg": null,
     "env": {
       "KIMI_CODE_HOME": "{native_default}",
@@ -71,7 +71,7 @@
     "presets_notes": "print mode fixes auto permission; kimi has NO native headless read-only tier (probe run 5f0d9fc2: task-mode=read-only wrote the file anyway). read-only stays unsupported until the ACP transport lane exists.",
     "denial_evidence": {
       "status": "unverified",
-      "via": "parser detects the Moonshot provider safety-block terminal line on stderr (format evidenced by kimi-job-runner/src/kimi-output.ts:60); not yet live-probed through paidan",
+      "via": "parser detects the Moonshot provider safety-block terminal line on stderr (format evidenced by the operator-local kimi job runner's kimi-output.ts:60); not yet live-probed through paidan",
       "verified_at": "2026-09-10"
     }
   },
@@ -82,7 +82,7 @@
       "{session}"
     ],
     "cross_process": true,
-    "notes": "Evidence: kimi-job-runner/src/kimi-process.ts:169 passes `-S <sessionId>`; the native stderr hint prints `kimi -r session_xxx` (kimi-output.ts:56, whole-line only). sessionId is extracted from the stdout meta row {role:\"meta\", type:\"session.resume_hint\", session_id} (kimi-output.ts:102-111). kimi's native session store is scoped per working directory (sessions/wd_<hash>/): a resume run must use the same cwd as the original run, else the endpoint exits non-zero (paidan probe P3, 2026-09-10). Model inheritance on resume: officially unspecified.",
+    "notes": "Evidence: the operator-local kimi job runner's kimi-process.ts:169 passes `-S <sessionId>`; the native stderr hint prints `kimi -r session_xxx` (the runner's kimi-output.ts:56, whole-line only). sessionId is extracted from the stdout meta row {role:\"meta\", type:\"session.resume_hint\", session_id} (the runner's kimi-output.ts:102-111). kimi's native session store is scoped per working directory (sessions/wd_<hash>/): a resume run must use the same cwd as the original run, else the endpoint exits non-zero (paidan probe P3, 2026-09-10). Model inheritance on resume: officially unspecified.",
     "verified_at": "2026-09-09",
     "version": "0.42.0"
   },
@@ -106,7 +106,7 @@
     "notes": "Thinking-effort selection has NO CLI flag in 0.42.0 (--effort dies at arg parsing); the env var is the only config-file-free delivery channel. KIMI_MODEL_THINKING_EFFORT forces thinking.effort and overrides the native config.toml [thinking] effort key (kimi's effort lives in the [thinking] section, not at the top level; readNativeDefaults reads the same section); precedence -m > env > config (official env-vars/overrides docs). Verified 2026-09-11: effort=max PONG via env, effort=bogus -> provider 400 (the value provably reaches the API). options = the k3 line support_efforts (low/high/max) read from the native config; medium/xhigh exist in the official level set but k3 does not declare them and stay out. The native config.toml already carries effort = max, so leaving paidan effort unset inherits max from the native home."
   },
   "parser": "kimi-print",
-  "parser_notes": "stream-json JSONL on stdout: assistant text rows {role:\"assistant\", content}; session hint {role:\"meta\", type:\"session.resume_hint\", session_id, command}. Non-JSON stdout line or mid-line EOF degrades the parser (terminal judgment then cannot be exit-code-based). Evidence: kimi-job-runner/src/kimi-output.ts:88-114.",
+  "parser_notes": "stream-json JSONL on stdout: assistant text rows {role:\"assistant\", content}; session hint {role:\"meta\", type:\"session.resume_hint\", session_id, command}. Non-JSON stdout line or mid-line EOF degrades the parser (terminal judgment then cannot be exit-code-based). Evidence: the operator-local kimi job runner's kimi-output.ts:88-114.",
   "capabilities": {
     "background_native": false,
     "cancel_native": false,

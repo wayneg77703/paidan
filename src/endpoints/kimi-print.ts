@@ -1,5 +1,5 @@
 // kimi-code print-mode output parser ("kimi-print"). Parser only.
-// Verified against kimi-job-runner's battle-tested knowledge (2026-09-10):
+// Verified against the operator-local kimi job runner's battle-tested knowledge (2026-09-10):
 //  - stdout is JSONL (`--output-format stream-json`): assistant text rows are
 //    {role:"assistant", content:"..."}; the session hint is
 //    {role:"meta", type:"session.resume_hint", session_id, command}

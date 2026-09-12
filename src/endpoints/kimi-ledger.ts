@@ -4,7 +4,7 @@
 //   <sessionDir>/agents/<id>/wire.jsonl rows {type:"usage.record", usageScope,
 //                                        usage:{inputCacheRead,inputOther,
 //                                        inputCacheCreation,output}}
-// Field names and pairing rules per kimi-job-runner/src/kimi-session.ts
+// Field names and pairing rules per the operator-local kimi job runner (kimi-session.ts semantics, 2026-09)
 // (aggregateSessionUsage). Read-only: this module never writes to the native home.
 //
 // Resume runs are summed from a pre-spawn byte cursor (the worker captures each

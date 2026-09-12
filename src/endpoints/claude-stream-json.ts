@@ -1,6 +1,6 @@
 // claude-code print-mode output parser ("claude-stream-json"). Parser only.
 // Verified against live stream samples on v2.1.260 (2026-09-10) and the
-// 2026-09-09 native probe artifacts (tmp/agent-probe-20260909/claude*/):
+// 2026-09-09 native probe set agent-probe (operator scratch, verdicts distilled here):
 //  - stdout is NDJSON (`-p ... --output-format stream-json --verbose`):
 //      {"type":"system","subtype":"init","session_id":<uuid>,...}
 //      {"type":"assistant","message":{"content":[{"type":"text","text":...}]},...}
