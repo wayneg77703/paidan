@@ -1267,7 +1267,8 @@ async function verbInit(ctx: Ctx, args: string[]): Promise<number> {
     if (selectedHosts.length > 0 && hostInfo.source) {
         for (const host of selectedHosts) {
             try {
-                skills.push(await installSkill(host, hostInfo.source))
+                const hostSource = host.source ? nodePath.join(pkgRoot, host.source) : hostInfo.source
+                skills.push(await installSkill(host, hostSource))
             } catch (err) {
                 // one failing host must not sink the rest; the envelope reports it
                 skills.push({

@@ -19,6 +19,8 @@ export interface HostEntry {
      * installed verbatim (kimi-code additionally reads `whenToUse`).
      */
     frontmatter_fields?: string[]
+    /** repo-relative path to this host's natively-authored skill variant; absent = registry.skill.source */
+    source?: string
 }
 
 export interface HostRegistry {
@@ -38,6 +40,8 @@ export interface HostInfo {
     notes?: string
     /** frontmatter keys this host's spec allows; absent = payload verbatim */
     frontmatter_fields?: string[]
+    /** repo-relative path to this host's natively-authored skill variant; absent = registry default */
+    source?: string
 }
 
 export type SkillInstallStatus = 'created' | 'updated' | 'unchanged' | 'error'
@@ -99,6 +103,7 @@ export async function detectHosts(
             installed,
             ...(host.notes ? { notes: host.notes } : {}),
             ...(host.frontmatter_fields ? { frontmatter_fields: host.frontmatter_fields } : {}),
+            ...(host.source ? { source: host.source } : {}),
         })
     }
     return out

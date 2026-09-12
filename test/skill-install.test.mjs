@@ -151,12 +151,10 @@ test('init --yes reports a failing host as status error and still installs the r
         // the failing host left no staged tmp file behind
         const leftovers = (await fs.readdir(kimiTargetDir)).filter((f) => f.endsWith('.tmp'))
         assert.deepEqual(leftovers, [])
-        // and the successful host really holds the payload — adapted to its
-        // spec's frontmatter fields (claude-code: name+description only)
+        // and the successful host really holds its natively-authored variant, verbatim
         const installed = nodePath.join(hostHome, '.claude', 'skills', 'paidan', 'SKILL.md')
-        const { adaptSkillPayload } = await import('../dist/engine/skill-install.js')
-        const source = await fs.readFile(nodePath.join(repoRoot, 'skills', 'paidan', 'SKILL.md'), 'utf8')
-        assert.equal(await fs.readFile(installed, 'utf8'), adaptSkillPayload(source, ['name', 'description']))
+        const variant = await fs.readFile(nodePath.join(repoRoot, 'skills', 'paidan', 'variants', 'claude-code.SKILL.md'), 'utf8')
+        assert.equal(await fs.readFile(installed, 'utf8'), variant)
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }
@@ -194,13 +192,10 @@ test('adaptSkillPayload: per-host frontmatter fields are honored, body untouched
 test('installSkill writes the per-host adapted payload (kimi keeps whenToUse, codex drops it)', async () => {
     const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-skill-'))
     try {
-        const registry = await loadHostRegistry(repoRoot)
         const kimi = { name: 'kimi-code', skills_dir: nodePath.join(root, '.kimi-code', 'skills'), detected: true, target: nodePath.join(root, '.kimi-code', 'skills', 'paidan', 'SKILL.md'), installed: false }
-        const codexEntry = registry.hosts.find((h) => h.name === 'codex')
-        const codex = { name: 'codex', skills_dir: nodePath.join(root, '.codex', 'skills'), detected: true, target: nodePath.join(root, '.codex', 'skills', 'paidan', 'SKILL.md'), installed: false, frontmatter_fields: codexEntry.frontmatter_fields }
-        const source = nodePath.join(repoRoot, 'skills', 'paidan', 'SKILL.md')
-        await installSkill(kimi, source)
-        await installSkill(codex, source)
+        const codex = { name: 'codex', skills_dir: nodePath.join(root, '.codex', 'skills'), detected: true, target: nodePath.join(root, '.codex', 'skills', 'paidan', 'SKILL.md'), installed: false }
+        await installSkill(kimi, nodePath.join(repoRoot, 'skills', 'paidan', 'variants', 'kimi-code.SKILL.md'))
+        await installSkill(codex, nodePath.join(repoRoot, 'skills', 'paidan', 'variants', 'codex.SKILL.md'))
         const kimiText = await fs.readFile(kimi.target, 'utf8')
         const codexText = await fs.readFile(codex.target, 'utf8')
         assert.ok(kimiText.includes('whenToUse:'))
@@ -212,4 +207,42 @@ test('installSkill writes the per-host adapted payload (kimi keeps whenToUse, co
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }
+})
+
+// Per-host native variants (skills/paidan/variants/<host>.SKILL.md): each host's
+// frontmatter is natively designed for its spec; bodies must stay byte-identical
+// so the variants never drift apart.
+const VARIANT_REQUIRED = {
+    'kimi-code': ['name', 'description', 'whenToUse'],
+    codex: ['name', 'description'],
+    'claude-code': ['name', 'description', 'when_to_use'],
+    zcode: ['name', 'description'],
+    dsh: ['name', 'description', 'whenToUse'],
+    opencode: ['name', 'description', 'license'],
+    agy: ['name', 'description'],
+    omp: ['name', 'description'],
+}
+
+function stripFrontmatter(text) {
+    const m = /^---\s*\n[\s\S]*?\n---\s*\n/.exec(text)
+    return m ? text.slice(m[0].length).replace(/^[\r\n]+/, '') : text
+}
+
+test('per-host variants: required frontmatter fields and drift-free shared body', async () => {
+    const registry = await loadHostRegistry(repoRoot)
+    const bodies = new Map()
+    for (const host of registry.hosts) {
+        assert.ok(host.source, `${host.name}: hosts.json must declare a per-host variant source`)
+        const variantPath = nodePath.join(repoRoot, host.source)
+        const text = await fs.readFile(variantPath, 'utf8')
+        const required = VARIANT_REQUIRED[host.name] ?? ['name', 'description']
+        const fm = /^---\s*\n([\s\S]*?)\n---\s*\n/.exec(text)
+        assert.ok(fm, `${host.name}: variant must carry a frontmatter block`)
+        for (const key of required) {
+            assert.ok(new RegExp(`^${key}:`, 'm').test(fm[1]), `${host.name}: variant frontmatter must contain ${key}`)
+        }
+        bodies.set(host.name, stripFrontmatter(text))
+    }
+    const [reference, ...rest] = [...bodies.values()]
+    for (const other of rest) assert.equal(other, reference, 'variant bodies must stay byte-identical')
 })
