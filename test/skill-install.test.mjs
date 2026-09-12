@@ -211,37 +211,61 @@ test('installSkill writes the per-host adapted payload (kimi keeps whenToUse, co
 
 // Per-host native variants (skills/paidan/variants/<host>.SKILL.md): each host's
 // frontmatter is natively designed for its spec; bodies must stay byte-identical
-// so the variants never drift apart.
+// so the variants never drift apart. The guards below lock: registry filename
+// convention, per-host required fields AND distinctive description markers,
+// structural validity the host would reject (empty/over-length/scalar-metadata/
+// unclosed flow sequence), frontmatter-body blank line, and shared-body identity.
 const VARIANT_REQUIRED = {
-    'kimi-code': ['name', 'description', 'whenToUse'],
-    codex: ['name', 'description'],
-    'claude-code': ['name', 'description', 'when_to_use'],
-    zcode: ['name', 'description'],
-    dsh: ['name', 'description', 'whenToUse'],
-    opencode: ['name', 'description', 'license'],
-    agy: ['name', 'description'],
-    omp: ['name', 'description'],
+    'kimi-code': { fields: ['name', 'description', 'whenToUse'], marker: '新委派默认走本通道' },
+    codex: { fields: ['name', 'description'], marker: '委派任务给本机 AI CLI agent 执行', absent: ['whenToUse', 'when_to_use'] },
+    'claude-code': { fields: ['name', 'description', 'when_to_use'], marker: '持久 run', absent: ['whenToUse'] },
+    zcode: { fields: ['name', 'description'], marker: '触发场景：', absent: ['whenToUse', 'when_to_use'], maxDescription: 1024 },
+    dsh: { fields: ['name', 'description', 'whenToUse'], marker: '新委派默认走本通道' },
+    opencode: { fields: ['name', 'description', 'license'], marker: 'license: MIT', metadataMap: true },
+    agy: { fields: ['name', 'description'], marker: '当需要把任务委派给本机' },
+    omp: { fields: ['name', 'description'], marker: '需要把任务委派给本机 AI CLI agent 时使用本通道', absent: ['when_to_use'] },
 }
 
-function stripFrontmatter(text) {
-    const m = /^---\s*\n[\s\S]*?\n---\s*\n/.exec(text)
-    return m ? text.slice(m[0].length).replace(/^[\r\n]+/, '') : text
+function splitVariant(text) {
+    const m = /^---\s*\n([\s\S]*?)\n---\s*\n/.exec(text)
+    return m ? { fm: m[1], after: text.slice(m[0].length) } : { fm: null, after: text }
 }
 
-test('per-host variants: required frontmatter fields and drift-free shared body', async () => {
+function descriptionOf(fm) {
+    const single = /^description:\s*(.+)$/m.exec(fm)
+    if (single) return single[1].trim()
+    const block = /^description:\s*[|>]-?\s*\n([\s\S]*?)(?=^[A-Za-z_][A-Za-z0-9_-]*:|\s*$)/m.exec(fm)
+    return block ? block[1].replace(/\s+/g, ' ').trim() : ''
+}
+
+test('per-host variants: registry mapping, native fields, host-rejected shapes, shared body', async () => {
     const registry = await loadHostRegistry(repoRoot)
     const bodies = new Map()
     for (const host of registry.hosts) {
+        // registry mapping: per-host source must follow the <host>.SKILL.md convention
         assert.ok(host.source, `${host.name}: hosts.json must declare a per-host variant source`)
-        const variantPath = nodePath.join(repoRoot, host.source)
-        const text = await fs.readFile(variantPath, 'utf8')
-        const required = VARIANT_REQUIRED[host.name] ?? ['name', 'description']
-        const fm = /^---\s*\n([\s\S]*?)\n---\s*\n/.exec(text)
+        assert.ok(host.source.endsWith(`/${host.name}.SKILL.md`), `${host.name}: source must point at its own variant file, got ${host.source}`)
+        const text = await fs.readFile(nodePath.join(repoRoot, host.source), 'utf8')
+        const { fm, after } = splitVariant(text)
         assert.ok(fm, `${host.name}: variant must carry a frontmatter block`)
-        for (const key of required) {
-            assert.ok(new RegExp(`^${key}:`, 'm').test(fm[1]), `${host.name}: variant frontmatter must contain ${key}`)
+        assert.ok(after.startsWith('\n# ') || after.startsWith('# '), `${host.name}: frontmatter must be followed by a blank line then the body title`)
+        const rule = VARIANT_REQUIRED[host.name] ?? { fields: ['name', 'description'] }
+        for (const key of rule.fields) {
+            assert.ok(new RegExp(`^${key}:`, 'm').test(fm), `${host.name}: variant frontmatter must contain ${key}`)
         }
-        bodies.set(host.name, stripFrontmatter(text))
+        for (const banned of rule.absent ?? []) {
+            assert.ok(!new RegExp(`^${banned}:`, 'm').test(fm), `${host.name}: must NOT contain ${banned} (not in its spec)`)
+        }
+        const description = descriptionOf(fm)
+        assert.ok(description.length > 0, `${host.name}: description must be non-empty`)
+        assert.ok(!(description.startsWith('[') && !description.endsWith(']')), `${host.name}: description has an unclosed flow sequence`)
+        if (rule.maxDescription) assert.ok(description.length <= rule.maxDescription, `${host.name}: description exceeds its host hard limit`)
+        assert.ok(fm.includes(rule.marker) || description.includes(rule.marker), `${host.name}: description must carry its distinctive marker ${JSON.stringify(rule.marker)}`)
+        if (rule.metadataMap) {
+            const mm = /^metadata:\s*\n((?:\s{2,}\S.*\n?)+)/m.exec(fm)
+            assert.ok(mm, `${host.name}: metadata must be a string map (indented keys), not a scalar`)
+        }
+        bodies.set(host.name, after.replace(/^[\r\n]+/, ''))
     }
     const [reference, ...rest] = [...bodies.values()]
     for (const other of rest) assert.equal(other, reference, 'variant bodies must stay byte-identical')
