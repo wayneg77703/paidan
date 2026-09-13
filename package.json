@@ -1,6 +1,6 @@
 {
   "name": "paidan",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "派单 — delegate tasks to AI CLI agents installed on your machine; every task is a durable run you can wait on, cancel, and verify after restart",
   "type": "module",
   "bin": {
