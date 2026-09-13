@@ -46,5 +46,5 @@ jobs:
           node -e "if (process.env.GITHUB_REF_NAME !==
           'v' + require('./package.json').version) process.exit(1)"
 
-      - name: Publish with OIDC
-        run: npm publish --access public
+      - name: Stage publish with OIDC (human approves on npm afterwards)
+        run: npm stage publish --access public
