@@ -12,6 +12,11 @@ import * as nodePath from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
+import { waitForWorkerExit } from './helpers/worker.mjs'
+
+// Bare-name .cmd lookup uses Windows PATHEXT. The JS override below bypasses
+// that lookup and remains a real end-to-end test on every platform.
+const windowsOnly = { skip: process.platform !== 'win32' && 'requires Windows PATHEXT and cmd.exe' }
 
 const execFileAsync = promisify(execFile)
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
@@ -74,7 +79,7 @@ async function shimEnv(root, promptDelivery) {
     }
 }
 
-test('argv delivery resolving to a cmd-shim is refused with SPAWN_UNSUPPORTED before any run exists', async () => {
+test('argv delivery resolving to a cmd-shim is refused with SPAWN_UNSUPPORTED before any run exists', windowsOnly, async () => {
     const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-cmdshim-'))
     try {
         const { work, env } = await shimEnv(root, 'argv')
@@ -91,7 +96,7 @@ test('argv delivery resolving to a cmd-shim is refused with SPAWN_UNSUPPORTED be
     }
 })
 
-test('stdin delivery through the same cmd-shim is not refused', async () => {
+test('stdin delivery through the same cmd-shim is not refused', windowsOnly, async () => {
     const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-cmdshim-stdin-'))
     try {
         const { work, env } = await shimEnv(root, 'stdin')
@@ -100,6 +105,10 @@ test('stdin delivery through the same cmd-shim is not refused', async () => {
         // the worker actually spawns through the shim and reaches a terminal state
         const got = await paidan(env, ['get', run.run_id, '--wait', '--timeout', '45'])
         assert.equal(got.terminal, true, JSON.stringify(got))
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run.run_id)
+        const events = (await fs.readFile(nodePath.join(root, 'data', 'runs', run.run_id, 'events.jsonl'), 'utf8'))
+            .trim().split('\n').map((line) => JSON.parse(line))
+        assert.ok(events.some((e) => e.type === 'spawn' && e.resolved_from === 'cmd-shim'), 'worker used the shim')
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }
@@ -117,6 +126,7 @@ test('a config override to a JS bundle repairs the argv endpoint (no cmd-shim, s
         assert.equal(run.ok, true, JSON.stringify(run))
         const got = await paidan(env, ['get', run.run_id, '--wait', '--timeout', '60'])
         assert.equal(got.run.state, 'completed', JSON.stringify(got))
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run.run_id)
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }

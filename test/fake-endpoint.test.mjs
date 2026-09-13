@@ -14,6 +14,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
+import { waitForWorkerExit } from './helpers/worker.mjs'
 
 const execFileAsync = promisify(execFile)
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
@@ -21,7 +22,9 @@ const CLI = nodePath.join(repoRoot, 'dist', 'cli.js')
 
 async function paidan(env, args) {
     const { stdout } = await execFileAsync(process.execPath, [CLI, ...args], { env, timeout: 60_000 })
-    return JSON.parse(stdout.trim())
+    const result = JSON.parse(stdout.trim())
+    if (result.terminal) await waitForWorkerExit(env.PAIDAN_DATA_DIR, result.run.run_id)
+    return result
 }
 
 test('worker adopts parser usage into result.json + usage.db; in-band error lands in refusals', async () => {

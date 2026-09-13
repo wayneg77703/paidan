@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
 import { effectiveRunTimeoutSec, loadConfig, DEFAULT_RUN_TIMEOUT_SEC } from '../dist/engine/config.js'
+import { waitForWorkerExit } from './helpers/worker.mjs'
 
 const execFileAsync = promisify(execFile)
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
@@ -68,6 +69,7 @@ test('run timeout kills the endpoint tree -> failed + "run timeout after Ns" not
         const got = await paidan(env, ['get', run.run_id, '--wait', '--timeout', '45'])
         assert.equal(got.terminal, true, JSON.stringify(got))
         assert.equal(got.run.state, 'failed')
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run.run_id)
         assert.ok(
             got.result.evidence.notes.some((n) => n === 'run timeout after 2s'),
             `notes: ${JSON.stringify(got.result.evidence.notes)}`,
@@ -99,6 +101,7 @@ test('default timeout lands in request.json; --run-timeout overrides it; negativ
         const req = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run.run_id, 'request.json'), 'utf8'))
         assert.equal(req.run_timeout_sec, 42)
         await paidan(env, ['cancel', run.run_id])
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run.run_id)
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }

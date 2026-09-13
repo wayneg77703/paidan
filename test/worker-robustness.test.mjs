@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
 import { RunStore } from '../dist/engine/run-store.js'
+import { waitForWorkerExit } from './helpers/worker.mjs'
 
 const execFileAsync = promisify(execFile)
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
@@ -81,13 +82,15 @@ test('cancel re-verifies identity, then still kills the endpoint tree', async ()
         assert.equal(state, 'running')
         const cancelled = await paidan(env, ['cancel', run.run_id])
         assert.equal(cancelled.state, 'cancelled', JSON.stringify(cancelled))
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run.run_id)
         const events = await readEvents(root, run.run_id)
         const kill = events.find((e) => e.type === 'cancel')
         assert.ok(kill, 'cancel event recorded')
-        assert.ok(
-            kill.method === 'taskkill' || kill.method === 'taskkill_force',
-            `the live endpoint was actually taskkilled (method ${kill.method})`,
-        )
+        const methods = process.platform === 'win32'
+            ? ['taskkill', 'taskkill_force']
+            : ['signal_group', 'signal_group_force']
+        assert.equal(kill.ok, true, JSON.stringify(kill))
+        assert.ok(methods.includes(kill.method), `the live endpoint tree was killed (method ${kill.method})`)
         assert.ok(
             !events.some((e) => e.type === 'note' && String(e.note).includes('identity mismatch')),
             'a live endpoint must never be skipped as pid-reused',
@@ -119,6 +122,7 @@ test('cancel racing a successful completion keeps deliverable/parser/usage evide
         assert.deepEqual(got.result.evidence.parser, { type: 'kimi-print', degraded: false })
         assert.equal(got.result.final_text, 'finished before cancel')
         assert.equal(got.result.usage.source, 'unavailable')
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run.run_id)
         assert.ok(
             got.result.evidence.notes.some((n) => n.startsWith('cancel requested by user')),
             `notes: ${JSON.stringify(got.result.evidence.notes)}`,
@@ -137,6 +141,7 @@ test('a single-line stdout flood beyond 16 MiB is truncated, not buffered foreve
         assert.equal(run.ok, true, JSON.stringify(run))
         const got = await paidan(env, ['get', run.run_id, '--wait', '--timeout', '60'])
         assert.equal(got.terminal, true, JSON.stringify(got))
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run.run_id)
         const events = await readEvents(root, run.run_id)
         const trunc = events.find((e) => e.type === 'stdio-truncated' && e.stream === 'stdout')
         assert.ok(trunc, 'stdio-truncated event recorded')
@@ -213,6 +218,7 @@ test('endpoint that closes stdin early: worker survives EPIPE and the run reache
         const got = await paidan(env, ['get', run.run_id, '--wait', '--timeout', '30'])
         assert.equal(got.terminal, true, `run stuck non-terminal: ${JSON.stringify(got.run)}`)
         assert.ok(['completed', 'unknown'].includes(got.run.state), `state: ${got.run.state}`)
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run.run_id)
         // the early-close note is recorded honestly, and a result record exists
         const events = await readEvents(root, run.run_id)
         assert.ok(events.some((e) => e.type === 'note' && String(e.note).includes('closed stdin early')))

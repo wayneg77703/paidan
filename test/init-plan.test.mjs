@@ -19,6 +19,27 @@ const execFileAsync = promisify(execFile)
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const CLI = nodePath.join(repoRoot, 'dist', 'cli.js')
 
+async function initEnv(root) {
+    const endpointsDir = nodePath.join(root, 'endpoints')
+    await fs.mkdir(endpointsDir, { recursive: true })
+    // Detection/version checks use Node itself, never agents installed on the host.
+    await fs.writeFile(nodePath.join(endpointsDir, 'fake-init.json'), JSON.stringify({
+        schema_version: '1.0.0',
+        name: 'fake-init',
+        detect: { bin: process.execPath, version_args: ['--version'] },
+        command: { argv: ['{bin}', '-p', '{prompt}'], prompt_delivery: 'argv' },
+        permission: { presets: { 'workspace-write': 'supported' } },
+        parser: 'kimi-print',
+    }))
+    return {
+        ...process.env,
+        PAIDAN_HOME: nodePath.join(root, 'home'),
+        PAIDAN_DATA_DIR: nodePath.join(root, 'data'),
+        PAIDAN_HOST_HOME: nodePath.join(root, 'hosts'),
+        PAIDAN_ENDPOINTS_DIR: endpointsDir,
+    }
+}
+
 const INFO = [
     { name: 'claude-code', detected: true, version: '2.1.260', models: [], effort_options: ['low', 'medium', 'high', 'xhigh', 'max'] },
     { name: 'codex', detected: true, version: '0.153.3', models: [{ alias: 'gpt-5', connection: 'chatgpt-login' }] },
@@ -186,7 +207,7 @@ test('nothing detected -> empty enabled, null defaults, valid config', () => {
 test('CLI init on a non-TTY refuses interaction and prints state JSON', async () => {
     const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-init-'))
     try {
-        const env = { ...process.env, PAIDAN_HOME: nodePath.join(root, 'home'), PAIDAN_DATA_DIR: nodePath.join(root, 'data'), PAIDAN_HOST_HOME: nodePath.join(root, 'hosts') }
+        const env = await initEnv(root)
         // one fixture host is "installed" (its skills dir exists)
         await fs.mkdir(nodePath.join(root, 'hosts', '.kimi-code', 'skills'), { recursive: true })
         // execFile pipes stdin -> not a TTY
@@ -214,16 +235,15 @@ test('CLI init --yes writes config.json with detected endpoints and defaults', a
     try {
         const hostHome = nodePath.join(root, 'hosts')
         await fs.mkdir(nodePath.join(hostHome, '.kimi-code', 'skills'), { recursive: true })
-        const env = { ...process.env, PAIDAN_HOME: nodePath.join(root, 'home'), PAIDAN_DATA_DIR: nodePath.join(root, 'data'), PAIDAN_HOST_HOME: hostHome }
+        const env = await initEnv(root)
         const { stdout } = await execFileAsync(process.execPath, [CLI, 'init', '--yes'], { env, timeout: 120_000 })
         const envelope = JSON.parse(stdout.trim())
         assert.equal(envelope.ok, true)
         assert.equal(envelope.written, true)
         const configPath = nodePath.join(root, 'home', 'config.json')
         const cfg = JSON.parse(await fs.readFile(configPath, 'utf8'))
-        assert.ok(Array.isArray(cfg.endpoints.enabled))
-        assert.ok(cfg.endpoints.enabled.length > 0)
-        assert.ok(cfg.endpoints.enabled.includes('kimi-code'))
+        assert.deepEqual(cfg.endpoints.enabled, ['fake-init'])
+        assert.equal(cfg.defaults.endpoint, 'fake-init')
         assert.equal(cfg.defaults.endpoint, envelope.defaults.endpoint)
         // --yes installs the skill into every detected host (fixture home only)
         assert.ok(Array.isArray(envelope.skills))
@@ -301,7 +321,7 @@ test('CLI init --yes twice preserves endpoints.overrides written between runs', 
     try {
         const hostHome = nodePath.join(root, 'hosts')
         await fs.mkdir(nodePath.join(hostHome, '.kimi-code', 'skills'), { recursive: true })
-        const env = { ...process.env, PAIDAN_HOME: nodePath.join(root, 'home'), PAIDAN_DATA_DIR: nodePath.join(root, 'data'), PAIDAN_HOST_HOME: hostHome }
+        const env = await initEnv(root)
         const configPath = nodePath.join(root, 'home', 'config.json')
         await execFileAsync(process.execPath, [CLI, 'init', '--yes'], { env, timeout: 120_000 })
         // user hand-edits machine-local overrides in between

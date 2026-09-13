@@ -10,6 +10,7 @@ import * as nodePath from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
+import { waitForWorkerExit } from './helpers/worker.mjs'
 import { buildArgs, checkPermission, parseCapabilitySet } from '../dist/endpoints/registry.js'
 import { canonicalMode } from '../dist/engine/types.js'
 import { requestFingerprint } from '../dist/engine/run-store.js'
@@ -157,6 +158,7 @@ test('e2e: --capabilities unsupported -> PERMISSION_UNSUPPORTED naming the cap; 
         const okRun = await paidan(['run', '--endpoint', 'fake-caps', '--cwd', work, '--task', 'x', '--capabilities', '{"fs.read":true,"fs.write":true}', '--deliverable', 'fake-deliverable.txt'])
         assert.equal(okRun.ok, true, JSON.stringify(okRun))
         const got = await paidan(['get', okRun.run_id, '--wait', '--timeout', '60'])
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, okRun.run_id)
         assert.equal(got.run.state, 'completed', JSON.stringify(got))
         const req = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', okRun.run_id, 'request.json'), 'utf8'))
         assert.deepEqual(req.mode, { 'fs.read': true, 'fs.write': true })

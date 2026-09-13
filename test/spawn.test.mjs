@@ -17,6 +17,8 @@ import {
     quoteCmdArg,
 } from '../dist/endpoints/spawn.js'
 
+const windowsOnly = { skip: process.platform !== 'win32' && 'requires Windows PATHEXT lookup' }
+
 async function tmpDir() {
     return fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-spawn-'))
 }
@@ -32,13 +34,32 @@ function manifest(detectExtra = {}) {
     }
 }
 
-test('resolveBin prefers .EXE over .CMD in the same directory', async () => {
+test('resolveBin prefers .EXE over .CMD in the same directory', windowsOnly, async () => {
     const dir = await tmpDir()
     try {
         await fs.writeFile(nodePath.join(dir, 'fakebin.CMD'), '@echo off\r\n')
         await fs.writeFile(nodePath.join(dir, 'fakebin.EXE'), 'MZ')
         const hit = await resolveBin('fakebin', { PATH: dir, PATHEXT: '.CMD;.BAT;.EXE' })
         assert.ok(hit && hit.toLowerCase().endsWith('.exe'), `expected .EXE, got ${hit}`)
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})
+
+test('POSIX PATH lookup ignores PATHEXT and finds extensionless binaries', {
+    skip: process.platform === 'win32' && 'requires POSIX PATH lookup',
+}, async () => {
+    const dir = await tmpDir()
+    try {
+        await fs.writeFile(nodePath.join(dir, 'fakebin.CMD'), '@echo off\r\n')
+        await fs.writeFile(nodePath.join(dir, 'fakebin.EXE'), 'MZ')
+        const nextDir = nodePath.join(dir, 'next')
+        await fs.mkdir(nextDir)
+        const env = { PATH: [dir, nextDir].join(nodePath.delimiter), PATHEXT: '.CMD;.EXE' }
+        assert.equal(await resolveBin('fakebin', env), null)
+        const bin = nodePath.join(nextDir, 'fakebin')
+        await fs.writeFile(bin, '#!/bin/sh\n', { mode: 0o755 })
+        assert.equal(await resolveBin('fakebin', env), bin)
     } finally {
         await fs.rm(dir, { recursive: true, force: true })
     }
@@ -52,7 +73,9 @@ test('PATH .cmd shim with npm_exe layout resolves to the native binary (npm-exe)
         await fs.mkdir(nodePath.dirname(exe), { recursive: true })
         await fs.writeFile(exe, 'MZ')
         const res = await planEndpointSpawn(
-            manifest({ npm_exe: '@vendor/pkg/bin/real.exe' }),
+            // This only plans a spawn; an explicit shim path exercises the
+            // same npm-layout fallback on POSIX without pretending PATHEXT works.
+            manifest({ bin: process.platform === 'win32' ? 'fakebin' : nodePath.join(dir, 'fakebin.CMD'), npm_exe: '@vendor/pkg/bin/real.exe' }),
             { env: { PATH: dir, PATHEXT: '.CMD', APPDATA: nodePath.join(dir, 'no-such-appdata') } },
         )
         assert.equal(res.plan?.resolved_from, 'npm-exe')
@@ -71,7 +94,7 @@ test('npm_entry falls back to process.execPath + entry (npm-entry)', async () =>
         await fs.mkdir(nodePath.dirname(entry), { recursive: true })
         await fs.writeFile(entry, '// entry')
         const res = await planEndpointSpawn(
-            manifest({ npm_entry: '@vendor/pkg/cli.js' }),
+            manifest({ bin: process.platform === 'win32' ? 'fakebin' : nodePath.join(dir, 'fakebin.CMD'), npm_entry: '@vendor/pkg/cli.js' }),
             { env: { PATH: dir, PATHEXT: '.CMD' } },
         )
         assert.equal(res.plan?.resolved_from, 'npm-entry')
@@ -116,7 +139,7 @@ test('config override to a .cjs bundle spawns via node; unresolvable override fa
     }
 })
 
-test('bare .cmd shim without npm layout falls back to cmd-shim with verbatim args', async () => {
+test('bare .cmd shim without npm layout falls back to cmd-shim with verbatim args', windowsOnly, async () => {
     const dir = await tmpDir()
     try {
         await fs.writeFile(nodePath.join(dir, 'fakebin.CMD'), '@echo off\r\n')

@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
 import { measureArgvBytes, DEFAULT_PROMPT_MAX_BYTES } from '../dist/endpoints/registry.js'
+import { waitForWorkerExit } from './helpers/worker.mjs'
 
 const execFileAsync = promisify(execFile)
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
@@ -97,6 +98,7 @@ test('within-limit argv submit runs normally', async () => {
         assert.equal(run.ok, true, JSON.stringify(run))
         const got = await paidan(env, ['get', run.run_id, '--wait', '--timeout', '60'])
         assert.equal(got.run.state, 'completed', JSON.stringify(got))
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run.run_id)
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }

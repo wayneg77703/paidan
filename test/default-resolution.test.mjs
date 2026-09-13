@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
 import { loadConfig } from '../dist/engine/config.js'
+import { waitForWorkerExit } from './helpers/worker.mjs'
 
 const execFileAsync = promisify(execFile)
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
@@ -105,12 +106,14 @@ test('run resolves --model ?? defaults.models[endpoint] ?? native; the global de
         const req1 = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run1.run_id, 'request.json'), 'utf8'))
         assert.equal(req1.model, 'per-ep-m')
         await paidan(env, ['cancel', run1.run_id])
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run1.run_id)
         // the --model flag wins over everything
         const run2 = await paidan(env, ['run', '--endpoint', 'fake-sleeper', '--cwd', work, '--task', 'x', '--model', 'flag-m'])
         assert.equal(run2.ok, true, JSON.stringify(run2))
         const req2 = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run2.run_id, 'request.json'), 'utf8'))
         assert.equal(req2.model, 'flag-m')
         await paidan(env, ['cancel', run2.run_id])
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run2.run_id)
         // no per-endpoint entry -> native default (null), never a global fallback
         await fs.writeFile(nodePath.join(home, 'config.json'), JSON.stringify({
             endpoints: { enabled: ['fake-sleeper'] },
@@ -121,6 +124,7 @@ test('run resolves --model ?? defaults.models[endpoint] ?? native; the global de
         const req3 = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run3.run_id, 'request.json'), 'utf8'))
         assert.equal(req3.model, null)
         await paidan(env, ['cancel', run3.run_id])
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run3.run_id)
         // the removed global key strips with a warning (migration), never applies
         await fs.writeFile(nodePath.join(home, 'config.json'), JSON.stringify({
             endpoints: { enabled: ['fake-sleeper'] },
@@ -131,6 +135,7 @@ test('run resolves --model ?? defaults.models[endpoint] ?? native; the global de
         const req4 = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run4.run_id, 'request.json'), 'utf8'))
         assert.equal(req4.model, null)
         await paidan(env, ['cancel', run4.run_id])
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run4.run_id)
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }
@@ -173,11 +178,13 @@ test('run resolves --effort ?? defaults.efforts[endpoint] ?? native; bad values 
         const req1 = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run1.run_id, 'request.json'), 'utf8'))
         assert.equal(req1.effort, 'high')
         await paidan(env, ['cancel', run1.run_id])
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run1.run_id)
         // the flag wins over everything
         const run2 = await paidan(env, ['run', '--endpoint', 'fake-sleeper', '--cwd', work, '--task', 'x', '--effort', 'low'])
         const req2 = JSON.parse(await fs.readFile(nodePath.join(root, 'data', 'runs', run2.run_id, 'request.json'), 'utf8'))
         assert.equal(req2.effort, 'low')
         await paidan(env, ['cancel', run2.run_id])
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run2.run_id)
         // a value outside the manifest options is EFFORT_INVALID at submit
         const bad = await paidan(env, ['run', '--endpoint', 'fake-sleeper', '--cwd', work, '--task', 'x', '--effort', 'ultra'])
         assert.equal(bad.ok, false)
@@ -257,6 +264,7 @@ test('run with a configured model against an endpoint without model_arg is MODEL
         const ok = await paidan(env, ['run', '--endpoint', 'fake-nomodel', '--cwd', work, '--task', 'x'])
         assert.equal(ok.ok, true, JSON.stringify(ok))
         await paidan(env, ['cancel', ok.run_id])
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, ok.run_id)
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }

@@ -11,6 +11,7 @@ import * as nodePath from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
+import { waitForWorkerExit } from './helpers/worker.mjs'
 import { checkNativePreflight } from '../dist/endpoints/native-preflight.js'
 
 const execFileAsync = promisify(execFile)
@@ -117,6 +118,7 @@ test('e2e: submit warns on missing native rules (still submits); doctor reports 
             `warnings: ${JSON.stringify(run.warnings)}`,
         )
         const got = JSON.parse((await execFileAsync(process.execPath, [CLI, 'get', run.run_id, '--wait', '--timeout', '60'], { env, timeout: 60_000 })).stdout.trim())
+        await waitForWorkerExit(env.PAIDAN_DATA_DIR, run.run_id)
         assert.equal(got.run.state, 'completed')
 
         // doctor: machine-readable status per endpoint
