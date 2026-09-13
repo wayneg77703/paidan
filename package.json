@@ -43,5 +43,11 @@
   "devDependencies": {
     "@types/node": "^24.13.4",
     "typescript": "^5.9.3"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wayneg77703/paidan.git"
+  },
+  "homepage": "https://github.com/wayneg77703/paidan#readme",
+  "bugs": "https://github.com/wayneg77703/paidan/issues"
 }
