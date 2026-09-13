@@ -41,13 +41,12 @@ re-init merges and never destroys machine-local keys.
 
 zcode 桌面版在 Windows 默认目录会被自动探测（`Program Files` 系）；自定义位置（如
 其他盘符）把 `endpoints.overrides.zcode.bin` 设为 `<安装目录>/resources/glm/zcode.cjs`。
-凭据按智谱平台开通（z.ai 与 BigModel 同属智谱，国际版与国内开放平台，
-账号体系独立）：(a) z.ai（智谱国际版）账号 → `node <同一路径> login`
-（Z.AI OAuth；无浏览器加 `--no-browser`）；(b) BigModel（智谱国内开放平台）
-Coding Plan → 把桌面端 `~/.zcode/v2/config.json` 的 `provider` 块（apiKey+baseURL
-指向 bigmodel.cn）手工同步进 `~/.zcode/cli/config.json`，或用 env 三件套指向
-bigmodel 端点。`zcode login` 只覆盖 z.ai 国际版。缺凭据时 `paidan doctor` 的
-`credential_ready` 为否。
+凭据：把 `~/.zcode/v2/config.json` 的 `provider` 节复制（合并）进
+`~/.zcode/cli/config.json` 的同名 `provider` 节（v2 文件本身只有 provider 一节；
+cli 里已有的 hooks/plugins/mcp/model 键不受影响）——这就是让 zcode 端点可被
+调用的那一步，桌面已登录的 provider（BigModel/GLM 套餐、z.ai 或其他）随之进入
+headless。z.ai（智谱国际版）账号也可 `node <同一路径> login`（Z.AI OAuth；
+无浏览器加 `--no-browser`）。缺凭据时 `paidan doctor` 的 `credential_ready` 为否。
 
 ## 2. Read the machine state (no TTY needed)
 
