@@ -7,7 +7,7 @@ This repo is maintained mostly by AI agents. This file is your onboarding: the i
 1. **Terminal judgment is evidence-first.** Deliverable evidence outranks process exit codes. `exit 0` never counts as success by itself. `unknown` is a legal terminal state. Endpoint refusal signals (e.g. agy `denied_actions`, empty final text) go into terminal evidence, not automatic failure.
 2. **No cross-connection fallback.** If a model/connection fails on quota, never silently switch to another billing path. Refuse and report.
 3. **Never touch user credentials.** No copying, staging, or proxying of credential material. Endpoints run against the agent's own native config.
-4. **paidan never writes to an agent's native home.** If a required native setting is missing, refuse with a doctor-style repair hint; do not silently patch user config.
+4. **paidan never writes to an agent's native home** — two carve-outs, stated exactly: (a) the init wizard installs the host skill file into a host's user-scope skills dir **only on explicit user selection** (a checked host is the consent); (b) a missing native setting is handled per surface — hard-required ones get a doctor-style repair hint and refusal, optional ones a warning — never a silent patch of user config.
 5. **Data never flows into the repo.** The repo contains zero machine paths and zero credentials. Machine config lives in `%APPDATA%\paidan\`.
 6. **Zero runtime dependencies.** Node stdlib only (usage DB = `node:sqlite`). DevDependencies limited to `typescript` + `@types/node`. Consequence: cancel kills in two phases (graceful `taskkill /T` or process-group SIGTERM, forced `/F` or SIGKILL after grace) — Node cannot create Job Objects without FFI, so orphaned grandchildren after a force-kill are an accepted limitation, not a planned feature.
 7. **All CLI output is JSON** on stdout; human prose goes to stderr.
@@ -60,8 +60,8 @@ Behavior conclusions always carry a version + date. After upgrading an agent CLI
 
 The goal is not permission governance for its own sake — it is an honest, current record of how each agent behaves when delegated, plus code/manifests that match the installed version. This loop is designed to be driven by an AI agent end to end; the agy 1.2.0 calibration (2026-09-10) is the reference execution.
 
-1. **Detect drift**: `paidan doctor` — any endpoint version newer than its manifest `version` fields is drift.
-2. **Probe**: `paidan probe --endpoint <name>` (P1 write / P2 read-only refusal / P3 resume). All pass → probe already refreshed `verified_at`; stop here.
+1. **Detect drift**: `paidan doctor` — drift = the installed version is **not in** a manifest's verified version set (not merely "newer than"); doctor does detection + version comparison, `probe` does behavior verification.
+2. **Probe**: `paidan probe --endpoint <name>` (P1 write / P2 read-only refusal / P3 resume). All pass → **confirm the `verified_at_refresh` receipt in the probe result before stopping** (manifest writes can fail); only then is the refresh done.
 3. **Diagnose evidence-first**: read the failed run's `result.json` (refusals / notes / final_text) from the run store, then reproduce directly with the endpoint's own binary in a tmp cwd. Never change paidan code for an upstream behavior change without a direct repro.
 4. **Hypothesis-matrix the native surface**: for permission/config drift, live-test the small matrix of plausible rule/flag forms (e.g. unscoped / scoped glob / exact dir / drive-letter) and record every variant's verdict. Only forms observed working may be recorded as working.
 5. **Repair with consent**: changing an agent's native home requires explicit user approval; back up beside the original (`.bak-<date>-<tag>`), change minimally, keep unrelated keys byte-identical.

@@ -20,9 +20,11 @@ paidan models --endpoint kimi-code            # 缓存优先；--refresh 重新�
 
 CLI 的 stdout 恒为 JSON。没有 daemon：每个 run 由一个 detached worker 进程监督，磁盘上的 run store 是唯一事实源。
 
+新读者一句话：**宿主**是发单方（你，或你请的 AI agent）；**端点**是执行方；**run** 是一次任务的持久记录——请保存 `run_id`。`effort` 是端点支持的推理强度选项（若有）；权限**预设**（`read-only` / `workspace-write`（默认）/ `unattended`）是映射到各 agent 原生权限模型的便捷层。终态判定是证据优先的：`completed` 是证据成立，不只是 `exit 0`。
+
 ## 宿主接入
 
-宿主 AI agent 通过 CLI 驱动 paidan——没有插件体系。`paidan init` 向导是全交互的：启用端点与安装 skill 的宿主都是复选框多选（空格勾选、回车确认；skill 文件见 [`skills/paidan/SKILL.md`](skills/paidan/SKILL.md)），默认端点用方向键菜单单选，**每个能 headless 接模型的启用端点**各自选默认模型（dsh/zcode 这类模型归原生配置管的端点只给提示不参与；选择存为 `defaults.models.<端点>`——**向导绝不写全局 `defaults.model`**，那会毒害这两类端点）。**每个受支持的 agent 都既是被调方也能当宿主**——[`skills/hosts.json`](skills/hosts.json) 登记了全部八个 agent 的用户级技能目录（kimi-code、claude-code、zcode、codex、dsh、opencode、agy、omp），且载荷 frontmatter 按各家规范适配。也可以手工复制（Kimi Code：复制到用户级 `~/.kimi-code/skills/paidan/` 目录）。它教会宿主七个动词、权限预设语义和「证据优先」的终态判读规则。`paidan init --yes` 走零覆盖路径——模型/强度全部留在端点原生默认（各原生 home 当前实际值经 `paidan doctor` 的 `native_defaults` 只读可见）；`--yes --effort <档>` 把该档应用到所有声明了它的端点。
+宿主 AI agent 通过 CLI 驱动 paidan——没有插件体系。`paidan init` 向导是全交互的：启用端点与安装 skill 的宿主都是复选框多选（空格勾选、回车确认；skill 文件见 [`skills/paidan/SKILL.md`](skills/paidan/SKILL.md)），默认端点用方向键菜单单选，**每个能 headless 接模型的启用端点**各自选默认模型（dsh/zcode 这类模型归原生配置管的端点只给提示不参与；选择存为 `defaults.models.<端点>`——**向导绝不写全局 `defaults.model`**，那会毒害这两类端点）。**每个受支持的 agent 都既是被调方也能当宿主**——[`skills/hosts.json`](skills/hosts.json) 登记了全部八个 agent 的用户级技能目录（kimi-code、claude-code、zcode、codex、dsh、opencode、agy、omp），且各宿主安装的是按其规范**原生设计**的变体文件（`skills/paidan/variants/<宿主>.SKILL.md`——frontmatter 原生、正文一致、逐字安装不裁剪）。也可以手工复制对应变体（Kimi Code：复制到用户级 `~/.kimi-code/skills/paidan/` 目录）。它教会宿主七个动词、权限预设语义和「证据优先」的终态判读规则。`paidan init --yes` 走零覆盖路径——模型/强度全部留在端点原生默认（各原生 home 当前实际值经 `paidan doctor` 的 `native_defaults` 只读可见——这是**部分端点实现**的原生配置快照，`null` 可能表示未实现或读取失败，不等于最终生效值）；`--yes --effort <档>` 把该档应用到所有声明了它的端点。
 
 ## 它是什么 / 不是什么
 
@@ -40,7 +42,7 @@ paidan 是本机派单台（"派单" = dispatching an order）。它做三件事
 |---|---|---|
 | 代码仓 | 本仓 | 零机器路径、零凭据 |
 | 机器配置 | `%APPDATA%\paidan\config.json` | 端点启用、默认值（端点 + 按端点的默认模型与 effort、run 超时）、数据目录覆盖、按端点的 bin 覆盖 |
-| 数据面 | `%APPDATA%\paidan\runs\` + `usage.db` + `models-cache/` | 每个 run 一个目录（request/state/events.jsonl/result）、usage 记账（provider / endpoint-ledger / unavailable，永不伪造）、模型发现缓存、TTL 自清理 |
+| 数据面 | `%APPDATA%\paidan\runs\` + `usage.db` + `models-cache/` | 每个 run 一个目录（request/state/events.jsonl/result）、usage 记账（provider / endpoint-ledger / unavailable，永不伪造）、模型发现缓存、TTL 自清理（终态 run 与缓存默认 **30 天**过期——`ttlDays` 可配；`paidan list` 会顺带清理过期记录，并非纯只读查询） |
 
 数据永不回流进代码仓。数据目录可通过配置搬走；没有任何东西钉死在一台机器上。
 
@@ -59,7 +61,7 @@ paidan 是本机派单台（"派单" = dispatching an order）。它做三件事
 | opencode | ✅ / ✅ / ✅ | 项目根会被继承的 `PWD` 锚定——paidan 钉 `run --dir <cwd>` 并 unset `PWD`。v0 不支持 `add_dirs`（需要 computed-env 权限投影）。 |
 | omp | ✅ / ✅ / ✅ | workspace-write 档**没有 shell.exec**（bash/eval fail closed）；shell 需 unattended（yolo）。 |
 | dsh | ✅ / ✅ / – | 无 PATH shim——约定位置（`~/.dsh/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js`）由 `detect.known_paths` 自动探测；否则设 `endpoints.overrides.dsh.bin`。无 resume（headless 不返回会话句柄）。read-only 走 `mode_env`（DSH_PERMISSION_MODE），因为任何额外 argv 片段都会并进 prompt。 |
-| agy | ✅ / ✅ / ✅ | fs.write 与 shell.exec 同为 **soft**：1.2.0 起 `write_to_file` 被限定在 agy 自己的会话 artifacts 内，交付物写入实际走 `run_command`（shell，由原生 `command(*)` 放行规则门控），其起始目录是 agy 自己的 scratch——paidan 会追加 cwd 提示让绝对路径落位。fs.read 需 `read_file`，且 Windows 上目前仅无作用域的 `read_file(*)` 生效（上游限制）。没有 `--sandbox` 标志；强制由原生 `~/.gemini` 权限设置承载，paidan 永不改写（不变量 4）。`write_file` 放行规则对交付物**并非必需**（1.2.0 已证伪的旧结论；早期作用域规则指引不再适用）。 |
+| agy | soft / ✅ / ✅ | fs.write 与 shell.exec 同为 **soft**；read-only 同为 **soft**（1.2.1 探针 indeterminate——plan 模式 headless 可能不再像 1.1.28/1.2.0 那样自动拒绝而是挂起，待专项复核）：1.2.0 起 `write_to_file` 被限定在 agy 自己的会话 artifacts 内，交付物写入实际走 `run_command`（shell，由原生 `command(*)` 放行规则门控），其起始目录是 agy 自己的 scratch——paidan 会追加 cwd 提示让绝对路径落位。fs.read 需 `read_file`，且 Windows 上目前仅无作用域的 `read_file(*)` 生效（上游限制）。没有 `--sandbox` 标志；强制由原生 `~/.gemini` 权限设置承载，paidan 永不改写（不变量 4）。`write_file` 放行规则对交付物**并非必需**（1.2.0 已证伪的旧结论；早期作用域规则指引不再适用）。 |
 
 图例：✅ 支持 · – 不支持 · soft = 声称支持但强制力存疑（提交时出 warning）。
 

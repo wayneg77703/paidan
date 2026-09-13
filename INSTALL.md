@@ -26,7 +26,7 @@ per-endpoint `resolved_from`/`repair_hint` and the top-level `issues` —
 From source (before the package is published, or for a fork):
 
 ```bash
-git clone https://github.com/<owner>/paidan.git   # fill the real owner once public
+git clone https://github.com/wayneg77703/paidan.git   # 公开仓地址;npm 与源码两条路径当前均可用
 cd paidan
 npm install        # devDeps only (typescript + @types/node)
 npm run build
@@ -39,8 +39,14 @@ re-init merges and never destroys machine-local keys.
 
 ## 2. Read the machine state (no TTY needed)
 
-Run `paidan init` **without answering it** (or simply note that your stdin is
-not a TTY). It refuses interaction with `INIT_INTERACTIVE_REQUIRED` and, in
+Run `paidan init` with stdin **not** a TTY — explicitly redirect it, because
+the check is `!process.stdin.isTTY` (an agent tool that allocates a PTY would
+land you in the interactive wizard instead):
+
+```bash
+paidan init < /dev/null    # POSIX; Windows cmd: paidan init < NUL
+# exits 1 with INIT_INTERACTIVE_REQUIRED — the envelope below is still printed
+``` It refuses interaction with `INIT_INTERACTIVE_REQUIRED` and, in
 the same envelope, hands you the full machine survey:
 
 ```json
@@ -75,17 +81,22 @@ Present these five questions (this is exactly the interactive wizard's set):
 1. **Enable which endpoints?** (from `state.endpoints` where `detected`)
 2. **Default endpoint?** (used when `paidan run` gets no `--endpoint`)
 3. **Default model per enabled endpoint that is `model_selectable`?** (from
-   that endpoint's `models` list; an endpoint with no discovered models keeps
-   its native default; `model_selectable === false` endpoints are skipped —
-   their native config owns the model)
+   that endpoint's `models` list — **"native default" is always an explicit
+   choice**; an endpoint with no discovered models keeps its native default;
+   on re-init, a hand-set value outside the lineup stays selectable as
+   `(keep current: X)`, which is also the fallback; `model_selectable === false`
+   endpoints are skipped — their native config owns the model)
 4. **Default effort per enabled endpoint?** — only where the endpoint
    declares an effort block: today **claude-code** (low/medium/high/xhigh/max),
    **codex** (minimal/low/medium/high/xhigh), **kimi-code** (low/high/max),
    **omp** (off/minimal/low/medium/high/xhigh/max/auto), **opencode**
    (minimal/high/max). Everything else keeps its native default.
-5. **Install the paidan skill into which hosts?** (from `state.hosts`;
-   the skill teaches each agent how to drive paidan; all eight agents can be
-   hosts — kimi-code, claude-code, zcode, codex, dsh, opencode, agy, omp)
+5. **Install the paidan skill into which hosts?** (from `state.hosts`
+   **where `detected`** — the CLI rejects undetected names; the skill teaches
+   each agent how to drive paidan; all eight agents can be hosts — kimi-code,
+   claude-code, zcode, codex, dsh, opencode, agy, omp. Mapping to `--yes`:
+   zero hosts = `--hosts=`, an explicit subset = `--hosts=a,b`, every detected
+   host = omit the flag)
 
 ## 4. Complete the install
 
@@ -138,13 +149,14 @@ verb with `CONFIG_INVALID`):
   strings **when present** — omit a key entirely for its default; an explicit
   `null` is an error. There is deliberately **no** global `defaults.model` /
   `defaults.effort` key (removed from the schema: both poisoned endpoints
-  without that selection surface); a config still carrying one is a
-  `CONFIG_INVALID` — delete the two keys (one re-run of `paidan init` also
-  strips them from an existing config).
+  without that selection surface); a config still carrying one is **not** a
+  `CONFIG_INVALID` — it is stripped at load with a warning, and one re-run of
+  `paidan init` removes it from the file for good.
 - Unknown keys are rejected (typos never pass silently); `__proto__` and
   friends are rejected as dynamic keys.
 - `endpoints.enabled` must be an array of strings; `defaults.models` /
-  `defaults.efforts` must be string maps; `ttlDays` a positive number;
+  `defaults.efforts` must be string maps **with non-empty string values**;
+  `ttlDays` a positive number;
   `defaults.run_timeout_sec` a non-negative number.
 
 **Semantic validation** (NOT done at load — a hand-written config that breaks
@@ -176,9 +188,18 @@ native default`; `--effort ?? defaults.efforts[ep] ?? native default`.
 ```bash
 paidan doctor    # every enabled endpoint should show resolved + a version;
                  # usage.db ok
-paidan run --endpoint <default> --cwd <scratch-dir>   --task "Create a file named ok.txt in the current directory whose entire content is exactly: ok. Then reply done."   --deliverable ok.txt
+mkdir "$(mktemp -d)" && cd "$_"   # a FRESH, empty scratch dir — evidence must not
+                                  # be satisfiable by a pre-existing file
+paidan run --endpoint <default> --cwd . --task "Create a file named ok.txt in the current directory whose entire content is exactly: ok. Then reply done." --deliverable ok.txt
 paidan get <run_id> --wait
 ```
+
+Permission note: `run` without `--mode` defaults to `workspace-write`. If the
+user picked **zcode** as the default endpoint, add `--mode unattended` (zcode
+is yolo-only headless; any other preset is refused with `PERMISSION_UNSUPPORTED`).
+And `--deliverable` proves **existence** only — open `ok.txt` yourself and
+check the exact content (`ok`) before calling it content-verified; report both
+the terminal state and the content check.
 
 Report back to the user: which endpoints are enabled, what the defaults are,
 which hosts received the skill, anything you had to override, and the one
