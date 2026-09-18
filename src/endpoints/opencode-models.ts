@@ -16,7 +16,8 @@ export function parseVerboseModelsOutput(text: string): DiscoverModelsResult {
         if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error('opencode models --verbose returned an unknown schema')
         const variants = o.variants
         models.push({
-            alias, connection: alias.slice(0, alias.indexOf('/')), source: 'native-catalog',
+            alias, ...(typeof o.name === 'string' ? { label: o.name } : {}),
+            connection: alias.slice(0, alias.indexOf('/')), source: 'native-catalog',
             effort_options: variants && typeof variants === 'object' && !Array.isArray(variants)
                 ? Object.entries(variants).filter(([, v]) => !(v && typeof v === 'object' && (v as Record<string, unknown>).disabled === true)).map(([key]) => key)
                 : null,

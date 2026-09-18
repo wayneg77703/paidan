@@ -7,10 +7,11 @@
       "--version"
     ],
     "version_re": "([0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.]+)?)",
+    "npm_entry": "@deepseek-ai/dsh/lib/bin.js",
     "known_paths": [
       "{home}/.dsh/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js"
     ],
-    "detect_notes": "Install shape verified 2026-09-10 on this machine: NO PATH shim (`where dsh` finds nothing) and NOT an npm-global layout (`<npm-root>/node_modules/@deepseek-ai` absent), so detect.npm_exe/npm_entry do not apply. The launcher is a Node script under the dsh profile home: ~/.dsh/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js (the retired external-agent-suite dsh adapter's legacyLauncherPath (archived 2026-09-12); a PATH hit would risk binding the wrong binary class, adapter r1 fix 3) — this per-user conventional location is now auto-probed via known_paths. Repair when absent: set endpoints.overrides.dsh.bin in config.json to that JS bundle — spawn.ts wraps .js via process.execPath. `node <bin.js> --version` prints `0.1.2-rc.1` (verified 2026-09-10)."
+    "detect_notes": "Discovery covers PATH/npm packages and the native DSH home profile package. Agent-guided setup also checks the actual npm cache for @deepseek-ai/dsh entries, verifying package identity and lib/bin.js. Package location and DSH_HOME/settings.yaml are separate; keep the whole package. A cached entry can disappear: report it and ask for a replacement, never trigger npx installation or choose the newest automatically."
   },
   "command": {
     "argv": [

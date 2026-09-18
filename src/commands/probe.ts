@@ -213,7 +213,7 @@ export async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
     // npm install dir may be read-only) instead of only stderr (codex P1-08)
     const today = localToday()
     let verifiedRefresh: Record<string, unknown> = { attempted: false }
-    if (probes.some((p) => p.verdict === 'pass')) {
+    if (probes.some((p) => p.verdict === 'pass' && ['P1-write', 'P3-resume'].includes(p.name))) {
         try {
             await refreshManifestVerifiedAt(ctx.registry.dir, manifest.name, probes, today, version)
             verifiedRefresh = { attempted: true, ok: true, dir: ctx.registry.dir }

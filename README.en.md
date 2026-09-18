@@ -2,98 +2,103 @@
 
 [简体中文](README.md) · English
 
-Delegate a task to an AI CLI agent already installed on your machine.
-Every task is a **durable run**: you can wait for it, cancel it, and verify its result after a reboot.
+Delegate tasks to other AI CLI agents on your machine. Keep talking to your current agent while another works, then retrieve the result, wait or cancel. Task records are stored locally and remain available after a restart.
 
-**Recommended setup: give this repository link to an AI agent with local shell access** and ask it to follow [INSTALL.en.md](INSTALL.en.md). It asks once which endpoints to connect, inspects only those, adopts a single valid entry after showing it, and lets you choose between multiple installations. Model/effort follow native settings by default; the current host skill goes into one configuration confirmation. Basic checks finish setup without calling a model. Pending login/quota or skipped verification keeps the configuration for later use.
+Supports **Codex, Claude Code, Kimi Code, ZCode, OpenCode, OMP, DSH and AGY**.
 
-Already configured? Use the core commands:
+## Install
 
+You need **Node.js 24+** and the agents you want to connect. Configure login or API access through each agent's native tools.
+
+Give the [repository link](https://github.com/wayneg77703/paidan) to an agent with local shell access and say:
+
+> Follow INSTALL.en.md to install paidan, connect Codex and ZCode, and install the dispatch skill for you. Leave other endpoints alone.
+
+It finds installations, shows current connections/models/reasoning levels, and lets you follow native defaults or choose fixed settings. You choose between multiple installations and review changes before saving. The program handles configuration, backups and installation records; no hand-written JSON is required. Setup does not call a model by default.
+
+The **host** sends tasks; an **endpoint** receives them. Choose these roles independently. Installation conversations use your language.
+
+You can also install the package first, then ask an agent to configure it:
+
+```sh
+npm install -g paidan
+paidan --version
 ```
-paidan doctor                                 # what agents are installed and usable?
-paidan run --cwd . --task "summarize this repo"
-paidan list
-paidan get <run_id> --wait
-paidan cancel <run_id>
-paidan models --endpoint kimi-code            # current candidates, not guaranteed model access
+
+Terminal users can optionally run `paidan init`. If Windows blocks `.ps1`, use the existing `npm.cmd` / `paidan.cmd`. An application missing from PATH may still be installed: give the installing agent its installation directory as a search hint.
+
+## Use it
+
+Once the host has the skill, state the task, endpoint and scope:
+
+> Use paidan to ask Codex for a read-only review of this project. Summarize its findings when finished.
+
+> Delegate this error to Kimi Code. It may edit this project and run tests.
+
+> Check whether the previous task finished; if it is still running, keep waiting.
+
+From a terminal, submit a task:
+
+```sh
+paidan run --endpoint codex --cwd . --mode read-only --task "Review this project and list its main issues"
 ```
 
-Manual shortcut: `npm i -g paidan` (Node >= 24), then optionally `paidan init`. The wizard uses first-match discovery; it does not choose between multiple installed versions. Agent-guided setup does not need init.
+The command returns a `run_id`. Use it to retrieve results or cancel. CLI output is JSON.
 
-All CLI output is JSON. There is no daemon: each run is supervised by a detached worker process, and the on-disk run store is the single source of truth.
+| Action | Command |
+|---|---|
+| Retrieve the result and wait for completion | `paidan get <run_id> --wait` |
+| List recent tasks | `paidan list` |
+| Cancel a task | `paidan cancel <run_id>` |
+| Read a longer task from a file | `paidan run --endpoint codex --cwd . --task-file task.md` |
+| Inspect model candidates | `paidan models --endpoint codex` |
+| Check an endpoint's entry and configuration | `paidan doctor --endpoint codex` |
+| Show command options | `paidan help run` |
 
-New here in one breath: a **host** is the agent that dispatches (you, or an AI agent you ask); an **endpoint** is the agent that executes; a **run** is one task's durable record — save its `run_id`. `effort` is the endpoint's reasoning-intensity option where it exists; permission **presets** (`read-only` / `workspace-write` / `unattended`) are convenience mappings onto each agent's native permission model. A finished run is judged evidence-first: `completed` means the evidence says so, not merely `exit 0`.
+Replace angle-bracket placeholders with actual values. You may omit `--endpoint` after choosing a default. After a wait timeout, keep querying the same `run_id` rather than submitting again. Restarting does not automatically rerun unfinished tasks.
 
-For package updates, upstream CLI updates or uninstalling, ask the installing agent to follow [Update and uninstall](INSTALL.en.md#update-and-uninstall). Config/history/native settings remain by default; host skill copies are compared before updating/removing.
+## Change settings or add an endpoint
 
-## Host integration
+You can maintain one endpoint without reinstalling or reconfiguring the others. Tell the installing agent what you want:
 
-A host AI agent drives paidan through the CLI. During [agent-guided setup](INSTALL.en.md), choose which hosts receive the paidan skill. Each of the eight supported agents has a native variant registered in [skills/hosts.json](skills/hosts.json). The installer copies only the selected variants, using the source and target paths reported by `paidan doctor`, without re-running init or changing endpoint defaults.
+> I just installed OpenCode. Connect only that endpoint; keep the other settings and the default endpoint.
 
-The skill teaches task submission, waiting, cancellation, model discovery, and evidence-based result checking. You can also copy the corresponding packaged variant by hand. The optional `paidan init` wizard offers skill installation alongside its endpoint/default selections.
+> Make Codex follow its native model and effort settings.
 
-Model and effort defaults should normally **follow the selected CLI’s native configuration**: pin the executable path, leave model/effort overrides unset. Explicit fixed defaults remain an option. After a connection switch or quota/login/model error, the host checks current configuration and asks you how to proceed; it never silently changes the billing route or retries the task.
+> ZCode moved to another directory. Find its new entry and keep my model choice.
 
-Headless permissions are separate from native model defaults: seven endpoints use workspace-write; ZCode uses unattended. Codex explicitly uses never approval and Claude disables interactive permission prompts; other endpoints keep their own headless mappings. Adjust with `--mode` or `defaults.modes.<endpoint>`. See [headless defaults](INSTALL.en.md#headless-permissions-are-separate-defaults).
+The program changes only selected endpoints. Follow native defaults or choose a fixed combination in this order: **connection → model → that model's supported effort**.
 
-Configure **selected CLI → connection/account → model → model-specific effort** using each endpoint’s native mechanism. Login, API and gateway routes may bill separately; catalogs do not guarantee access. See [endpoint recipes](INSTALL.en.md#endpoint-specific-configuration).
+| Endpoint name | What to know |
+|---|---|
+| `codex` | Follow native settings or fix model/effort. Fixed choices require confirmation after connection configuration changes. |
+| `claude-code` | Choose a full model ID or a dynamic alias and supported effort. Aliases follow native mappings. |
+| `kimi-code` | Model aliases select OAuth/API routes. Fixed effort depends on the model and protocol. |
+| `zcode` | Configure and enable a native API provider first; desktop login alone does not establish CLI access. Custom installation drives are supported. The program creates a dedicated profile for fixed choices. |
+| `opencode` | Choose provider/model and its variant. Inspect configuration in the actual task directory. |
+| `omp` | Uses the current native profile's model/thinking settings. Native account rotation and fallback may still apply. |
+| `dsh` | Uses native headless profile settings, with no paidan model/effort overrides. Locate the entry again if its cache disappears. No session resume. |
+| `agy` | Choose the complete model ID; do not add effort when the ID already includes it. Missing native permission rules need separate attention. |
 
+A dedicated ZCode file may contain a local copy of the selected API key; setup explains this and asks for approval, preserving the original configuration. DSH native-default changes also disclose their wider impact before the program edits a supported configuration format.
 
-## What it is / is not
+Model settings and execution permissions are separate. Defaults generally permit workspace edits; ZCode uses the broader `yolo` mode. Explicitly request read-only when needed; see [endpoint permission support](INSTALL.en.md#headless-permissions-are-separate-defaults). Codex disables interactive approval, and Claude Code denies operations that require a prompt so the host can handle them without a headless task waiting for input.
 
-paidan is a local dispatch desk ("派单" = dispatching an order). It does three things and no more:
+## When a task fails
 
-1. A **local tool** that hands tasks to AI CLI agents on this computer.
-2. Every task is a **persistent run** — waitable, cancellable, verifiable after restart.
-3. Configuration and discovery (`init` wizard, `doctor`, `models`).
+Give the host agent the `run_id` and error. It checks the result, existing artifacts and current configuration before discussing the next step with you.
 
-It deliberately does **not** do: orchestration / multi-agent pipelines, daemons, multi-tenancy, multi-machine scheduling, chat UI, plugin system (v1), credential custody (it never proxies or copies your credentials), telemetry (none, ever).
+After changing a connection through CC Switch or another tool, a previously fixed model may no longer apply. Choose native defaults for this run, another fixed combination or a native setup repair. paidan never automatically changes accounts/billing routes or resubmits the task. Model listings and doctor checks do not guarantee quota or access.
 
-## Data zones
+## Updates, uninstalling and local data
 
-| Zone | Location | Contents |
-|---|---|---|
-| code repo | this repository | zero machine paths, zero credentials |
-| machine config | `%APPDATA%\paidan\config.json` | endpoints enabled, defaults (endpoint + per-endpoint default models and efforts, run timeout), data dir override, per-endpoint bin overrides |
-| data plane | `%APPDATA%\paidan\runs\` + `usage.db` + `models-cache/` | one directory per run (request/state/events.jsonl/result), usage accounting (provider / endpoint-ledger / unavailable, never fabricated), model discovery cache, TTL self-cleaning (terminal runs and caches expire after **30 days** by default — `ttlDays` configurable; `paidan list` piggy-backs the expiry sweep, so it is not a strictly read-only query) |
+Ask the installing agent to follow [Update and uninstall](INSTALL.en.md#update-and-uninstall), for example: “Update paidan and sync my existing host skills” or “Uninstall paidan but keep configuration and history.” `npm install -g paidan@latest` updates the npm package alone; installed host skills still need syncing.
 
-Data never flows back into the code repo. Move the data dir anywhere via config; nothing is pinned to one machine.
+Default data locations:
 
-## Endpoints
+- Windows: `%APPDATA%\paidan\`
+- Linux / macOS: `~/.config/paidan/`, or `$XDG_CONFIG_HOME/paidan/`
 
-An endpoint is a **data manifest** (`endpoints/<name>.json`) plus a small parser (one protocol per file, ~150-260 lines). The manifest declares: how to detect the agent binary, command template, permission capability map, prompt delivery, output parsing type, model discovery command, and capability flags with the date they were last verified.
+These hold configuration, installation records and task history. Change locations with `PAIDAN_HOME` or the data-directory setting. Finished tasks are retained for **30 days** by default; `paidan list` cleans expired records. Adjust `ttlDays` for longer retention. Uninstalling preserves this data and native agent settings by default.
 
-Permission presets (`read-only` / `workspace-write` / `unattended`) are conveniences only — each endpoint maps them to its native permission model, and an endpoint that cannot enforce a preset says so honestly (`soft` or `unsupported`) instead of pretending. See `docs/contracts.md`.
-
-| endpoint | presets (ro/ww/ua) | user-visible surprises |
-|---|---|---|
-| kimi-code | – / ✅ / ✅ | Native print auto; no enforceable read-only tier. Usage comes from the native ledger. Full aliases select OAuth/API routes independently. Explicit effort is supported only for confirmed kimi-protocol thinking models; other protocols follow native effort. |
-| codex | ✅ / ✅ / ✅ | Native exec --json; resume restores the original sandbox. The selected CLI supplies models and per-model efforts. Fixed choices bind to the native configuration and require user selection after changes; --native follows defaults for one invocation. |
-| claude-code | – / ✅ / ✅ | Show alias mappings and full model IDs; fixed selections require re-confirmation after native config changes. Effort uses native flags only. Default acceptEdits + permission-prompts=none preserves native allow rules; enforced read-only is unsupported. |
-| zcode | – / – / ✅ | Print/yolo only (unattended). Configure and enable a working native API-key connection first; desktop OAuth alone does not prove headless readiness. Follow native or let the installer create an approved native profile and set endpoints.overrides.zcode.provider_config. Report expected/actual provider, model and effort; ask before any fallback. See [INSTALL.en.md](INSTALL.en.md). |
-| opencode | ? / ✅ / ✅ | Task-directory configuration and provider/model variants; fixed choices are validated and bound to native metadata. 1.18.31 write/resume passed; read-only refusal evidence was insufficient, so enforcement is unverified. |
-| omp | ✅ / ✅ / ✅ | Current OMP_PROFILE selectors, per-model thinking and auth metadata; fixed choices are validated and bound. 18.2.5 write/read-only-refusal/resume passed. Native account rotation, fallback and role switching remain under native configuration and are disclosed. |
-| dsh | ✅ / ✅ / – | Native headless profile owns provider/model/reasoningEffort; the menu lists explicitly configured entries. Native edits require consent; no paidan model/effort overrides. 0.1.5-rc.2 write/read-only-refusal passed; no resume. |
-| agy | soft / ✅ / ✅ | Pin the full ID, including any encoded effort; do not add --effort. Native account type remains unknown. 1.2.5 write/resume passed; read-only timed out and remains soft. Native allow rules and the cwd hint still matter. |
-
-Legend: ✅ supported · – unsupported · soft = claims it, enforcement doubtful (submit warning).
-
-## Maintenance mode
-
-This project is **maintained by AI agents** (with human oversight at a low bandwidth). Responses may be slow. Forks are welcome and encouraged — the repo is designed to be self-explanatory: read `AGENTS.md` for the invariants and how to add an endpoint.
-
-Compatibility claims carry dates: agent CLIs drift, and `paidan doctor` / `paidan probe` re-measure the real behavior of your installed versions instead of trusting documentation.
-
-## Status
-
-Early (0.x). The engine works; all eight endpoint manifests are wired and pass their contract probes where the agent is installed (dsh has no resume to probe; zcode headless is yolo-only by design). An eight-endpoint real-delegation sweep passed on the author's machine (2026-09-10). MIT licensed.
-
-## Platform support
-
-| platform | engine | notes |
-|---|---|---|
-| Windows 10/11 | ✅ tested daily-driver | cancel = taskkill tree-kill, graceful then forced (orphaned grandchildren after a force-kill are an accepted limitation — Job Objects need FFI, zero-dep invariant) |
-| Linux | 🟡 designed, untested | config at `$XDG_CONFIG_HOME/paidan` (default `~/.config/paidan`); cancel = POSIX process-group signals |
-| macOS | 🟡 designed, untested | same POSIX path (`~/.config/paidan`, deliberately not `~/Library/Application Support` — one code path) |
-
-The platform-specific surface is intentionally tiny (config dir, binary resolution, process kill) and each has a POSIX branch; what is missing is real-machine verification. Unit tests and golden fixtures run everywhere and are enforced by a three-OS CI matrix (Windows / Linux / macOS); contract probes self-skip when an agent is not installed. Requires Node ≥ 24 on every platform.
+[Detailed installation and endpoint setup](INSTALL.en.md) · [Technical reference](docs/contracts.md) · [Maintainer guide](AGENTS.md) · [MIT license](LICENSE)

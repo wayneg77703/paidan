@@ -9,16 +9,21 @@ import { verbRun, verbGet, verbCancel, verbList } from './commands/run.js'
 import { verbModels, verbDoctor } from './commands/inspect.js'
 import { verbProbe } from './commands/probe.js'
 import { verbInit } from './commands/init.js'
+import { verbSetup } from './commands/setup.js'
 
 // ---------- entry ----------
 
 /** Per-verb flag reference for `paidan help <verb>` (human text on stderr; stdout stays JSON). */
 const VERB_HELP: Record<string, string> = {
+    setup: 'setup --endpoint <name>... [--bin <absolute-path> | --location <directory-or-file>...] [--cwd <task-directory>]\n' +
+        '  list all installation candidates and current provider/model/effort menus; returns a choices template\n' +
+        'setup --choices <json-file> [--cwd <task-directory>] [--apply --expect <confirmation>]\n' +
+        '  preview selected changes, then apply after user confirmation; no model tasks or init wizard',
     init: 'init [--yes] [--effort <level>] [--hosts <name,name>]\n' +
         '  optional shortcut; recommended setup: give an agent the repository INSTALL.md\n' +
-        '  first-match detection does not choose between multiple installed versions\n' +
-        '  interactive wizard on a TTY; --yes = enable all detected endpoints, every model/effort\n' +
-        '  stays at the endpoint native default, skill into every detected host;\n' +
+        '  shares setup discovery/writer; ambiguous installations require explicit entry selection\n' +
+        '  interactive wizard on a TTY; --yes adds detected endpoints and preserves existing defaults,\n' +
+        '  new endpoints follow native defaults; skill into every detected host;\n' +
         '  --yes --effort <level> applies that level where declared; --yes --hosts <names>\n' +
         '  restricts the skill install to those hosts',
     run: 'run --endpoint <name> --cwd <abs> (--task <text> | --task-file <file>)\n' +
@@ -62,16 +67,17 @@ async function main(): Promise<number> {
     }
     // `<verb> --help/-h` short-circuits before strict parseArgs rejects it
     if (rest.includes('--help') || rest.includes('-h')) {
+        if (!VERB_HELP[verb]) throw new PaidanError('ARGS_INVALID', `unknown verb "${verb}"`)
         process.stderr.write(`paidan ${verb} — flags:\n  ${(VERB_HELP[verb] ?? 'no help for this verb').replaceAll('\n', '\n  ')}\n`)
         emitOk({ verb, flags: VERB_HELP[verb] ?? null })
         return 0
     }
     const ctx = await makeCtx()
+    if (verb === 'setup') { await verbSetup(ctx, rest); return 0 }
+    if (verb === 'init') return await verbInit(ctx, rest)
     // startup reconcile: mark dead-worker runs attention; never restarts anything
     await reconcileRuns(ctx.store).catch(() => {})
     switch (verb) {
-        case 'init':
-            return await verbInit(ctx, rest)
         case 'run':
             await verbRun(ctx, rest)
             return 0

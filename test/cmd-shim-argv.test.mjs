@@ -47,7 +47,7 @@ async function shimEnv(root, promptDelivery) {
     await fs.mkdir(shimDir, { recursive: true })
     await fs.mkdir(work, { recursive: true })
     await fs.mkdir(home, { recursive: true })
-    await fs.writeFile(nodePath.join(shimDir, 'fakebin.CMD'), '@echo off\r\n')
+    await fs.writeFile(nodePath.join(shimDir, 'fakebin.CMD'), '@echo off\r\nif "%~1"=="--version" echo 1.0.0\r\n')
     await fs.writeFile(nodePath.join(endpointsDir, 'fake-shim.json'), JSON.stringify({
         schema_version: '1.0.0',
         name: 'fake-shim',
@@ -89,6 +89,8 @@ test('argv delivery resolving to a cmd-shim is refused with SPAWN_UNSUPPORTED be
         assert.equal(endpoint.spawn_supported, false)
         assert.match(endpoint.repair_hint, /endpoints\.overrides\.fake-shim\.bin/)
         assert.ok(doctor.issues.some((issue) => issue.includes('cannot preserve argument boundaries')))
+        const setup = await paidan(env, ['setup', '--endpoint', 'fake-shim'])
+        assert.deepEqual(setup.endpoints[0].candidates, [], 'argv shim is not a usable setup candidate')
         const res = await paidan(env, ['run', '--endpoint', 'fake-shim', '--cwd', work, '--task', 'x'])
         assert.equal(res.ok, false)
         assert.equal(res.error.code, 'SPAWN_UNSUPPORTED')
@@ -106,6 +108,13 @@ test('stdin delivery through the same cmd-shim is not refused', windowsOnly, asy
     const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-cmdshim-stdin-'))
     try {
         const { work, env } = await shimEnv(root, 'stdin')
+        const setup = await paidan(env, ['setup', '--endpoint', 'fake-shim'])
+        const candidate = setup.endpoints[0].selected_bin
+        assert.equal(setup.endpoints[0].candidates[0].source, 'cmd-shim')
+        assert.equal(setup.endpoints[0].selection_required, false)
+        assert.match(candidate, /fakebin\.cmd$/i)
+        const pinned = await paidan(env, ['setup', '--endpoint', 'fake-shim', '--bin', candidate])
+        assert.equal(pinned.endpoints[0].selected_bin, candidate)
         const run = await paidan(env, ['run', '--endpoint', 'fake-shim', '--cwd', work, '--task', 'x'])
         assert.equal(run.ok, true, JSON.stringify(run))
         // the worker actually spawns through the shim and reaches a terminal state

@@ -2,7 +2,7 @@
 
 简体中文 · [English](INSTALL.en.md)
 
-供能执行本机命令、读写本机文件的 AI agent 使用。目标是尽快完成用户选中端点的配置；默认不调用模型做测试，也不要求配置机器上的所有 agent。本流程直接合并配置，不依赖 `paidan init`。
+paidan 把任务委派给本机其他 AI CLI：发单的 agent 是“宿主”，接任务的 CLI 是“端点”，二者分别选择。本文供能执行本机命令的安装 agent 使用。目标是尽快完成用户选中端点的配置；默认不调用模型做测试，也不要求配置机器上的所有 agent。agent 负责沟通和补充查找线索，程序负责核验与全部配置写入，不依赖 `paidan init`。
 
 ## 交互语言
 
@@ -10,106 +10,80 @@
 
 ## 默认流程
 
-### 1. 安装 paidan，一次询问要接入哪些 agent
+### 1. 确认要接入哪些端点，安装 paidan
 
-**用一轮多选询问本次接入哪些端点**：kimi-code、codex、claude-code、zcode、opencode、omp、dsh、agy。可以提示已知的安装，但不逐个问完八遍，也不为未选中的端点查路径、列模型或处理登录。用户已经明确点名的直接纳入，不重复询问。
+先问本次接入哪些：kimi-code、codex、claude-code、zcode、opencode、omp、dsh、agy。接受名称、“都接”和自然语言，不为适配四选一控件把一个选择拆成多组。已有明确选择就直接继续。
 
-仅当所选端点未安装或找不到入口时，再提供安装、用户指定位置或暂缓配置的选择。不要默认安装其他 agent。
-
-### 2. 只检查所选端点，处理入口歧义
-
-可以先集中读取一次所选端点的当前状态。例如用户选了 Codex 和 ZCode：
-
-```sh
-paidan doctor --endpoint codex --endpoint zcode
-```
-
-`--endpoint` 可重复，不要求端点已启用；省略时才调查全部端点。旧版没有该筛选参数时，最多集中调用一次全量 doctor，再只处理所选端点。
-
-doctor 每个端点只返回一个当前命中，**不能替代多版本查找**。对所选端点检查所有 PATH 命中、已有覆盖路径及下方的常见安装位置。只检查相关目录，不全盘扫描。
-
-```powershell
-Get-Command codex -All -ErrorAction SilentlyContinue |
-    Select-Object CommandType, Source
-where.exe codex
-npm root -g
-```
-
-已有包管理器启动脚本可帮助定位真实文件，但端点入口选原生程序或 Node.js 脚本，不选 PowerShell 别名、函数、`.cmd/.bat/.ps1` 包装。对候选执行短超时的 `--version`；Node.js 脚本使用 `node "<脚本路径>" --version`。同一真实文件去重，不同安装即使版本相同也保留。
-
-- **只有一个有效候选**：展示路径、版本与来源，纳入配置摘要并采用，不单独追加一道选择题。
-- **有多个安装候选**：展示“完整路径 | 版本 | 来源 | 检查结果”，由用户选；不能静默取 PATH 第一项或最高版本。
-- **没有有效候选**：说明问题，让用户提供位置、处理安装或稍后再接入。
-
-已有明确固定的入口时保留用户的选择，除非它失效或用户要求更换。选定后始终保存真实文件的绝对路径到 `endpoints.overrides.<name>.bin`，以后失效时报告，不自动切换到另一份程序。
-
-### 3. 先识别连接，再处理模型和强度
-
-按下方端点说明读取所选 CLI 的原生配置快照。先展示“当前连接/账号类型 → 模型 → 强度”及信息来源；查不到的字段标为未知。**provider 名称不等于账号，也不等于计费方式**：同一厂商可能同时存在登录套餐、API Key 和第三方网关。
-
-选了 ZCode 时，先完成下方「接入前准备」中的原生 API Key 配置，再安装 paidan；若用户暂缓，只跳过该端点，继续其余已选端点。
-
-检查 Node.js >= 24，安装 paidan：
+检查 Node.js >= 24，安装并确认版本：
 
 ```sh
 npm i -g paidan
 paidan --version
 ```
 
-缺少运行环境时再与用户处理。通过 npm 安装不要求 Git。PowerShell 阻止 `.ps1` 时使用已有的 `npm.cmd` / `paidan.cmd`，不要修改执行策略或创建 PATH shim。安装后调用方可能仍持有旧 PATH；必要时重启该终端/父应用，或使用入口完整路径。
+只在确实缺运行环境时处理它。PowerShell 阻止 .ps1 时使用已有 npm.cmd / paidan.cmd，不修改执行策略，不创建 PATH shim。不要把“PATH 没命令”当成未安装；桌面随附的 CLI 由下一步查找。
 
-这里的“跟随原生”只涵盖连接、模型和强度。**被无头调用时的权限与审批方式单独配置**，不继承会等待用户或 SDK host 确认的交互审批方式；默认采用下方已适配的端点调用方式。
+### 2. 程序检查所选端点，歧义才问
 
-对每个选中的端点调用一次 `paidan models --endpoint <name>`（涉及项目配置时加 `--cwd <实际任务目录>`），展示当前原生连接、模型、强度、paidan 已有固定值，以及查询到的模型与各自强度菜单，让用户选择“跟随当前原生”或“固定某个模型和强度”。读取 `native_defaults`、`configured_defaults`、`connections` 和模型的 `connection/source/effort_options`；可以合成一张表，一次选择，不把模型逐个问一遍。若入口还未保存，在隔离的临时 `PAIDAN_HOME` 中配置最终选中的同一绝对入口进行调查，不能查询另一份 PATH 命中的程序。
-
-- 单一明确连接：展示并沿用。存在多条账号/计费连接时，展示当前选择和其他候选，让用户明确采用哪条；已有明确选择不重复询问。
-- 接受当前组合时，整体跟随原生连接、模型与强度；不是只省略 `--model` 却继续传旧强度。
-- 用户要调整时，**先连接，再该连接的模型，最后该模型支持的强度**。无强度元数据表示未知，不等于支持全部档位；显式空数组表示没有声明可选档位。
-- 原生目录、配置存在、认证状态与实际调用是不同证据。无需为了确认额度而派测试任务；未登录、暂无额度或跳过验证均可保留端点。
-
-### 4. 集中确认配置摘要
-
-把常规选择集中到一份简短摘要：
-
-- 接入哪些端点及所选入口。
-- 所选连接与账号类型，以及用户选择的“整体跟随原生”或固定模型/强度；已有明确选择不重复询问。
-- 权限采用下方各端点的无头默认，并告知用户可调整；已有 `defaults.modes` 选择保留。不额外逐家询问权限菜单。
-- 一个端点时直接作为新配置的默认端点；多个端点时在这份摘要中选默认，保留已有有效默认值。
-- 默认提议给**当前正在使用的宿主**安装 paidan skill，纳入同一次确认；其他宿主按需添加。当前宿主不明确时再询问。
-
-安装时展示已查询到的菜单和当前组合，再让用户选择跟随或固定；无需派真实任务验证。目录缺失或查询失败时说明范围与原因，可以保留跟随、补配置或跳过验证，不伪造完整可用名单。用户已有明确授权的项不重复确认。安装 skill 的目标须出现在用户确认过的摘要中，不能因为目录存在就给所有宿主安装。
-
-**选了 ZCode 时，先解释下方专项要求；涉及原生配置修改的计划必须明确列出，并取得用户授权后执行。** 可以放在同一份摘要中一起确认，但不能用“安装 paidan”的笼统授权代替。
-
-### 5. 保存配置，做基础检查，结束安装
-
-备份已有配置一次，按用户选择合并，保留无关键值。用 JSON 序列化和无 BOM 的 UTF-8；路径写实际绝对路径，使用正斜杠或转义后的反斜杠，不把 `node`、参数或包裹路径的引号写进 bin。
-
-例如下面只示意结构，必须替换路径：
-
-```json
-{
-  "endpoints": {
-    "enabled": ["kimi-code"],
-    "overrides": {
-      "kimi-code": { "bin": "<所选kimi.exe的绝对路径>" }
-    }
-  },
-  "defaults": {
-    "endpoint": "kimi-code",
-    "models": {},
-    "efforts": {}
-  }
-}
+```sh
+paidan setup --endpoint zcode --endpoint omp
 ```
 
-默认端点必须已启用。“跟随原生”用省略对应模型/强度项表示，不填 null 或空字符串；用户选择从固定改回跟随时才清除旧覆盖。保留 dataDir、ttlDays、超时和其他端点配置。不要再运行 init，它可能替换刚保存的选择。
+setup 是不交互的安装工具，返回所有已知入口候选、版本、当前组合、真实菜单、宿主 skill 位置和可编辑的 choices 模板。不扫描未选端点，不启动任务、不做 probe，也不写 paidan 配置或模型缓存。
 
-用 doctor 的 `hosts[].source` / `target` 定位用户确认的宿主 skill 变体；旧版可从包内 `skills/hosts.json` 推导。自定义宿主目录需先确认实际目标，检查目标及所选 skills 目录内的父级是否为链接/junction；有链接时先核对真实目标，不直接跟随复制。目标不存在才创建，内容相同则不写。现有内容能确认是未修改的旧包副本时，备份成功后更新；存在用户定制或归属未知时先保留、展示非敏感差异，让用户选择保留、合并或替换。“给宿主安装 skill”不等于同意丢弃自定义内容，备份也不能代替这一选择。写入前重新比较，期间文件变化则停止该项；校验成功后按下方最小本机记录更新该宿主条目。无需运行 init，也不为相同文件或已授权的更新重复询问。
+- 唯一有效入口：简短展示并采用。已有明确固定的入口继续沿用。
+- 多份安装：一次展示完整路径、版本与来源，让用户选；不因版本较新或更新时间较近就替用户决定。用 `setup --endpoint zcode --bin "<已选完整路径>"` 查询该入口的模型。
+- 找遍已知位置仍没有：先看返回的 checked/notes。agent 可只读检查快捷方式、自定义目录，或请用户提供安装目录/桌面程序位置，再用 `setup --endpoint zcode --location "<目录或文件>"` 交回程序核验。location 可重复；它是线索，不代替多候选选择。找不到可暂缓，其余继续。
+- 版本漂移只是兼容性提醒。安装不因 drift 触发 probe，查询失败也不要求用真实模型测试来补证。
+- 已选入口出现 `version_error` 时，按启动失败、退出码或超时检查运行环境；保存会返回 `SETUP_VERSION_FAILED`，不要让用户反复选择同一路径。
 
-保存后**集中检查一次所选端点**，不对每个端点反复运行全量 doctor。修复所选配置的结构/语义错误，检查入口是否存在、版本命令是否成功。版本未在已验证集合中的 `drift` 是兼容性提醒，不自动变成首次安装必须跑探针的要求。
+ZCode 还查询 Windows 安装记录与快捷方式，不假定在 C 盘；安装目录、CLI 和用户配置目录分别识别，不复制 CLI 单文件。DSH 检查原生 home、npm 布局及实际 npm 缓存中的对应包；不执行 npx 下载，缓存失效后重新定位并让用户确认。
 
-收尾由安装 agent 根据实际结果自行组织语言，不要求固定话术或格式。**默认不派合成任务、不生成 ok.txt、不要求真实调用成功才算配置完成。** 用户的第一次真实任务可以承担实际调用验证。
+需要识别项目配置时加 `--cwd "<实际任务目录>"`，后续预览与应用用同一目录。原生查询可能更新端点自己的缓存，但 paidan 不接管认证、额度和登录。
+
+### 3. 按用户意图展开组合，不塞推荐套餐
+
+直接使用上一步 setup 返回的菜单，不另跑 models。用户修改原生设置后才定向重新查询。先展示所选端点的当前连接、模型显示名称、精确 ID 和强度。用户可以直接说哪些要改，也可以要求逐个选择。用户已经说清组合时直接记录，不再追问“是否固定”“固定哪些”。
+
+默认沿用当前原生设置，已有 paidan 固定选择保留。要调整时先确定连接，再展示该连接的完整模型候选及逐模型强度；单一连接展示后沿用。菜单用“显示名称｜精确 ID｜强度”，不把模型与某个强度捆成几套预设。多条连接才问 provider；不把账号类型按厂商名称猜出来。
+
+支持自然语言和直接输入 ID；能唯一对应显示名称或精确 ID 就采用，存在歧义才让用户选。不要取“最接近”的模型，也不要把选项之外的选择全部推给 Other。看不到完整目录或强度未知时说明范围，允许保留跟随、暂缓或先在原生工具中配置。
+
+ZCode 已有启用 API 时直接选，不重复要求创建 Key；确实缺少时才展开下方接入准备。DSH 由原生设置管理，不展示假的固定选项。没额度、未登录、跳过验证都不等于移除端点。
+
+### 4. 一份简短摘要，交给 setup 保存
+
+将 setup 返回的 choices 模板保存为临时 JSON，填写用户的选择。这是给程序的输入，不是要求用户填写 JSON。它只包含端点名称、入口路径、选择与宿主名称，没有凭据或配置摘要：
+
+- `endpoints.<名称>.locations`：可选的绝对目录/文件线索数组，适合 agent 补充查找；最终由程序保存核验后的精确入口。
+- `endpoints.<名称>.bin`：选中的完整入口；多版本时必须填写。唯一候选可由程序采用并固定。
+- `native: true`：整体跟随原生。固定时使用 `model`（精确 ID 或目录中唯一显示名称）、`effort`；省略项保留已有选择，显式 null 表示该项跟随原生。
+- ZCode 固定组合使用 `provider`、`model`、`effort`。程序在 ZCode 原生目录生成仅含所选 provider 的专用文件，保留其 providerModelRules 和 manualProviderModelRules；原文件与桌面默认值不变。
+- DSH 要调整原生默认时使用 `native_settings: {"provider":"已选标识","model":"已选模型","effort":"用户指定档位"}`。这修改 DSH 原生 settings.yaml，也影响其他原生会话；在摘要中说明。程序仅处理可识别的普通块式三个字段，保留其余内容和注释。复杂 YAML 会拒绝写入，改用 DSH 原生设置功能；不让 agent 手改 YAML。菜单与强度不完整时明确未验证，不猜选项。
+- `mode`：可选权限默认；省略保留，null 恢复端点默认，不额外询问未要求调整的权限。
+- `enabled: false`：只禁用这个端点，保留原有路径与组合；该项不混填其他字段。
+- `default_endpoint`：已有默认保留，多个端点且尚无默认时让用户选；单端点自动作为新默认。明确传 null 可取消默认。
+- `hosts`：可选，名称取自 setup 返回的 hosts。当前宿主就是正在帮助用户安装并将负责发单的 agent；宿主不明确时才询问。安装执行端点不自动安装它的宿主 skill；只补装 skill 可使用 `endpoints: {}`。已有不同 skill 会保留并返回冲突；用户看过差异并同意替换后，该宿主可写成 `{"name":"codex","replace":true}`。
+
+```sh
+paidan setup --choices "<选择文件.json>"
+```
+
+把返回的 decisions/files 整理成简短中文摘要：端点与组合、默认端点、宿主 skill、将创建或备份更新的文件。ZCode 专用文件可能包含所选 API Key 的本地副本，须在这次摘要中明确告知并取得授权；不展示 Key。权限沿用下表默认并告知可调整，已有权限选择保留，不逐家再问权限菜单。已有明确授权不重复询问。
+
+用户确认后，agent 自动带入返回的 confirmation：
+
+```sh
+paidan setup --choices "<选择文件.json>" --apply --expect "<上一步返回的confirmation>"
+```
+
+confirmation 是内部校验值，不让用户抄写。程序重新检查选择和目标，变化时不写入；复看变化是否影响用户选择，不盲目刷新后强行重试。程序负责合并配置、固定入口、自动保存选择摘要、执行已选原生改动、安装 skill 和合并安装记录；不要再翻 dist 猜格式、手写复制脚本或运行 init。
+
+### 5. 说明结果，结束安装
+
+根据 applied/written/receipt 和端点查询说明收尾。install-receipt.json 由程序记录实际写入的路径、来源、版本、文件校验值和备份，agent 不另写账本。保存已完成结构与选择校验，不额外逐端点重复扫描；有具体未解决问题再用 `paidan doctor --endpoint <名称>` 定向检查。默认不派任务试跑，首次真实任务可承担实际调用验证。发生部分写入失败时说明哪些已完成及备份位置，保留原生文件，不擅自回滚后来修改。
+
+对用户给出一条有效示例即可：`paidan run --endpoint <名称> --task "任务描述"`。不把原生权限、登录或未知能力说成已经实测通过。
 
 ## 无头权限默认：与模型默认分开
 
@@ -126,13 +100,13 @@ paidan --version
 | dsh | `--profile headless`，默认沿用原生 sandbox/settings 与调用方的 `DSH_PERMISSION_MODE`，无交互审批通道。可通过环境变量请求 `read-only`；不提供 unattended，不给任务参数硬塞不存在的权限 flag。 |
 | agy | `--mode accept-edits`，配合原生 allow 规则。本机已验证的 Windows 配置需要 `read_file(*)`、`command(*)`；缺少时把具体原生改动纳入配置说明，经用户同意再处理，不由运行器偷偷放开。已标为 soft 的能力仍保持该标记。 |
 
-直接采用默认即可，不要求用户先学会这些参数。需要调整时，本次调用使用 `--mode read-only|workspace-write|unattended`；持久默认使用 `defaults.modes.<endpoint>`，例如 `"modes": { "codex": "read-only" }`。优先级为本次 `--mode` → `defaults.modes` → 端点默认。端点不支持用户所选档位时直接报告，不回退或升权。任务本身明确要求只读时，宿主应显式选择只读；默认权限不是扩大任务范围的授权。
+直接采用默认即可，不要求用户先学会这些参数。需要调整时，本次调用使用 `--mode read-only|workspace-write|unattended`；持久调整使用 setup choices 中的 `endpoints.<endpoint>.mode`，由程序写入 `defaults.modes`。优先级为本次 `--mode` → `defaults.modes` → 端点默认。端点不支持用户所选档位时直接报告，不回退或升权。任务本身明确要求只读时，宿主应显式选择只读；默认权限不是扩大任务范围的授权。
 
 ## 各端点的配置方式
 
 下表是端点分支，不是要求用户完成八套流程。只处理本次选中的端点；命令均使用已选入口及同一原生配置环境。
 
-| 端点 | 连接、模型、强度的处理顺序 | 可写到 paidan 的覆盖 |
+| 端点 | 连接、模型、强度的处理顺序 | setup 保存的结果及原生限制 |
 |---|---|---|
 | kimi-code | 按真实 provider 映射区分 OAuth/API 和协议，不根据别名前缀猜。模型菜单采用 overrides 后的元数据。原始 provider list JSON 含密钥，只展示 paidan 白名单输出。 | 完整别名写 `defaults.models.kimi-code`；仅 `effort_selectable=true` 的模型可固定强度，再按该模型 `effort_options` 选择。其他协议跟随原生强度。 |
 | zcode | 先检查 CLI 配套资源，再区分桌面连接、CLI 配置和新版 provider rules。选择连接/provider 后才处理模型和推理档位；详见下一节。 | 仅 print：跟随原生，或把已确认专用 JSON 的绝对路径写入 endpoints.overrides.zcode.provider_config；不写模型/强度参数覆盖。 |
@@ -140,21 +114,21 @@ paidan --version
 | claude-code | 展示原生模型、已有固定值、别名→模型映射和逐模型强度。自定义地址/云路由与模型是不同设置；来源冲突标为未知，不凭登录状态推断当前计费连接。 | 保存完整模型 ID 或用户选择的动态别名、原生 `--effort`，同时保存本次确认的 `defaults.selection_contexts.claude-code`。连接/映射等变化后重新选择。 |
 | opencode | paidan 查询所选 CLI 在当前任务目录解析的配置、原生认证类型记录和 provider/model → variants。未显式配置的默认模型保持未知，不拿目录第一项代替；认证记录不证明额度。 | 固定完整 provider/model 与该模型声明的 variant，并保存同次查询的 selection_context。换连接或固定组合失效时让用户重新选择；目录支持的自定义 variant 原样传递。 |
 | omp | 继承当前 OMP_PROFILE；展示原生认证元数据、完整 selector 与逐模型 thinking。主模型读 modelRoles.default，模糊名称/角色引用/自动默认保持未知；不改 smol/slow/plan。 | 固定完整 selector、thinking 及同次 selection_context；auto 表示原生自动强度。多个原生账号仍由 OMP 管理，固定模型不等于固定账号。发现原生 fallback/角色切换时告知用户，需要严格固定才询问是否调整原生设置。 |
-| dsh | 展示 headless profile 的 settings.yaml 中明确配置的 provider/model 与当前 reasoningEffort；原生插件内置目录、复杂 YAML 和 profile 覆盖可能不在菜单范围。缺项不代表不可用。 | 跟随原生；要换组合时在原生模型设置选择，或经用户同意最小修改 agent-default-model 的 provider/model/reasoningEffort。paidan 不写模型/强度覆盖，不提供假的固定选项，也不直接输出可能含凭据的 dump-config。 |
+| dsh | 展示 headless profile 的 settings.yaml 中明确配置的 provider/model 与当前 reasoningEffort；原生插件内置目录、复杂 YAML 和 profile 覆盖可能不在菜单范围。缺项不代表不可用。 | 跟随原生；要换组合时用 setup 的 native_settings 明确选择，由程序最小修改 agent-default-model；不支持的 YAML 改用原生设置功能。paidan 不写模型/强度覆盖，不提供假的固定选项，也不直接输出可能含凭据的 dump-config。 |
 | agy | 展示原生模型 ID、显示名称与 ID 自带的强度档位，并将当前显示名称与目录匹配。原生账号类型未知时直说，不推断 Google OAuth。 | 固定完整模型 ID 与 selection_context；带 high/medium/low 后缀时该档位已随模型选定，不额外询问或叠加 --effort。登录态变化未必能由配置摘要发现，调用失败后仍按实际错误检查。 |
 
-修改任何原生设置前，列清目标文件/原生命令、拟变更字段和影响范围，取得用户对这项改动的授权；保留无关设置。登录通过原生流程完成，不要求用户把 key/token 发进对话，不让 paidan 接管凭据。无须修改时直接沿用。
+原生改动通过 setup 预览目标、字段和影响后由程序完成；尚未支持的原生操作使用该工具自己的设置功能，不让 agent 自行拼 JSON/YAML 或复制配置。登录通过原生流程完成，不要求用户把 key/token 发进对话，不让 paidan 接管凭据。无须修改时直接沿用。
 
 
-配置摘要绑定适用于 Codex、Claude Code、OpenCode、OMP、AGY 的固定选择：安装 agent 将同次 models 查询的 selection_context 写入 defaults.selection_contexts.<端点>。这是内部配置字段，不让用户抄写摘要、不增加一道确认；与模型/强度选择合并处理。Kimi 每次按当前模型/协议能力校验；DSH 跟随原生；ZCode 保留专用原生 JSON 的既定流程。
+配置摘要绑定适用于 Codex、Claude Code、OpenCode、OMP、AGY 的固定选择：setup 自动将同次调查的 selection_context 写入 defaults.selection_contexts.<端点>，安装 agent 不传入或手写该字段。这是内部配置字段，不让用户抄写摘要、不增加一道确认；与模型/强度选择合并处理。Kimi 每次按当前模型/协议能力校验；DSH 跟随原生；ZCode 保留专用原生 JSON 的既定流程。
 
 ## Claude Code：安装、固定选择与配置变化
 
 选定 CLI 后，使用它自己的登录/API 配置或 CC Switch 接入；paidan 不保存凭据，也不重写原生设置。`claude auth status` 显示已有登录，不代表当前 `ANTHROPIC_BASE_URL` 网关一定使用该订阅或已经可用。
 
-安装 agent 查询 `paidan models --endpoint claude-code`，一并展示 `native_defaults`、`configured_defaults`、候选的 `source`、`resolved_model` 和 `effort_options`，让用户选择跟随或固定。`opus`、`sonnet`、`haiku`、`fable` 是动态选择器，可能都被映射到同一模型；固定某个具体模型时优先选查询到的完整 ID。静态别名、原生配置候选均不是账号可调用清单；自定义网关能力未知时明确说未知，不猜强度范围。
+安装使用 setup 的 Claude Code 结果，一并展示 `native_defaults`、`configured_defaults`、候选的 `source`、`resolved_model` 和 `effort_options`，让用户选择跟随或固定。`opus`、`sonnet`、`haiku`、`fable` 是动态选择器，可能都被映射到同一模型；固定某个具体模型时优先选查询到的完整 ID。静态别名、原生配置候选均不是账号可调用清单；自定义网关能力未知时明确说未知，不猜强度范围。
 
-选择跟随：省略 `defaults.models.claude-code` 与 `defaults.efforts.claude-code`。选择固定：保存用户选中的值，并把同次查询的 `selection_context` 保存到 `defaults.selection_contexts.claude-code`。摘要覆盖用户级原生模型/强度、别名映射、API 地址/云路由、相关环境、配置目录与 CLI 入口；不保存或比较密钥内容，换 key 本身不等于换模型通路。已有固定值但缺摘要时，也需要用户确认一次，不自动删除或补写。
+在 choices 中选择 native:true 或明确的 model/effort；配置和 selection_context 均由 setup 保存。摘要覆盖用户级原生模型/强度、别名映射、API 地址/云路由、相关环境、配置目录与 CLI 入口；不保存或比较密钥内容，换 key 本身不等于换模型通路。已有固定值但缺摘要时，也需要用户确认一次，不自动删除或补写。
 
 原生配置变化后，固定选择会在派发前返回 `SELECTION_RECONFIRM_REQUIRED`；提交后到启动前再查一次，防止使用过期选择。宿主重新展示当前候选，让用户选择：本次 `--native` 跟随、用 `--model ... --effort ... --selection-context ...` 本次改选、更新持久默认、改用另一个已启用端点，或暂停。仅查询不会更新确认摘要，只有用户选定后才写回。原任务尚未结束时不重派；涉及新连接时不默认复用旧会话。
 
@@ -168,7 +142,7 @@ paidan --version
 
 OAuth/API 是认证方式，与协议是两回事。Kimi 登录订阅和 Kimi API 接入都可以使用 `kimi` 协议；不要把 API Key 接入自动当成 OpenAI 协议。只有 provider 实际声明了其他厂商/协议时，才按该协议的能力处理，无需用户重复选择已明确的协议。
 
-安装时按 `paidan models --endpoint kimi-code` 展示连接的 `auth_type` / `protocol`、完整模型别名、实际模型名 `resolved_model`、逐模型强度与当前默认。用户选择整体跟随时不写模型/强度覆盖；固定时保存查询到的完整别名，原生 `-m` 会选中该别名对应的 provider，OAuth 与 API 可以分别选择，无需专用配置副本。别名指向用户原生定义；该定义本身被编辑后，以新定义为准，不把别名当成账号或计费身份的永久锁定。
+安装时按 setup 的 Kimi Code 结果展示连接的 `auth_type` / `protocol`、完整模型别名、实际模型名 `resolved_model`、逐模型强度与当前默认。用户选择整体跟随时不写模型/强度覆盖；固定时保存查询到的完整别名，原生 `-m` 会选中该别名对应的 provider，OAuth 与 API 可以分别选择，无需专用配置副本。别名指向用户原生定义；该定义本身被编辑后，以新定义为准，不把别名当成账号或计费身份的永久锁定。
 
 **强度有协议差异。** 0.43.1 本机请求捕获中，`KIMI_MODEL_THINKING_EFFORT=high` 在 kimi 协议生效，但 OpenAI/Anthropic 协议仍发送原生 low。因此仅在 `effort_selectable=true` 且档位被该模型声明时保存 `defaults.efforts.kimi-code`；其他协议可固定模型，强度留给原生设置。`thinking_enabled=false` 且模型不是强制思考模型时，也不能声称显式强度已生效。不要为固定强度自行修改原生 thinking 设置。
 
@@ -184,7 +158,7 @@ ZCode **只走 print，不启动 app-server**。桌面 3.12.3 / CLI 0.16.5 的�
 
 ### 接入前准备
 
-在安装/接入 paidan 前，先指导用户在 ZCode 原生「模型设置」中配置并启用可用的 API Key provider。使用 Coding Plan 时，选择对应的 Coding Plan API Key 接入，按[官方配置指南](https://zcode.z.ai/cn/docs/configuration)准备 Key；区分普通按量 API、Coding Plan API Key 和桌面账号授权。用户在原生界面填写 Key，不要求发进对话。
+仅在 setup 没找到启用 API provider 时，引导用户在 ZCode 原生「模型设置」中配置并启用可用的 API Key provider，再重新查询。已有接入直接沿用。使用 Coding Plan 时，选择对应的 Coding Plan API Key 接入，按[官方配置指南](https://zcode.z.ai/cn/docs/configuration)准备 Key；区分普通按量 API、Coding Plan API Key 和桌面账号授权。用户在原生界面填写 Key，不要求发进对话。
 
 选择实际 CLI 入口 `<安装目录>/resources/glm/zcode.cjs`；多版本时让用户选，不选桌面 exe，不创建 PATH shim。保留完整安装中的 `resources/config/provider/zcode-builtin.json`：paidan 从所选入口查找此配套资源，仅为子进程补入 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`，已有显式值不覆盖。`doctor.runtime_resources` 检查资源，版本命令不能证明认证可用。
 
@@ -192,19 +166,14 @@ ZCode **只走 print，不启动 app-server**。桌面 3.12.3 / CLI 0.16.5 的�
 
 ### 跟随原生，或使用专用 JSON
 
-先运行 `paidan models --endpoint zcode --native`，按实际 provider 名称、标识和接入类型展示模型及 `effort_options`。这只读取本地个人规则与所选安装的内置模板，不启动 ZCode、不调用模型。仅列已配置且已启用的 API provider，不替用户启用禁用项。运行时缓存和账号权限可能与文件候选不同；未知信息应在原生界面核对。
+安装直接使用 setup 返回的 ZCode 原生候选；已完成安装后单独查看原始候选，可用 `paidan models --endpoint zcode --native`（绕过 paidan 专用文件读取原始 provider rules）。按实际 provider 名称、标识和接入类型展示模型及 `effort_options`。这只读取本地个人规则与所选安装的内置模板，不启动 ZCode、不调用模型。仅列已配置且已启用的 API provider，不替用户启用禁用项。运行时缓存和账号权限可能与文件候选不同；未知信息应在原生界面核对。
 
 - **跟随原生**：不设置 `endpoints.overrides.zcode.provider_config`，也不写 `defaults.models.zcode` / `defaults.efforts.zcode`。已有 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 会继续生效；原生选择不等于 OAuth，也不保证是文件第一项。
-- **专用配置**：用户选 provider → 模型 → 强度。在安装确认中说明目标路径、选定组合，以及文件包含所选 API 连接的副本，可能包括 API Key。用户同意后，由安装 agent 在 ZCode 原生目录（例如 `~/.zcode/paidan/`）创建 JSON。原 `v2/provider_config.json`、`cli/config.json` 和桌面默认值保持不变。
+- **专用配置**：用户选 provider → 模型 → 强度。在安装确认中说明目标路径、选定组合，以及文件包含所选 API 连接的副本，可能包括 API Key。用户同意后，由 setup 在 ZCode 原生目录（例如 `~/.zcode/paidan/`）创建 JSON。原 `v2/provider_config.json`、`cli/config.json` 和桌面默认值保持不变。
 
-专用 JSON 的创建步骤：
+专用 JSON 由上面的 setup 流程创建。选择文件中填写所选 ZCode 的 bin、provider、model、effort；预览会列出原生目录内的目标路径和凭据副本说明。用户确认后程序只提取选中的启用 API provider，保留它的两类模型规则并设置默认组合。无需 agent 研究 schema 或复制整份原生文件。
 
-1. 从原生 `v2/provider_config.json` 按精确 providerId 取唯一、启用的 API provider，保留它的完整规则（含 templateId、连接字段）；仅复制归属于它的 `providerModelRules`、`manualProviderModelRules`。不复制其他 provider 或 credentials.json。
-2. 使用原生 `schemaVersion: 1`。`config.providerConfigRules.providerRules` 只包含所选 provider；`config.modelConfigRules` 包含上述两个规则数组；`config.defaultModelSelection` 保存 `providerId`、`modelId`、`options.reasoningLevel`。可将 `config.providerOrder` 设为所选 ID 的单元素数组。值来自用户选择，不硬编码模型/强度推荐表。
-3. 文件和备份只留在 ZCode 原生目录；先检查目标及父目录链接不会把凭据导向目录外。新文件独占创建；已有文件先比较，保留用户定制，确需更新时说明字段并按用户确认的范围操作。不把秘密值、文件全文放进对话、paidan 配置、仓库或额外日志。
-4. 把专用 JSON 的**绝对路径**写入 `endpoints.overrides.zcode.provider_config`，保留 bin 和其他配置。运行时 paidan 只传路径，不复制或更新凭据。记录文件路径、所选组合和归属，方便更新/卸载；原生 API Key 更换后，这份副本也需要用户授权同步。
-
-两种方式都不使用 paidan 的 `--model` / `--effort` 覆盖 ZCode；print 不支持这些覆盖。此流程由安装 agent 完成，不依赖 init 自动创建凭据文件。
+setup 不覆盖原始 v2/provider_config.json；专用文件和备份留在原生目录，paidan 配置只保存路径。已有不同专用文件会在摘要中显示备份更新；先核对用户是否同意该目标的重建。原生 Key 更换后需要用户授权重新同步该专用文件。运行时仍只传路径，不复制或更新凭据。
 
 ### 实际调用报告与失败处理
 
@@ -212,19 +181,19 @@ ZCode **只走 print，不启动 app-server**。桌面 3.12.3 / CLI 0.16.5 的�
 
 专用 JSON 指定的是原生默认选择，不是绝对锁定。ZCode 自己可能另选模型；`matches_expected: false` 时明确告知用户，不能把任务完成说成固定组合验证成功。实际证据缺失时也不能声称已固定成功。
 
-文件失效、认证/额度或任务失败时，**不自动切回原生，不自动重派**。报告原因、已有产物及可能执行过的操作，询问用户是否改用原生；同意后可为一次调用加 `paidan run --endpoint zcode --native ...`。这只绕过本次专用路径和模型/强度默认，不修改已保存配置。续接可能恢复旧会话选择，是否续接或新建取决于任务状态，并核对本轮实际记录。长期改回跟随时，只移除该端点专用路径覆盖，并处理用户已有的环境覆盖。
+文件失效、认证/额度或任务失败时，**不自动切回原生，不自动重派**。报告原因、已有产物及可能执行过的操作，询问用户是否改用原生；同意后可为一次调用加 `paidan run --endpoint zcode --native ...`。这只绕过本次专用路径和模型/强度默认，不修改已保存配置。续接可能恢复旧会话选择，是否续接或新建取决于任务状态，并核对本轮实际记录。长期改回跟随时提交该端点 native:true，由 setup 移除对应覆盖；已有环境覆盖仍需明确处理。
 
 ### 旧版本迁移
 
 0.1.8 的 app-server 适配已移除。旧 `defaults.models.zcode` / `defaults.efforts.zcode` 需经用户确认转成专用 JSON，再移除这些已不支持的 paidan 覆盖；不静默删掉后改用另一连接。旧 `zapi_` 会话不能直接交给 print 续接，保留旧结果并新建 print 会话。
 
-当前版本直接读取 `v2/provider_config.json`，不需要复制到 cli，更不能拿它覆盖 `cli/config.json`。只有确认仍使用旧 provider 注册表的旧版本，才考虑用户批准后的最小合并；历史合并办法不是通用 OAuth 修复方案。
+当前版本直接读取 `v2/provider_config.json`，不需要复制到 cli，更不能拿它覆盖 `cli/config.json`。旧注册表不在当前程序写入支持范围，使用原生设置或兼容版本处理，不让 agent 搬运旧配置；历史合并办法不是通用 OAuth 修复方案。
 
 ## 仅在需要时展开
 
 ### 固定模型、强度或处理连接变化
 
-安装时、用户要求调整默认值，或出现额度、认证、模型/强度错误时查询：
+安装及持久调整使用 setup；已配置端点发生额度、认证、模型/强度错误时，可单独查询：
 
 ```sh
 paidan models --endpoint <name>
@@ -234,9 +203,9 @@ paidan models --endpoint <name>
 
 Codex 使用所选 CLI 的 `debug models` 可见目录，强度按该模型的 `effort_options` 展示，包括原生声明的 max/ultra，不向每个模型套用同一份通用列表。原生查询可能使用自己的缓存或内置目录，不证明认证或额度；旧 CLI 不支持查询时仅保留明确标注的配置候选。第三方连接只有已配置模型、且强度未知时，向用户说明需核对该服务的原生配置/文档，不猜测。OpenCode 的 `effort_accepts_custom` 允许模型声明的自定义 variant。DSH 和 ZCode 不支持 paidan 模型/强度参数覆盖；ZCode 的专用选择保存在原生 JSON，paidan 只保存其路径。
 
-Codex 固定模型或强度时，将该次 `models` 返回的 `selection_context` 原样保存到 `defaults.selection_contexts.codex`，与用户批准的模型/强度一起写入。这个不含凭据的摘要用于检查原生路由配置、配置目录、入口、认证方式标记及相关环境变化；不是对账号权限或实际计费的证明。原生配置有变化，或旧固定配置还没有摘要时，派发返回 `SELECTION_RECONFIRM_REQUIRED`，不会把旧模型交给新 provider；提交后、启动前再检查一次。不得为了消除错误自行更新摘要。
+Codex 持久固定选择由 setup 同时保存模型、强度与当前配置摘要；agent 不手动补摘要。这个不含凭据的摘要用于检查原生路由配置、配置目录、入口、认证方式标记及相关环境变化；不是对账号权限或实际计费的证明。原生配置有变化，或旧固定配置还没有摘要时，派发返回 `SELECTION_RECONFIRM_REQUIRED`，不会把旧模型交给新 provider；提交后、启动前再检查一次。不得为了消除错误自行更新摘要。
 
-用户选择本次跟随后，各端点均可用 `run --native` 同时绕过已保存的模型和强度；ZCode 还绕过专用 provider JSON。该参数不改变权限，也不改已保存配置。用户选择本次固定 Codex 时，可以同时传 `--model <模型> --effort <强度> --selection-context <本次查询值>`；仅覆盖模型仍会继承旧强度，所以应核对完整组合。长期改回跟随只移除用户选中的覆盖及其上下文摘要，保留其他配置。
+用户选择本次跟随后，各端点均可用 `run --native` 同时绕过已保存的模型和强度；ZCode 还绕过专用 provider JSON。该参数不改变权限，也不改已保存配置。用户选择本次固定 Codex 时，可以同时传 `--model <模型> --effort <强度> --selection-context <本次查询值>`；仅覆盖模型仍会继承旧强度，所以应核对完整组合。长期改回跟随使用 setup 的 native:true，程序只移除用户选中的覆盖及其摘要，保留其他配置。
 
 固定值放在 `defaults.models.<endpoint>`、`defaults.efforts.<endpoint>`，不使用全局 model/effort。所有端点失败时先读具体错误、拒绝证据、终态和已有产物；普通任务、路径、网络、权限错误不直接归因为模型问题。`get` 的 `recovery` 提供提交时的原生配置快照和固定值用于对比；它不是自动诊断结论。证据指向额度、认证、模型/强度或用户切换配置时，只重查相关端点的当前通路，列清端点、连接、模型、强度、来源和未验证项，让用户选择跟随、另选组合、修复原生设置、换已启用端点或暂停。已固定配置不自动删除，不自行更新确认摘要、换计费路径、升权或重派。用户选择后核对旧任务已结束及部分改动，再按本次覆盖或持久更新执行；不默认跨连接续接旧会话。
 
@@ -245,7 +214,7 @@ Codex 固定模型或强度时，将该次 `models` 返回的 `selection_context
 - 本次没选的端点不处理；已有配置不动。
 - **跳过验证**：保留已保存的路径、启用状态和默认值，只说明尚未实际调用。
 - **暂时未登录或没额度**：保留配置，列为待处理；可以改天直接使用。
-- **用户明确不要/禁用该端点**：才移出 enabled；如果它是默认端点，再让用户选替代或省略默认。
+- **用户明确不要/禁用该端点**：通过 setup 的 enabled:false 处理；如果它是默认端点，再选 default_endpoint 替代值或 null。
 - 所有端点都尚未配置时，enabled 可为空、省略 defaults.endpoint，如实说明 paidan 已安装但尚未接入端点。
 
 ### 用户明确需要时才试跑
@@ -258,24 +227,24 @@ Codex 固定模型或强度时，将该次 `models` 返回的 `selection_context
 
 这三个流程仍由能执行本机操作的 agent 完成，不重新运行 init，不自动更新其他软件。维护前先确认当前 paidan 入口、包版本、`config_path`、实际数据目录和已安装 skill 的位置；不能只按默认目录猜。检查所有非终态任务（pending/running/attention）：有任务时先等待完成，或按用户明确的取消选择处理并确认相关进程已退出，再更新/卸载。不要只看默认返回的前 50 条记录；维护调查直接读取已确认数据目录下的 run 状态，避免 `list` 的 TTL 清理副作用。
 
-### 安装时留下最小本机记录
+### 程序维护安装记录
 
-安装 agent 在 `config_path` 同目录的 `install-receipt.json` 中合并记录：paidan 版本；本次实际安装的 skill 的宿主、绝对目标路径、安装后 SHA-256、原文件备份位置（若有）；本次经授权修改的原生文件、字段名、修改后文件 SHA-256、原生目录内的备份位置。只记录已成功完成的动作，不覆盖其他宿主记录；已有记录无法解析时先保留并报告，不重建成空记录。
+setup 与 init 共用写入器，在 config_path 同目录自动合并 install-receipt.json。记录实际成功写入的文件、所属端点/宿主、校验值、版本与备份；配置项附带选中入口的来源和 CLI 版本。局部维护保留其他记录，部分失败只记录已完成项目。记录损坏时保留并报告，不重建空记录；agent 不手写或补写记录。
 
-记录由安装/维护 agent 管理，不是 CLI 自动生成，也不是删除授权。不得放入密钥、token、原生配置全文或凭据字段值；原生备份留在原生目录。记录缺失的旧安装仍可维护：比较当前文件和对应版本的包内容，无法确认归属或用户修改时保留并询问，不要求用户重装。记录中的路径还需与实际安装范围核对；符号链接/junction 不当作普通文件递归处理。
+记录不含凭据或原生配置全文，也不是删除授权。旧安装没有记录时仍可通过包内容比较归属；归属不明或后来被用户修改的文件先保留。程序按文件备份与写入，不承诺跨文件事务；若进程被强制终止，按实际文件及备份重新检查，不能凭缺失回执推断没有写入。
 
 ### 1. 更新 paidan
 
 1. 核对当前安装来源与用户要更新的那一份程序。保存现有配置和旧版本信息；备份成功后才处理必要的配置迁移。配置没有迁移需求时不重写。
 2. npm 全局安装使用 `npm install -g paidan@latest`（PowerShell 可用 `npm.cmd`），更新后核对实际入口与版本。源码安装按该 checkout 更新并构建，保留未提交改动；不能用 npm 更新冒充源码已经更新。
-3. 使用新包内的 skill，只同步此前由用户选择安装过的宿主，不因为新发现目录而扩散安装。目标不存在时先说明；目标与已记录 hash/旧版包内容一致时可更新，先备份再替换；目标有用户改动或归属未知时展示非敏感差异，由用户选保留、合并或替换。不得用 init 的覆盖行为绕过比较。
+3. 使用新包内的 skill，只同步此前由用户选择安装过的宿主，不因为新发现目录而扩散安装。目标不存在时先说明；用 setup choices 的 endpoints:{} 与所选 hosts 预览更新，由程序比较、备份和写入。已有差异时先核对记录/旧版包及非敏感差异；用户确认替换后用 replace:true，不手工覆盖。不得用 init 的覆盖行为绕过比较。
 4. 现有端点、路径、连接、模型、强度、`defaults.modes`、dataDir 和 ttlDays 均保留。新版的权限默认若与旧版不同，要说明影响并保留原选择，不能借升级静默放宽权限。只做必要的字段迁移，备份失败或期间文件被其他进程改动则停止该项写入，重新读取比较。
-5. 更新成功的 skill hash/版本写回本机记录；失败项保留旧记录。对已启用端点集中做基础检查，默认不派真实任务。需要回退时先核对旧版本是否支持当前配置，不能不加判断地安装旧包或恢复整份旧配置。
+5. 程序自动更新成功项的安装记录；失败项保留旧记录。对已启用端点集中做基础检查，默认不派真实任务。需要回退时先核对旧版本是否支持当前配置，不能不加判断地安装旧包或恢复整份旧配置。
 
 ### 2. 上游 CLI 更新后适配
 
 1. 只检查用户指出已更新的端点，使用其原生安装/更新方式；确认新的入口、版本和所用原生配置。固定路径不等于锁定版本：原路径被替换就会运行新版，版本目录变更或旧版残留则需要重新定位。
-2. 同一入口仍有效且接口兼容时继续使用。需要更换入口时展示候选，按已有明确选择或用户选择只改 `endpoints.overrides.<name>.bin`，保留其他端点和默认值；不自动选择另一条账号/计费连接。
+2. 同一入口仍有效且接口兼容时继续使用。需要更换入口时展示候选，按已有明确选择或用户选择，把该端点 bin 交给 setup 保存，保留其他端点和默认值；不自动选择另一条账号/计费连接。
 3. 核对该版本的无头参数、审批方式、模型元数据与输出协议。doctor 的 drift 是提醒，版本号相同也不保证桌面捆绑资源未变；ZCode 还需检查配套资源及 provider 布局。项目/组织 deny 规则不能为兼容而偷偷删除。
 4. 若新 CLI 与适配器不兼容，说明具体差异；用户可更新 paidan 到兼容版本、用原生方式回退 CLI，或暂缓该端点。不能修改上游安装文件或靠试遍权限档位来绕过问题。基本检查不要求调用模型；真实验证仅按用户明确需求进行。
 
@@ -301,14 +270,14 @@ Codex 固定模型或强度时，将该次 `models` 返回的 `selection_context
 | zcode / `zcode` | `<ZCode安装目录>/resources/glm/zcode.cjs`。检查 Program Files、`%LOCALAPPDATA%/Programs/ZCode` 和用户自定义位置。服务端安装可能使用 `%USERPROFILE%/.zcode/server/agents/glm/zcode.cjs`。选择 CLI 脚本，不选桌面 exe。 |
 | opencode / `opencode` | 已发现的原生 `opencode.exe`；已记录的 npm 布局是 `<npm-root>/opencode-ai/bin/opencode.exe`。其他包管理器或布局需确认实际入口。 |
 | omp / `omp` | `%LOCALAPPDATA%/omp/omp.exe` 或 `%PI_INSTALL_DIR%/omp.exe`。Bun 包使用需要 Bun 的 TypeScript 入口，当前 paidan 的 bin 覆盖不支持这种启动方式。可选择原生二进制安装或跳过，不把 TS 文件或 bun.exe 填进 bin。 |
-| dsh / `dsh` | `%USERPROFILE%/.dsh/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js`；其他配置目录或包布局需要查实际的 `lib/bin.js`。 |
+| dsh / `dsh` | 原生 DSH_HOME/profile 的对应包、npm 布局，以及实际 npm 缓存下 `_npx/<目录>/node_modules/@deepseek-ai/dsh/lib/bin.js`；程序核对包名和入口，保留完整目录。缓存可能被清理，不自动下载替代。 |
 | agy / `agy` | 安装目录内真正的 CLI `agy.exe`。不假定存在通用默认目录，使用已发现的入口，或请用户提供位置。 |
 
 以上是查找线索，不是完整清单。变量需展开，用户提供的位置优先按其选择核对；POSIX 使用 `type -a` 等命令及原生包管理器布局。CLI 脚本 `.js/.cjs/.mjs` 会由 paidan 自动通过 Node 启动。
 
 ### doctor 字段
 
-`config_path` 是要编辑的文件，尊重 `PAIDAN_HOME`。`endpoints` 是单个命中；`model_selectable`、`permission.presets` 是适配器支持范围。`effort_options_scope` 解释档位列表，`effort_accepts_custom` 标记是否允许原生自定义名称；两者都不能代替逐模型兼容性。`native_defaults` 是部分原生设置快照，`credential_ready: null` 表示认证未验证。`hosts[].source/target` 与 `package_root` 用于定位包内 skill 和安装目标。
+`config_path` 是程序管理的配置文件位置，尊重 `PAIDAN_HOME`；不要求 agent 手工编辑。`endpoints` 是单个命中；`model_selectable`、`permission.presets` 是适配器支持范围。`effort_options_scope` 解释档位列表，`effort_accepts_custom` 标记是否允许原生自定义名称；两者都不能代替逐模型兼容性。`native_defaults` 是部分原生设置快照，`credential_ready: null` 表示认证未验证。`hosts[].source/target` 与 `package_root` 用于定位包内 skill 和安装目标。
 
 `ok: true` 只表示 doctor 执行完成；`spawn_supported` 仅说明启动方式。还要读 `version_error`、`repair_hint`、`issues`。所选端点筛选不会隐藏全局配置诊断和宿主信息，但不执行未选端点的版本/原生状态探测。备份、文件比较和 JSON 检查由 agent 内部完成，无需让用户理解这些字段才能安装。
 
@@ -316,4 +285,4 @@ Codex 固定模型或强度时，将该次 `models` 返回的 `selection_context
 
 源码安装使用 `npm install`、`npm run build`，然后统一用 `node dist/cli.js` 替换本文所有 `paidan` 调用；`npm i -g .` 可选。Git 只在克隆源码时需要。整个过程使用同一份安装。
 
-`paidan init` 保留为可选终端快捷方式，使用首个匹配项，可能显示英文。`init --yes` 会重新选择启用端点、重置模型/强度默认并按范围安装 skill；不要在手工配置后仅为安装 skill 再运行它。
+`paidan init` 是可选终端界面，与 setup 共用发现、配置规划和写入器，可能显示英文。多安装不能自动选择；`init --yes` 追加唯一可确定的端点，保留已有模型、强度、绑定和默认端点。单端点维护或补装 skill 直接使用 setup。

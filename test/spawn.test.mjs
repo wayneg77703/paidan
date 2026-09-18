@@ -8,12 +8,14 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import { test } from 'node:test'
+import { syncBuiltinESMExports } from 'node:module'
 import { resolveBin } from '../dist/endpoints/spawn.js'
 import {
     buildCmdLine,
     finalSpawnArgs,
     needsVerbatimArgs,
     planEndpointSpawn,
+    enumerateEndpointSpawns,
     quoteCmdArg,
 } from '../dist/endpoints/spawn.js'
 
@@ -86,7 +88,7 @@ test('PATH .cmd shim with npm_exe layout resolves to the native binary (npm-exe)
     }
 })
 
-test('npm_entry falls back to process.execPath + entry (npm-entry)', async () => {
+test('npm_entry falls back to process.execPath + entry (npm-entry)', async t => {
     const dir = await tmpDir()
     try {
         await fs.writeFile(nodePath.join(dir, 'fakebin.CMD'), '@echo off\r\n')
@@ -100,6 +102,21 @@ test('npm_entry falls back to process.execPath + entry (npm-entry)', async () =>
         assert.equal(res.plan?.resolved_from, 'npm-entry')
         assert.equal(res.plan?.command, process.execPath)
         assert.deepEqual(res.plan?.prefixArgs, [entry])
+        // A standalone executable must not hide a different npm installation in the same PATH directory.
+        const standalone = nodePath.join(dir, process.platform === 'win32' ? 'fakebin.exe' : 'fakebin')
+        await fs.writeFile(standalone, '// standalone')
+        const all = await enumerateEndpointSpawns(manifest({ npm_entry: '@vendor/pkg/cli.js' }), { env: { PATH: dir, PATHEXT: '.EXE;.CMD' } })
+        assert.deepEqual(new Set(all.map(p => p.endpoint_bin)), new Set(await Promise.all([standalone, entry].map(p => fs.realpath(p)))))
+        const realpath = fs.realpath
+        const transient = t.mock.method(fs.default, 'realpath', async p => {
+            if (p === standalone) throw Object.assign(new Error('candidate disappeared after stat'), { code: 'ENOENT' })
+            return realpath(p)
+        })
+        syncBuiltinESMExports()
+        try {
+            const remaining = await enumerateEndpointSpawns(manifest({ npm_entry: '@vendor/pkg/cli.js' }), { env: { PATH: dir, PATHEXT: '.EXE;.CMD' } })
+            assert.deepEqual(remaining.map(p => p.endpoint_bin), [await realpath(entry)])
+        } finally { transient.mock.restore(); syncBuiltinESMExports() }
     } finally {
         await fs.rm(dir, { recursive: true, force: true })
     }

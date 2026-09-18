@@ -10,7 +10,7 @@ import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import type { EndpointManifest } from './registry.js'
 
-export type SpawnSource = 'config-override' | 'path' | 'npm-exe' | 'npm-entry' | 'known-path' | 'cmd-shim'
+export type SpawnSource = 'config-override' | 'path' | 'npm-exe' | 'npm-entry' | 'known-path' | 'cmd-shim' | 'location-hint' | 'install-record' | 'native-home' | 'npm-cache'
 
 export interface SpawnPlan {
     /** what to spawn: the binary itself, process.execPath (node-wrapped), or cmd.exe */
@@ -172,6 +172,43 @@ export async function planEndpointSpawn(
         ' or Node.js bundle (use the full file path, not an install directory or shell wrapper)',
     )
     return { plan: null, notes }
+}
+
+/** Setup inventory: enumerate every known installation, while dispatch keeps its pinned/first-match semantics. */
+export async function enumerateEndpointSpawns(
+    manifest: EndpointManifest,
+    opts: { configBin?: string | null; env?: NodeJS.ProcessEnv; extraPaths?: Array<{ file: string; source: SpawnSource }> } = {},
+): Promise<SpawnPlan[]> {
+    const env = opts.env ?? process.env
+    const found = new Map<string, SpawnPlan>()
+    const add = async (plan: SpawnPlan | null) => {
+        if (!plan?.endpoint_bin || /\.ps1$/i.test(plan.endpoint_bin)) return
+        const real = await fs.realpath(plan.endpoint_bin).catch(() => null)
+        if (!real) return // A candidate may disappear after stat; keep inspecting the others.
+        if (SHIM_EXTS.has(nodePath.extname(real).toLowerCase())) {
+            if (manifest.command.prompt_delivery === 'argv') return
+            plan = cmdShimPlan(real, env, plan.notes)
+        }
+        const key = process.platform === 'win32' ? real.toLowerCase() : real
+        if (!found.has(key)) found.set(key, { ...plan, endpoint_bin: real,
+            ...(plan.resolved_from === 'cmd-shim' ? {} : plan.prefixArgs.length ? { prefixArgs: [real] } : { command: real }) })
+    }
+    if (opts.configBin) await add((await planEndpointSpawn(manifest, opts)).plan)
+    for (const dir of (env.PATH ?? env.Path ?? env.path ?? '').split(nodePath.delimiter).filter(Boolean)) {
+        const hit = await resolveBin(manifest.detect.bin, { ...env, PATH: dir })
+        const shim = hit && SHIM_EXTS.has(nodePath.extname(hit).toLowerCase())
+        if (hit && !shim) await add(planForPath(hit, 'path', []))
+        const native = await planFromNpmLayout(manifest, [nodePath.join(hit ? nodePath.dirname(hit) : dir, 'node_modules')], [])
+        await add(native)
+        if (hit && shim && !native) await add(cmdShimPlan(hit, env, []))
+    }
+    for (const root of npmModuleRoots(env)) await add(await planFromNpmLayout(manifest, [root], []))
+    for (const template of manifest.detect.known_paths ?? []) {
+        const candidate = expandKnownPath(template, env, os.homedir())
+        if (candidate && await isFile(candidate)) await add(planForPath(candidate, 'known-path', []))
+    }
+    for (const p of opts.extraPaths ?? []) if (await isFile(p.file)) await add(planForPath(p.file, p.source, []))
+    return [...found.values()]
 }
 
 function cmdShimPlan(shimPath: string, env: NodeJS.ProcessEnv, notes: string[]): SpawnPlan {

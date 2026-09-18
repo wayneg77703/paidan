@@ -6,8 +6,7 @@
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
-import { constants } from 'node:fs'
-import { createHash, randomUUID } from 'node:crypto'
+import { writeApprovedFile } from './approved-write.js'
 
 export interface HostEntry {
     name: string
@@ -129,64 +128,8 @@ export async function installSkill(
     opts: { expectedSha256?: string } = {},
 ): Promise<SkillInstallResult> {
     const payload = adaptSkillPayload(await fs.readFile(sourcePath, 'utf8'), host.frontmatter_fields)
-    // A discovered directory or an existing filename does not authorize
-    // following links or replacing a user's customized skill.
-    const skillsRoot = nodePath.resolve(host.skills_dir)
-    const relative = nodePath.relative(skillsRoot, nodePath.resolve(host.target))
-    if (!relative || relative.startsWith(`..${nodePath.sep}`) || relative === '..' || nodePath.isAbsolute(relative)) {
-        throw new SkillInstallError('skill target must be inside the selected host skills directory')
-    }
-    // Inspect the selected skill tree, not unrelated OS ancestors (macOS /var
-    // itself is a symlink). The host root is the caller's selected scope.
-    for (let item = nodePath.resolve(host.target); ; item = nodePath.dirname(item)) {
-        const stat = await fs.lstat(item).catch((err: NodeJS.ErrnoException) => {
-            if (err.code === 'ENOENT') return null
-            throw err
-        })
-        if (stat?.isSymbolicLink()) throw new SkillInstallError(`skill target traverses a link; inspect the actual destination first: ${item}`)
-        if (item === skillsRoot) break
-    }
-    let status: SkillInstallStatus = 'created'
-    let existing: Buffer | null = null
-    let backup: string | undefined
-    try {
-        existing = await fs.readFile(host.target)
-        if (existing.equals(Buffer.from(payload))) return { host: host.name, path: host.target, status: 'unchanged' }
-        if (createHash('sha256').update(existing).digest('hex') !== opts.expectedSha256) {
-            throw new SkillInstallError(`existing skill differs; preserve it and review the changes before replacing: ${host.target}`)
-        }
-        status = 'updated'
-    } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-    }
-    await fs.mkdir(nodePath.dirname(host.target), { recursive: true })
-    if (existing) {
-        backup = `${host.target}.bak-${randomUUID()}`
-        await fs.copyFile(host.target, backup, constants.COPYFILE_EXCL)
-        if (!(await fs.readFile(backup)).equals(existing)) {
-            throw new SkillInstallError('skill changed while backing up; existing target preserved')
-        }
-    }
-    const tmp = nodePath.join(
-        nodePath.dirname(host.target),
-        `.SKILL.md.${process.pid}.${Date.now()}.tmp`,
-    )
-    await fs.writeFile(tmp, payload, 'utf8')
-    try {
-        if (existing) {
-            if (!(await fs.readFile(host.target)).equals(existing)) throw new SkillInstallError('skill changed during installation; refusing to replace it')
-            await fs.rename(tmp, host.target)
-        } else {
-            // Exclusive creation also preserves a file created after our read.
-            await fs.link(tmp, host.target)
-            await fs.rm(tmp)
-        }
-    } catch (err) {
-        // never leave the staged tmp file behind (e.g. locked/readonly target)
-        await fs.rm(tmp, { force: true }).catch(() => {})
-        throw err
-    }
-    return { host: host.name, path: host.target, status, ...(backup ? { backup } : {}) }
+    return { host: host.name, ...await writeApprovedFile(host.skills_dir, host.target, payload,
+        { expectedSha256: opts.expectedSha256, label: 'skill' }) }
 }
 
 /**

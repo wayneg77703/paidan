@@ -6,8 +6,8 @@ This repo is maintained mostly by AI agents. This file is your onboarding: the i
 
 1. **Terminal judgment is evidence-first.** Deliverable evidence outranks process exit codes. `exit 0` never counts as success by itself. `unknown` is a legal terminal state. Endpoint refusal signals (e.g. agy `denied_actions`, empty final text) go into terminal evidence, not automatic failure.
 2. **No cross-connection fallback.** If a model/connection fails on quota, never silently switch to another billing path. Refuse and report.
-3. **paidan does not manage credentials.** The runtime never copies, stages, or proxies credential material; endpoints use their own native config. Installation-only exception: after the user approves the ZCode changes described in `INSTALL.md`, the installing agent may create a dedicated native provider JSON containing only the selected API provider, its model rules and default selection. A confirmed legacy layout may instead need a selected-provider merge. Credentials and backups remain in ZCode's native directory, never in paidan config, the repo, prompts, command arguments or extra logs; paidan stores only the profile path. Why: support the requested isolated print setup without adding credential custody to the runner.
-4. **Native-home writes require the user's selected scope.** paidan itself writes only user-selected host skill files (the init selection is consent). Agent-guided installation can copy approved host skill variants and make the exact native setting changes the user selected after seeing their target/fields/impact (INSTALL.md). Credential transfer remains limited to the installation-only ZCode exception in invariant 3; other login/setup uses native flows. Missing settings are never silently patched by the runtime. A current-host skill destination can be approved in the combined setup summary. Why: keep setup concise while preserving control over native configuration.
+3. **paidan does not manage credentials.** The runtime never copies, stages, or proxies credential material; endpoints use their own native config. Installation-only exception: after the user approves the ZCode changes described in `INSTALL.md`, the installing agent may use the reviewed setup command to create a dedicated native provider JSON containing only the selected API provider, its model rules and default selection. Credentials and backups remain in ZCode's native directory, never in paidan config, the repo, prompts, command arguments or extra logs; paidan stores only the profile path. Why: support the requested isolated print setup without adding credential custody to the runner.
+4. **Native-home writes require the user's selected scope.** paidan writes user-selected host skill files, the dedicated ZCode file from invariant 3, and explicitly selected DSH native default-model fields through setup --apply after a reviewed preview. The runtime dispatch path never writes native configuration. Agent-guided installation submits choices and location hints to the program. Shared installation logic owns persistent configuration/skill writes, backups and receipts; unsupported native changes use native settings mechanisms, never ad hoc agent-authored configuration patches (INSTALL.md). Credential transfer remains limited to the installation-only ZCode exception in invariant 3; other login/setup uses native flows. Missing settings are never silently patched by the runtime. A current-host skill destination can be approved in the combined setup summary. Why: keep setup concise while preserving control over native configuration.
 5. **Data never flows into the repo.** The repo contains zero machine paths and zero credentials. Machine config lives in `%APPDATA%\paidan\`.
 6. **Zero runtime dependencies.** Node stdlib only (usage DB = `node:sqlite`). DevDependencies limited to `typescript` + `@types/node`. Consequence: cancel kills in two phases (graceful `taskkill /T` or process-group SIGTERM, forced `/F` or SIGKILL after grace) — Node cannot create Job Objects without FFI, so orphaned grandchildren after a force-kill are an accepted limitation, not a planned feature.
 7. **All CLI output is JSON** on stdout; human prose goes to stderr.
@@ -18,8 +18,8 @@ This repo is maintained mostly by AI agents. This file is your onboarding: the i
 ```
 src/engine/     run-store, supervisor, terminal judgment, reconcile, redactor, usage-db, config,
                 run-control (shared wait/launch/cancel settlement), errors (structured failures),
-                models-cache, init-plan (UI-free init/probe decisions a console GUI can reuse),
-                skill-install (host skill registry + atomic copies)
+                models-cache, init-plan (UI-only question helpers), installation-files (bounded installation writes + receipt),
+                skill-install (host skill registry + payloads), approved-write (shared bounded backup/atomic writer)
 src/worker.ts   the detached worker: spawns the endpoint, streams stdout/stderr into the parser,
                 owns events/state/result and the terminal judgment path
 src/endpoints/  per-endpoint parsing and native metadata adapters;
@@ -33,9 +33,13 @@ endpoints/      per-endpoint data manifest (JSON): detection, command template, 
                 prompt delivery, output parsing type, model discovery, capability flags (+verified_at),
                 optional effort block (argv `arg` and/or env `env` delivery — e.g. kimi has no CLI
                 flag and rides KIMI_MODEL_THINKING_EFFORT)
+src/installation.ts shared installation survey/choices/plan/apply; composes endpoint metadata and engine writers
+src/endpoints/installation-discovery.ts setup-only installed-app/npm-cache/location-hint discovery
+src/endpoints/*-setup.ts limited native profile/settings transformations (no file writes)
 src/cli.ts      entry routing, help/version, startup reconcile and error presentation
 src/commands/  run.ts = run/get/cancel/list; inspect.ts = doctor/models;
-                probe.ts = explicit live contract tests; init.ts = optional installation wizard;
+                probe.ts = explicit live contract tests; setup.ts = noninteractive CLI envelope for installation.ts;
+                init.ts = optional terminal UI over the same installation planner/writer;
                 context.ts = CLI context and JSON envelopes. Command workflows do not import one another.
 src/endpoints/inspection.ts  version/native-default reads and fresh model discovery + history snapshots
 src/endpoints/selection.ts   shared model/effort/native-context checks for run and probe
@@ -47,7 +51,7 @@ docs/contracts.md  run record schema, manifest schema, terminal state rules
 
 Engine storage/lifecycle modules have no runtime imports from endpoints; the models cache shares only metadata types. Command workflows and the worker compose these modules with endpoint rules and adapters. There is no global mutable state.
 
-The CLI routes to independent command workflows. Those workflows use endpoint inspection/selection and the engine's run lifecycle; the worker uses endpoint adapters and engine storage. Engine and endpoint modules do not import command handlers. This keeps changes to inspection or installation out of normal delegation, and shares selection checks between delegation and probes instead of duplicating them.
+The CLI routes to independent command workflows. Setup and init share installation.ts without importing one another. Other workflows use endpoint inspection/selection and the engine's run lifecycle; the worker uses endpoint adapters and engine storage. Engine and endpoint modules do not import command handlers. This keeps changes to inspection or installation out of normal delegation, and shares selection checks between delegation and probes instead of duplicating them.
 
 ## How to add an endpoint
 

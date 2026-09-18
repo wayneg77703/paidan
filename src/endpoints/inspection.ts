@@ -9,7 +9,7 @@ import type { NativeDefaults } from './parser-api.js'
 import { finalSpawnArgs, needsVerbatimArgs, type SpawnPlan } from './spawn.js'
 const execFileAsync = promisify(execFile)
 
-export async function detectVersion(manifest: EndpointManifest, plan: SpawnPlan): Promise<string | null> {
+export async function detectVersion(manifest: EndpointManifest, plan: SpawnPlan, onError?: (reason: string) => void): Promise<string | null> {
     try {
         const r = await execFileAsync(
             plan.command,
@@ -21,10 +21,13 @@ export async function detectVersion(manifest: EndpointManifest, plan: SpawnPlan)
             },
         )
         const text = `${r.stdout}\n${r.stderr}`.trim()
+        if (!text) { onError?.('版本检测命令未返回内容'); return null }
         const re = manifest.detect.version_re ? new RegExp(manifest.detect.version_re) : null
         const m = re ? re.exec(text) : null
         return m?.[1] ?? text.split(/\r?\n/)[0] ?? null
-    } catch {
+    } catch (error) {
+        const failure = error as { code?: string | number; killed?: boolean }
+        onError?.(failure.killed ? '版本检测超时（5 秒）' : `版本检测命令失败（${failure.code ?? '未知原因'}）`)
         return null
     }
 }

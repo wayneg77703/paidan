@@ -127,14 +127,14 @@ test('installSkill preserves a directory at the target path and creates no stage
     }
 })
 
-test('init --yes reports a failing host as status error and still installs the rest', async () => {
+test('init and setup reject an invalid host target before any installation writes', async () => {
     const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-skill-init-'))
     try {
         const hostHome = nodePath.join(root, 'hosts')
         // kimi-code: skills dir exists, but the SKILL.md target is a DIRECTORY -> install fails
         const kimiTargetDir = nodePath.join(hostHome, '.kimi-code', 'skills', 'paidan')
         await fs.mkdir(nodePath.join(kimiTargetDir, 'SKILL.md'), { recursive: true })
-        // claude-code: plain skills dir -> install succeeds
+        // claude-code is valid, but the shared planner must first validate all selected targets.
         await fs.mkdir(nodePath.join(hostHome, '.claude', 'skills'), { recursive: true })
         const env = {
             ...process.env,
@@ -145,20 +145,15 @@ test('init --yes reports a failing host as status error and still installs the r
         }
         await fs.mkdir(nodePath.join(root, 'endpoints'), { recursive: true })
         const res = await paidan(env, ['init', '--yes'])
-        assert.equal(res.ok, true, JSON.stringify(res))
-        assert.equal(res.written, true)
-        const byHost = new Map(res.skills.map((s) => [s.host, s]))
-        assert.equal(byHost.get('kimi-code')?.status, 'error')
-        assert.ok((byHost.get('kimi-code')?.error ?? '').length > 0, 'error entry carries the failure message')
-        assert.equal(byHost.get('kimi-code')?.path, nodePath.join(kimiTargetDir, 'SKILL.md'))
-        assert.equal(byHost.get('claude-code')?.status, 'created')
+        assert.equal(res.ok, false, JSON.stringify(res))
+        assert.equal(res.error.code, 'SETUP_UNSAFE_TARGET')
+        assert.equal(res.error.details.target, nodePath.join(kimiTargetDir, 'SKILL.md'))
         // the failing host left no staged tmp file behind
         const leftovers = (await fs.readdir(kimiTargetDir)).filter((f) => f.endsWith('.tmp'))
         assert.deepEqual(leftovers, [])
-        // and the successful host really holds its natively-authored variant, verbatim
         const installed = nodePath.join(hostHome, '.claude', 'skills', 'paidan', 'SKILL.md')
-        const variant = await fs.readFile(nodePath.join(repoRoot, 'skills', 'paidan', 'variants', 'claude-code.SKILL.md'), 'utf8')
-        assert.equal(await fs.readFile(installed, 'utf8'), variant)
+        assert.equal(await fs.stat(installed).then(() => true, () => false), false)
+        assert.equal(await fs.stat(env.PAIDAN_HOME).then(() => true, () => false), false)
     } finally {
         await fs.rm(root, { recursive: true, force: true })
     }

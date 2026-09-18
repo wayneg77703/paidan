@@ -7,7 +7,6 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { loadConfig } from '../dist/engine/config.js'
-import { mergeInitConfig } from '../dist/engine/init-plan.js'
 import { EndpointRegistry, validateManifest } from '../dist/endpoints/registry.js'
 import { buildArgs, buildEnv, checkPermission, resolvePermissionMode } from '../dist/endpoints/invocation.js'
 import { waitForWorkerExit } from './helpers/worker.mjs'
@@ -66,14 +65,12 @@ test('DSH keeps native defaults, overrides only explicit read-only, and rejects 
     assert.equal(checkPermission(dsh, 'unattended').ok, false)
 })
 
-test('persistent permission defaults validate and survive model-only init updates', async (t) => {
+test('persistent permission defaults validate supported presets', async (t) => {
     const root = await temporary(t)
     const file = path.join(root, 'config.json')
     const existing = { defaults: { modes: { codex: 'read-only' }, models: { codex: 'old' } } }
     await fs.writeFile(file, JSON.stringify(existing))
     assert.deepEqual(loadConfig(file).defaults.modes, { codex: 'read-only' })
-    const merged = mergeInitConfig(existing, { endpoints: { enabled: ['codex'] }, defaults: { endpoint: 'codex', models: {}, efforts: {} } })
-    assert.deepEqual(merged.defaults.modes, existing.defaults.modes)
     for (const modes of [[], null, { codex: 'on-request' }, { codex: true }, JSON.parse('{"__proto__":"read-only"}')]) {
         await fs.writeFile(file, JSON.stringify({ defaults: { modes } }))
         assert.throws(() => loadConfig(file), /defaults.modes/)

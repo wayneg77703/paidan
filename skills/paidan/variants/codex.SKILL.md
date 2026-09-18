@@ -11,9 +11,15 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 
 ## 安装与接入
 
-安装时按包内 INSTALL.md：一次选择要接入的端点，只检查所选项；唯一有效入口展示后采用，多版本让用户选，已有明确选择不重复确认。展示当前配置、模型及逐模型强度菜单，让用户选择跟随或固定。把当前宿主 skill 安装纳入配置摘要一起确认，其他宿主按需添加；基础检查集中进行，可用 `doctor --endpoint <name>`（可重复）限定范围。默认不派测试任务，跳过验证、未登录或暂无额度都不自动撤销配置。
+按包内 INSTALL.md，用 setup 承担机械工作。先确认接入哪些端点，再用 `paidan setup --endpoint <名称>`（可重复）检查完整入口候选与真实菜单；PATH 没命令不等于未安装。唯一有效入口展示后采用，多份安装让用户选，不按版本或 mtime 猜。指定入口可加 --bin；项目配置用 --cwd 指定实际目录。
 
-接入 ZCode 时，先说明桌面与 CLI 配置分离及 unattended/yolo 要求；若确需把桌面 provider 合并到 CLI 原生配置，列明源/目标文件、备份与字段保留范围，经用户明确授权后由安装 agent 在 ZCode 原生目录内最小修改。凭据不进入 paidan、仓库或对话；具体步骤见包内 INSTALL.md。日常委派不因此获得自动修改原生配置的授权。
+接受自然语言和逐个选择。模型显示名称、精确 ID、该模型支持的强度一起展示，不塞预设组合、不默认都用 max、不近似匹配；用户已说清组合就直接记录，不再问“固定哪些”。已有配置复用，缺接入时才指导原生设置，未登录/无额度不撤掉端点。
+
+保存 setup 返回的 choices 模板并填写用户选择，`setup --choices <文件>` 生成摘要；用户确认后由宿主带入 confirmation 调用 `--apply --expect <值>`。用户只看组合、默认端点、宿主 skill 和文件影响，不抄写哈希、不填写 JSON。ZCode 固定组合涉及原生目录内所选 API provider 的凭据副本，明确说明并纳入同次授权；程序构建专用 JSON，原始配置不动。不要翻源码猜 schema、临时写复制脚本或再跑 init。变更检测返回新摘要时核对实际变化，不盲目刷新重试。
+
+入口未找到时，agent 可只读补查快捷方式或自定义目录，把目录/程序路径用 setup --endpoint <名称> --location <绝对路径> 交回程序核验。ZCode 不假定在 C 盘；DSH 区分原生 home/npm/npx 缓存，缓存失效不自动下载或换入口。新增端点仅提交该端点，保留其他配置及全局默认。
+
+安装不默认调用模型或 probe，版本漂移仅提示；保存已有校验结果，必要时只定向 doctor。当前宿主 skill 纳入摘要，其他宿主按需。配置、原生专用文件、skill、备份和 install-receipt.json 均由程序写入，agent 不手工补字段或账本。当前宿主是发单方，与执行端点分别选择。未被 setup 支持的原生改动使用原生设置功能，不临时拼 JSON/YAML。
 
 ## 标准调用循环
 
@@ -51,7 +57,7 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 ## 权限预设与提交期拒绝
 
 - “跟随原生”仅指连接、模型、强度，不包括交互审批。省略 `--mode` 时按 `defaults.modes.<端点>` → 端点默认选择；内置默认七个端点为 workspace-write，zcode 为 unattended。可用 `--mode` 作本次调整、`defaults.modes` 作持久调整，不自动升权。用户要求只读时显式传 read-only；端点不支持就报告，不回到较宽默认。
-- 无头审批按各家适配：Codex 显式 approval_policy=never；Claude acceptEdits 加 permission-prompts=none（不撤销已有 allow，不提供强制只读）；Kimi print 为 auto；ZCode 仅 yolo；OpenCode build 保留原生规则；OMP write，需审批的执行操作拒绝；DSH 默认 native headless，可经 DSH_PERMISSION_MODE 请求只读但无 unattended；AGY accept-edits 依赖原生 allow 规则，缺规则时说明，由用户决定原生调整。无头权限错误先返回宿主处理，不把等待用户/SDK host 确认的交互方式当成可用配置。
+- 无头审批按各家适配：Codex 显式 approval_policy=never；Claude acceptEdits 加 permission-prompts=none（不撤销已有 allow，不提供强制只读）；Kimi print 为 auto；ZCode 仅 yolo；OpenCode build 保留原生规则；OMP write，需审批的执行操作拒绝；DSH 默认 native headless，可经 DSH_PERMISSION_MODE 请求只读但无 unattended；AGY accept-edits 依赖原生 allow 规则，缺规则时说明，由用户决定原生调整，通过受支持的程序/原生设置方式完成。无头权限错误先返回宿主处理，不把等待用户/SDK host 确认的交互方式当成可用配置。
 - 三预设：`read-only` / `workspace-write` / `unattended`。各端点把预设映射到自己的原生权限模型。
 - 端点无法强制所请预设时**提交期硬拒** `PERMISSION_UNSUPPORTED`（message 列出缺失能力），不会降级偷跑。此时不得改权限重试；报告限制，或换支持该预设的端点。
 - `soft` 能力只记入返回的 `warnings` 字段，任务照跑；含义是端点声称支持但强制力存疑。
@@ -79,9 +85,9 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 ## 红线（不可越过）
 
 - 永不把凭据搬进任务正文、命令参数或 paidan 配置；端点用各 agent 自己的原生配置与调用方 env 运行，paidan 不代理、不暂存凭据。
-- paidan 引擎不自动修补 agent 的原生配置；缺设置时报告，由用户决定处理。安装 agent 仅可执行用户已明确授权的本机配置修改和宿主 skill 安装。
+- paidan 引擎不自动修补 agent 的原生配置；缺设置时报告，由用户决定处理。安装 agent 将用户已明确选择的改动交给 setup 或原生设置功能；不手工拼配置文件、复制 provider 或补写安装记录。
 - 模型/连接失败（配额、认证等）时**永不静默切换路径**：拒绝并报告，不自动换模型、换端点、换账期、升权。注意区分：失败时刻的自动 fallback 被禁止；用户**明确选择**换模型换档位（或本次任务已有该选择的授权）是正常操作，不属于此条。端点自身的 fallback 机制（如 claude 原生 `--fallback-model`、网关侧切换）归端点与用户配置管，paidan 不知情也不拦截。
-- 不传 `--model` 时生效值为 `--model ?? config defaults.models.<端点> ?? 端点原生默认`（无全局回退键；不跨连接）；DSH 没有 headless 模型选择，配置模型会被 `MODEL_UNSUPPORTED` 拒绝。ZCode 只走 print：不传模型/强度覆盖；专用组合保存在用户批准的 ZCode 原生 JSON，paidan 只保存 endpoints.overrides.zcode.provider_config 路径。安装前先指导配置可用 API Key 接入，桌面 OAuth 不保证 CLI 可用。每次报告 result.evidence.selection 的期望/实际组合；matches_expected=false 或未知不能声称固定成功。失败先解释已有操作并询问用户，不自动切换/重派；用户同意后才用 run --endpoint zcode --native 绕过本次专用配置。旧 zapi_ 会话不支持续接。需要核对时用 `paidan models --endpoint <name>` 查询；各端点原生 home 当前实际用什么模型/强度，`paidan doctor` 的 `native_defaults` 只读可见。
+- 不传 `--model` 时生效值为 `--model ?? config defaults.models.<端点> ?? 端点原生默认`（无全局回退键；不跨连接）；DSH 没有 headless 模型选择，配置模型会被 `MODEL_UNSUPPORTED` 拒绝。ZCode 只走 print：不传模型/强度覆盖；专用组合保存在用户批准的 ZCode 原生 JSON，paidan 只保存 endpoints.overrides.zcode.provider_config 路径。setup 确认缺少启用 API 接入时才指导用户配置；已有接入直接使用，桌面 OAuth 不保证 CLI 可用。每次报告 result.evidence.selection 的期望/实际组合；matches_expected=false 或未知不能声称固定成功。失败先解释已有操作并询问用户，不自动切换/重派；用户同意后才用 run --endpoint zcode --native 绕过本次专用配置。旧 zapi_ 会话不支持续接。需要核对时用 `paidan models --endpoint <name>` 查询；各端点原生 home 当前实际用什么模型/强度，`paidan doctor` 的 `native_defaults` 只读可见。
 
 ## 错误处理
 
@@ -98,12 +104,12 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 4. 用户选择后区分本次覆盖和更新默认。各端点均可 `run --native` 同时绕过本次 paidan 模型/强度默认；ZCode 还绕过专用 provider JSON，权限仍保持原设定。具体模型/强度可用参数覆盖；长期跟随才清除用户批准的对应默认。换模型时一并检查强度，不能把旧强度强加给新模型。不得自行登录、换计费连接、提高权限或轮流试一遍候选。
 5. 原 run 已结束且已核对部分改动后，按用户选择重新派发，保存新的 run_id；不默认跨连接复用旧 resume 句柄。再次失败则报告新证据，等待用户选择，不进入自动重试/自动切换循环。
 
-Codex 和 Claude Code 的固定选择与配置摘要一起确认：分别写 `defaults.models.<端点>` / `defaults.efforts.<端点>`，同次查询的 `selection_context` 写 `defaults.selection_contexts.<端点>`。`SELECTION_RECONFIRM_REQUIRED` 表示固定值尚未绑定当前配置或配置已变化；先展示新配置与候选，让用户选择跟随、新固定组合、其他已启用端点或暂停，不擅自刷新摘要。用户选定本次组合后可用 `--model ... --effort ... --selection-context ...`；本次跟随用 `--native`，只有用户要求更改持久默认时才写配置。检查不验证额度或完整项目/托管策略，也不代替实际调用证据。Claude 的 tier 别名会随映射变化，固定具体模型应选完整 ID；仅使用原生 --effort，不专门覆盖用户强制的环境设置。
+Codex 和 Claude Code 的持久固定选择交给 setup，由程序一起保存 model/effort 和本次原生配置摘要。`SELECTION_RECONFIRM_REQUIRED` 表示固定值尚未绑定当前配置或配置已变化；先展示新配置与候选，让用户选择跟随、新固定组合、其他已启用端点或暂停，不擅自刷新摘要。用户选定本次组合后可用 `--model ... --effort ... --selection-context ...`；本次跟随用 `--native`，只有用户要求更改持久默认时才写配置。检查不验证额度或完整项目/托管策略，也不代替实际调用证据。Claude 的 tier 别名会随映射变化，固定具体模型应选完整 ID；仅使用原生 --effort，不专门覆盖用户强制的环境设置。
 
 Kimi Code 的固定模型使用当前模型列表中的完整别名，按真实 provider 映射区分 OAuth/API，不能按别名前缀猜。模型菜单以 overrides 后的 `effort_options` 为准；只有 `effort_selectable=true` 才提供 paidan 强度固定，其他协议跟随原生强度。`MODEL_UNAVAILABLE` / `EFFORT_UNSUPPORTED` / `EFFORT_INVALID` 时让用户重新选，不自行改原生 thinking。`KIMI_MODEL_NAME` 启用环境临时模型，`--native` 也会继承它；省略 paidan 覆盖不代表忽略原生环境变量。
 
 
-OpenCode、OMP、AGY 的固定选择也保存同次 models 查询的 selection_context 到 defaults.selection_contexts.<端点>；宿主自动带入这个内部字段，不让用户抄写、不增加确认步骤。固定派发前按当前目录检查模型（OpenCode/OMP 同时检查该模型的强度），失效或配置变化时让用户重新选择。查询项目配置用 models --cwd <原任务目录>，不得用安装仓库的配置代替任务目录。AGY 带档位的模型 ID 不再叠加 --effort；DSH 只跟随原生，调整 provider/model/reasoningEffort 需说明字段并取得用户同意。OMP 原生可能启用 fallback/角色切换，固定请求模型不代表固定了账号或禁止原生换路；报告检测到的限制，不能擅自关闭。
+OpenCode、OMP、AGY 的固定选择也保存同次 models 查询的 selection_context 到 defaults.selection_contexts.<端点>；持久配置的这个字段由 setup 自动保存，宿主不手写、不让用户抄写、不增加确认步骤。固定派发前按当前目录检查模型（OpenCode/OMP 同时检查该模型的强度），失效或配置变化时让用户重新选择。查询项目配置用 models --cwd <原任务目录>，不得用安装仓库的配置代替任务目录。AGY 带档位的模型 ID 不再叠加 --effort；DSH 只跟随原生；用户同意调整原生默认后，把 provider/model/effort 放入该端点的 native_settings，经 setup 预览和保存，并说明影响其他原生会话。复杂 YAML 会拒绝，不能自行正则改写。OMP 原生可能启用 fallback/角色切换，固定请求模型不代表固定了账号或禁止原生换路；报告检测到的限制，不能擅自关闭。
 
 ## 更新与卸载
 

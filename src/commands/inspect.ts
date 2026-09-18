@@ -142,7 +142,7 @@ export async function verbDoctor(ctx: Ctx, args: string[]): Promise<void> {
         else if (version === null) drift = 'unknown'
         else drift = knownVersions.length > 0 && !knownVersions.includes(version)
         if (!spawnRes.plan) issues.push(`${manifest.name}: bin not resolvable (see repair_hint)`)
-        else if (drift === true) issues.push(`${manifest.name}: version ${version} is not any manifest-verified version (known: ${knownVersions.join(', ')}) — run paidan probe --endpoint ${manifest.name}`)
+        else if (drift === true) issues.push(`${manifest.name}: version ${version} is not any manifest-verified version (known: ${knownVersions.join(', ')}); compatibility notice only, not an installation blocker. Optional probe makes real model calls; run it only when behavior testing is requested.`)
         else if (drift === 'unknown') issues.push(`${manifest.name}: version probe failed — drift state unknown`)
         const cached = await modelsCache.read(manifest.name)
         const modelsCacheInfo = cached

@@ -42,8 +42,6 @@ export function effectiveRunTimeoutSec(flag: number | null, config: PaidanConfig
 const TOP_LEVEL_KEYS = new Set(['dataDir', 'endpoints', 'defaults', 'ttlDays'])
 const ENDPOINTS_KEYS = new Set(['enabled', 'overrides'])
 const DEFAULTS_KEYS = new Set(['endpoint', 'models', 'efforts', 'selection_contexts', 'modes', 'run_timeout_sec'])
-/** defaults keys the init wizard owns and replaces wholesale on re-init; everything else in `defaults` (run_timeout_sec) is machine-local. The global `model`/`effort` fallback keys were removed from the schema entirely (2026-09-11): they poisoned endpoints without that selection surface and silently overrode native choices. */
-export const WIZARD_DEFAULTS_KEYS: readonly string[] = ['endpoint', 'models', 'efforts', 'selection_contexts']
 const OVERRIDE_KEYS = new Set(['bin', 'provider_config'])
 // dynamic keys land in plain objects; these three would hit the prototype
 // machinery instead of becoming entries (pollution or silent drops)
@@ -106,6 +104,11 @@ export function loadConfig(configPath: string = defaultConfigPath()): PaidanConf
     } catch {
         throw new Error(`config.json is not valid JSON: ${configPath}`)
     }
+    return parseConfig(parsed, configPath)
+}
+
+/** Validate an in-memory setup merge with exactly the runtime config schema. */
+export function parseConfig(parsed: unknown, configPath = 'config.json'): PaidanConfig {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         throw new Error(`config.json must be a JSON object: ${configPath}`)
     }

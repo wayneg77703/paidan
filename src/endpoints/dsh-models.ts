@@ -10,11 +10,11 @@ export function readDshNativeDefaults(settingsYaml: string | null): NativeDefaul
         notes.push('native dsh settings.yaml not found; install/login dsh first')
         return { model: null, connection: null, effort: null, notes }
     }
-    const block = /^agent-default-model:\s*\r?\n((?:[ \t]+\S[^\r\n]*\r?\n?)+)/m.exec(settingsYaml)
+    const block = /^agent-default-model:[ \t]*(?:#.*)?\r?\n((?:[ \t]+\S[^\r\n]*\r?\n?)+)/m.exec(settingsYaml)
     const pick = (key: string): string | null => {
         if (!block) return null
-        const m = new RegExp(`^[ \\t]+${key}:\\s*["']?([^"'\r\n]+?)["']?\\s*$`, 'm').exec(block[1] ?? '')
-        return m?.[1] ?? null
+        const m = new RegExp(`^[ \\t]+${key}:[ \\t]*(?:"([^"\\r\\n]*)"|'([^'\\r\\n]*)'|([A-Za-z0-9_.:/-]+))[ \\t]*(?:#.*)?\\r?$`, 'm').exec(block[1] ?? '')
+        return m ? m[1] ?? m[2] ?? m[3] ?? null : null
     }
     const provider = pick('provider')
     const model = pick('model')
@@ -75,11 +75,14 @@ export function discoverDshModels(settingsYaml: string | null): DiscoverModelsRe
             'DSH 的 provider/model/reasoningEffort 由原生配置共同控制。调整时先展示具体字段并取得用户同意；paidan 不保存假的固定覆盖、不修改原生文件。'] }
 }
 
+export function dshSettingsPath(): string {
+    return nodePath.join(process.env.DSH_HOME ?? nodePath.join(os.homedir(), '.dsh'), 'settings.yaml')
+}
+
 async function readSettings(): Promise<string | null> {
-    const dshHome = process.env.DSH_HOME ?? nodePath.join(os.homedir(), '.dsh')
     let yaml: string | null = null
     try {
-        yaml = await fs.readFile(nodePath.join(dshHome, 'settings.yaml'), 'utf8')
+        yaml = await fs.readFile(dshSettingsPath(), 'utf8')
     } catch {
         yaml = null
     }

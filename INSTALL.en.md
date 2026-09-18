@@ -2,7 +2,7 @@
 
 [简体中文](INSTALL.md) · English
 
-For an agent with local shell/file access. Get the user's selected endpoints configured quickly. By default, do not call a model for a test, and do not configure every installed agent. This workflow merges configuration directly and does not require `paidan init`.
+paidan delegates tasks to local AI CLIs. The sending agent is the host; the receiving CLI is the endpoint. Choose them independently. This guide is for a local installing agent. Get the user's selected endpoints configured quickly. By default, do not call a model for a test, and do not configure every installed agent. The agent handles conversation and location hints; the program validates and writes configuration. No `paidan init` is required.
 
 ## Conversation language
 
@@ -10,106 +10,69 @@ For Chinese-speaking users, use Chinese for questions, choices, errors, confirma
 
 ## Default flow
 
-### 1. Install paidan and ask once which agents to connect
+### 1. Choose endpoints and install paidan
 
-Ask in **one multi-select question** which endpoints to connect: kimi-code, codex, claude-code, zcode, opencode, omp, dsh, agy. Mention known installations if helpful. Do not ask eight sequential questions or investigate paths/models/login for unselected agents. A user's already stated selection needs no repeated question.
+Ask which endpoints to connect: kimi-code, codex, claude-code, zcode, opencode, omp, dsh, agy. Accept names, “all”, and natural language. Do not split one choice into unrelated groups to fit a four-option widget. Reuse explicit choices.
 
-Only when a selected endpoint is absent, offer installation, a user-supplied location, or deferring its setup. Do not install additional agents by default.
+Check Node.js >= 24, then run `npm i -g paidan` and `paidan --version`. Handle missing prerequisites only when necessary. Use existing npm.cmd / paidan.cmd if PowerShell blocks .ps1; do not change execution policy or create PATH shims. A missing PATH command does not prove an application is absent.
 
-### 2. Inspect only selected endpoints and resolve entry ambiguity
-
-An initial grouped survey may inspect the selected endpoints, for example:
+### 2. Inspect selected endpoints; ask only about ambiguity
 
 ```sh
-paidan doctor --endpoint codex --endpoint zcode
+paidan setup --endpoint zcode --endpoint omp
 ```
 
-`--endpoint` is repeatable and does not require the endpoint to be enabled. Omitting it surveys all endpoints. Older releases without filtering may use one initial full doctor survey, then act only on the user's selections.
+setup is an agent-facing, noninteractive tool. It returns all known installation candidates, versions, current selections, native menus, host skill locations and an editable choices template. It does not inspect unselected endpoints, dispatch tasks, run probes or write paidan configuration/model caches.
 
-Doctor reports one current match per endpoint, **not every installed version**. Inspect all PATH matches, the existing paidan override, and the relevant locations in the reference table below. Search those locations, not every disk.
+Show and adopt a sole valid entry. Preserve an explicitly pinned entry. With multiple installations, show full paths, versions and sources and ask the user; do not pick by version or modification time. Query the chosen entry with `setup --endpoint zcode --bin "<chosen-full-path>"`. Read checked/notes before asking. The agent may inspect shortcuts or custom directories, then pass an installation folder or application path using `setup --endpoint zcode --location "<directory-or-file>"`. Repeat location for multiple hints. The program verifies the actual entries; hints do not authorize choosing between multiple candidates. Defer an unresolved endpoint while continuing others.
 
-```powershell
-Get-Command codex -All -ErrorAction SilentlyContinue |
-    Select-Object CommandType, Source
-where.exe codex
-npm root -g
-```
+ZCode also checks Windows installation records and shortcuts, including custom drives; its executable, resources and user configuration are separate locations. DSH checks its native home, npm layouts and matching packages in the actual npm cache. No npx download is triggered. A missing cached entry requires locating and confirming a replacement.
 
-Use existing launchers to find the real executable/Node.js bundle, rather than selecting a PowerShell alias, function, or `.cmd/.bat/.ps1` wrapper. Check each entry's `--version` with a short timeout; use `node "<bundle>" --version` for Node.js scripts. Deduplicate identical real files, but retain separate installations even at the same version.
+Version drift is informational, not an installation probe requirement. Use `--cwd "<task-directory>"` for project-sensitive settings and the same directory for preview/application. Native tools may maintain their own caches; paidan does not manage authentication or quota.
 
-- **One valid candidate**: show its path/version/source and include it in the configuration summary; do not add a separate selection question.
-- **Multiple installation candidates**: show a path/version/source/check-result table and let the user choose. Do not silently pick the first PATH hit or highest version.
-- **No valid candidate**: explain the issue and offer locating, installing, or deferring the endpoint.
+A selected entry with version_error needs a runtime/startup/exit-code/timeout diagnosis. Saving returns SETUP_VERSION_FAILED; do not repeatedly ask the user to choose the same path.
 
-Keep an existing explicitly pinned entry unless it fails or the user requests a change. Pin the chosen absolute file path in `endpoints.overrides.<name>.bin`. If it later moves, report the problem instead of changing installations automatically.
+### 3. Let users choose combinations freely
 
-### 3. Identify the connection before choosing model and effort
+Use the preceding setup result without an extra models query. Re-query only when native settings change. Show current connection, model display name, exact ID and effort. Users may name changes directly or choose endpoint by endpoint. Do not ask “pin or follow?” again after an explicit combination, or add a preliminary “which ones should be pinned?” form.
 
-Inspect the selected CLI's native context using the endpoint recipes below. Show its current connection/account type, model and effort, with the source and any unknowns. A provider/vendor name is not an account or billing method: login subscriptions, API keys and gateways can coexist.
+Follow native by default and preserve existing paidan pins. For changes, establish the connection, then show its actual models and per-model efforts. A sole connection can be shown and retained; multiple connections need a choice. Use display name, exact ID and effort columns, not a few model/effort bundles. Accept natural language and exact IDs; only a unique match is selectable, never the nearest name. Unknown catalogs/efforts remain unknown. Login/quota issues or skipped verification do not remove an endpoint.
 
-If ZCode is selected, complete its native API-key prerequisites below before installing paidan. Deferring it only skips that endpoint; continue with the others.
+Reuse enabled ZCode API connections; explain native API setup only when one is missing. DSH remains native-owned and must not offer a fictitious paidan pinning option.
 
-Check Node.js >= 24, then install:
+### 4. Preview and apply one summary
+
+Save the returned choices template to a temporary JSON file and enter the user's choices. This is machine input, not a JSON form for the user:
+
+- endpoints.<name>.locations: optional absolute directory/file hints; the program resolves and saves the verified exact entry.
+- endpoints.<name>.bin: full selected entry; required to resolve multiple candidates. A sole candidate is adopted and pinned by setup.
+- native:true: follow native as a whole. Otherwise model is the exact ID or a unique catalog display name, and effort is that model's level. Omission preserves a saved value; explicit null follows native for that field.
+- ZCode fixed choices use provider, model, effort. Setup builds a dedicated native file containing only the chosen provider and its providerModelRules/manualProviderModelRules, preserving original files and desktop defaults.
+- DSH native changes use native_settings: {"provider":"chosen-route","model":"chosen-model","effort":"chosen-level"}. This changes the native settings.yaml and affects other native sessions; disclose it. The program only edits these three fields in an ordinary block mapping, preserving other content/comments. Unsupported YAML is refused; use DSH native settings instead of agent-written YAML. Unknown model access/effort stays unverified.
+- mode: optional persistent permission preset; omission preserves it, null restores the endpoint default. No additional permission questionnaire.
+- enabled:false: disable only this endpoint, retaining its stored entry/choices. Do not combine it with other endpoint fields.
+- default_endpoint: preserve the current default; choose when multiple new endpoints have none. A sole endpoint becomes the new default; explicit null clears the default.
+- hosts: optional names from setup.hosts. The current host is the agent performing installation and expected to send tasks; ask only if unclear. Adding an endpoint does not automatically install its host skill. Use endpoints:{} for skill-only installation. Differing existing skills remain untouched; after reviewing the difference and approving replacement, use {"name":"codex","replace":true} for that host.
 
 ```sh
-npm i -g paidan
-paidan --version
+paidan setup --choices "<choices.json>"
 ```
 
-Discuss missing prerequisites only when necessary. npm installation needs no Git. If PowerShell blocks a `.ps1` launcher, use the existing `npm.cmd` / `paidan.cmd`; do not change execution policy or create PATH shims. A terminal/parent app may retain an old PATH after installation; restart that caller or use the full entry path when needed.
+Present decisions/files as a short human summary: endpoint selections, default endpoint, host skills and files to create or back up/update. Disclose and obtain approval for ZCode's local API-credential copy in its native directory. Never display the key. Include headless defaults from the table below, preserving existing permission choices; do not add a permission questionnaire. Existing authorization need not be repeated.
 
-“Follow native” covers connection, model and effort only. Headless permissions/approval handling are separate: use the endpoint defaults below instead of inheriting interactive user/SDK-host approval policies.
+After approval, the agent carries the returned internal confirmation value:
 
-For each selected endpoint, query `paidan models --endpoint <name>` once. Show its current native connection/model/effort, existing paidan defaults, and the discovered model menu with per-model efforts; let the user choose follow-native or a fixed combination. Inspect `native_defaults`, `configured_defaults`, `connections`, and each model's `connection`, `source`, and `effort_options`. A compact table and one choice are enough. Before saving the chosen entry, use an isolated temporary `PAIDAN_HOME` with that same absolute binary override; do not inspect a different PATH match.
-
-- Show and adopt a single clear connection. With multiple account/billing routes, show the current selection and alternatives and obtain the user's choice, unless already explicit.
-- Following native means the whole connection/model/effort combination. Do not retain an old effort while clearing only the model override.
-- For customization: connection first, then its model, then that model's declared effort options. Missing/null metadata means unknown; an explicit empty list means no declared selectable levels.
-- Configured entries, catalog membership, authentication and actual quota/access are different evidence. No synthetic call is required; pending login/quota or skipped verification preserves setup.
-
-### 4. Confirm one configuration summary
-
-Collect routine choices into a short summary:
-
-- Selected endpoints and entry paths.
-- Chosen connection/account type and the user's follow-native or fixed model/effort choice. Preserve already explicit choices without asking again.
-- Use the endpoint's headless permission default and tell the user it can be adjusted. Preserve existing defaults.modes; do not add eight mandatory permission menus.
-- With one endpoint, use it as the new default. With multiple endpoints, choose the default in this summary; preserve an existing valid default.
-- Propose installing the paidan skill into the **current host** as part of the same confirmation. Additional hosts are optional; ask if the current host is unclear.
-
-Show the current combination and discovered menu during installation, then let the user choose follow-native or fixed values. No real task is required. Explain incomplete/failed discovery; offer native defaults, setup, or skipping verification without inventing an accessible model list. Do not reconfirm already authorized choices. Skill destinations must appear in the approved summary; directory presence alone is not consent to install into every host.
-
-**When ZCode is selected, explain its special requirements below. Explicitly describe and obtain consent for any native configuration changes.** This may be included in the same summary, but a generic request to install paidan is not consent to modify ZCode's credentials/settings.
-
-### 5. Save, check basic configuration, and finish
-
-Back up an existing paidan config once, then merge the user's choices while preserving unrelated keys. Use JSON serialization and UTF-8 without BOM. Store actual absolute file paths with forward slashes or escaped backslashes, without `node`, arguments, or wrapping quotes.
-
-Example structure only; replace the path:
-
-```json
-{
-  "endpoints": {
-    "enabled": ["kimi-code"],
-    "overrides": {
-      "kimi-code": { "bin": "<absolute-path-to-selected-kimi.exe>" }
-    }
-  },
-  "defaults": {
-    "endpoint": "kimi-code",
-    "models": {},
-    "efforts": {}
-  }
-}
+```sh
+paidan setup --choices "<choices.json>" --apply --expect "<returned-confirmation>"
 ```
 
-The default endpoint must be enabled. Native defaults mean absent model/effort entries, not null/empty strings. Remove old fixed entries only when the user chooses to return to native settings. Preserve dataDir, ttlDays, timeouts and other endpoint settings. Do not run init afterward; it can replace these choices.
+Users never transcribe hashes. Setup rechecks selections and destinations and refuses stale previews. Assess actual changes instead of blindly refreshing and retrying. It merges configuration, pins entries, records selection contexts automatically, performs selected native changes, installs skills and merges the installation receipt. Do not inspect dist to guess schemas, improvise copy scripts or rerun init.
 
-Locate only approved host variants using doctor.hosts[].source/target (or packaged skills/hosts.json on older versions). Confirm custom homes and check the target and ancestors within the selected skills tree for symlinks/junctions; inspect the actual destination before following any link. Create absent files; leave identical files untouched. For a confirmed unmodified old package copy, back up successfully before updating. For custom or ownership-unknown content, preserve it, show non-secret differences and let the user keep, merge or replace. Approval to install a skill is not approval to discard customization, and a backup does not replace that choice. Recompare immediately before writing; intervening changes stop that operation. Verify the result and update the local installation record below. No init is needed, and identical/already authorized updates need no repeated questions.
+### 5. Finish with the result
 
-After saving, run **one grouped check of selected endpoints**, not a full doctor survey for each endpoint. Fix relevant schema/semantic errors and check entry existence/version output. `drift` is a compatibility warning, not an automatic requirement to run probes during installation.
+Report applied/written/receipt and unresolved query limitations. The program records actual completed files, ownership, hashes, versions, entry sources and backups; the agent never writes a separate receipt. Saving already validates structure and choices; do not repeat every scan. Use `paidan doctor --endpoint <name>` for concrete remaining problems. No mandatory synthetic task; the first real task can verify invocation. Partial write errors identify completed files and backups; do not blindly roll back later user changes.
 
-Let the installing agent describe the actual outcome in its own words; no fixed closing script or format is required. **Do not send a synthetic task, generate ok.txt, or require a successful model call to finish configuration by default.** The first real task can provide actual-call verification.
+Give a valid example: `paidan run --endpoint <name> --task "task description"`. Do not claim permissions, authentication or unknown capabilities were live-verified.
 
 ## Headless permissions are separate defaults
 
@@ -126,7 +89,7 @@ Keep the established endpoint mappings: seven endpoints default to workspace-wri
 | dsh | Native headless profile/sandbox/settings and inherited DSH_PERMISSION_MODE. No approval channel or unattended preset. Read-only is selectable through the environment, never invented positional flags. |
 | agy | accept-edits plus native allow rules. The verified Windows setup needs read_file(*) and command(*); explain missing rules and obtain consent for the specific native edits. The runtime never broadens them, and declared soft enforcement remains soft. |
 
-Use these defaults without mandatory per-endpoint permission menus; tell users they can adjust them. A one-run change uses --mode; a persistent change uses defaults.modes.<endpoint>, for example `"modes": { "codex": "read-only" }`. Precedence: explicit --mode → defaults.modes → endpoint default. Unsupported selections fail without fallback or escalation. Explicit read-only task scope requires an explicit read-only preset; defaults do not expand the authorized task scope.
+Use these defaults without mandatory per-endpoint permission menus; tell users they can adjust them. A one-run change uses --mode; a persistent change uses endpoints.<endpoint>.mode in setup choices; the program writes defaults.modes. Precedence: explicit --mode → defaults.modes → endpoint default. Unsupported selections fail without fallback or escalation. Explicit read-only task scope requires an explicit read-only preset; defaults do not expand the authorized task scope.
 
 ## Endpoint-specific configuration
 
@@ -140,19 +103,19 @@ Use only the user-selected branches, against the chosen binary and native enviro
 | claude-code | Show native/saved defaults, alias mappings and per-model efforts. API/cloud routing is separate from model selection; login status does not prove the current gateway's billing route or access. | Save a full ID or dynamic alias and native effort, plus defaults.selection_contexts.claude-code from the approved query. Configuration changes require another choice. |
 | opencode | Query resolved configuration in the task directory, native auth-type records and provider/model variants. An implicit native default remains unknown; never pick the first catalog row. Auth records do not prove quota. | Pin the full provider/model, a declared variant and the same query's selection_context. Configuration changes or unavailable selections require a user choice; declared custom variants pass through unchanged. |
 | omp | Inherit OMP_PROFILE; show auth metadata, full selectors and per-model thinking. Read modelRoles.default without guessing fuzzy/role-based/automatic defaults or changing auxiliary roles. | Pin selector, thinking and selection_context. auto is native automatic effort. Multiple native accounts remain managed by OMP; model pinning is not account pinning. Disclose native fallback/role switching, and ask about native edits only if strict pinning is requested. |
-| dsh | Show explicitly configured settings.yaml provider/model entries and the headless default reasoningEffort. Plugin catalogs, complex YAML and profile overrides may lie outside this menu; missing entries are not proof of unavailability. | Follow native. Change combinations in native settings, or obtain consent for a minimal agent-default-model edit. No paidan model/effort overrides or fictitious pinning option; never print credential-bearing dump-config output. |
+| dsh | Show explicitly configured settings.yaml provider/model entries and the headless default reasoningEffort. Plugin catalogs, complex YAML and profile overrides may lie outside this menu; missing entries are not proof of unavailability. | Follow native. Change combinations in native settings, or submit approved native_settings through setup for a minimal agent-default-model edit. Unsupported YAML requires the native settings interface, not an agent-written patch. No paidan model/effort overrides or fictitious pinning option; never print credential-bearing dump-config output. |
 | agy | Show native IDs, display names and ID-encoded effort; match the current display name to the catalog. Unknown account types remain unknown, not assumed Google OAuth. | Pin the full ID plus selection_context. A high/medium/low suffix already chooses the tier; do not ask again or add --effort. Context binding cannot observe every native login change; investigate actual failures. |
 
-Before native changes, identify the exact file/native command, fields and impact, and obtain consent for that change. Preserve unrelated settings. Use native login flows; never request secrets in chat or store them in paidan. Reuse existing setup when no change is needed.
+Native changes are previewed and written by setup. For unsupported settings, use the endpoint’s native settings mechanism; the agent must not improvise JSON/YAML edits or configuration copies. Use native login flows; never request secrets in chat or store them in paidan. Reuse existing setup when no change is needed.
 
 
-Fixed selections for Codex, Claude Code, OpenCode, OMP and AGY store the same models query's selection_context in defaults.selection_contexts.<endpoint>. The installing agent handles this internal field as part of the existing choice, without asking users to copy hashes or confirm again. Use models --cwd <task-directory> for project-sensitive configuration. Kimi validates current model/protocol capabilities; DSH follows native; ZCode retains its approved native JSON workflow.
+Fixed selections for Codex, Claude Code, OpenCode, OMP and AGY store the same models query's selection_context in defaults.selection_contexts.<endpoint>. Setup saves this internal field automatically with the choice; agents do not supply or manually write it, and users never copy hashes or confirm it separately. Use models --cwd <task-directory> for project-sensitive configuration. Kimi validates current model/protocol capabilities; DSH follows native; ZCode retains its approved native JSON workflow.
 
 ## Claude Code: installation and configuration changes
 
 Use the selected CLI's native login/API setup or CC Switch. paidan stores no credentials and does not rewrite native settings. A successful claude auth status does not prove that the current ANTHROPIC_BASE_URL gateway uses that subscription or is callable.
 
-During installation, query `paidan models --endpoint claude-code` and show native/saved defaults, source labels, resolved_model mappings and per-model effort_options. Let the user follow native settings or fix a choice. Tier aliases are dynamic selectors and may all resolve to one model; prefer a discovered full ID when fixing a specific model. Unknown gateway capabilities stay unknown, and candidates are not account-access guarantees.
+During installation, use the Claude Code setup result to show native/saved defaults, source labels, resolved_model mappings and per-model effort_options. Let the user follow native settings or fix a choice. Tier aliases are dynamic selectors and may all resolve to one model; prefer a discovered full ID when fixing a specific model. Unknown gateway capabilities stay unknown, and candidates are not account-access guarantees.
 
 Following native omits defaults.models.claude-code and defaults.efforts.claude-code. A fixed choice stores the approved values and that query's selection_context as defaults.selection_contexts.claude-code. The digest checks user-level routing/model/effort settings, alias mappings, relevant environment, config home and CLI entry; credential values are excluded. Old unbound defaults require a user choice rather than automatic deletion or rebinding.
 
@@ -162,7 +125,7 @@ Effort uses native --effort only, never an injected --settings override of user-
 
 ## Kimi Code endpoint setup
 
-Select the current Kimi Code executable, not a same-named legacy Python kimi-cli. If needed, guide the user through native login or provider setup; paidan never stores API keys. Show each connection's auth_type/protocol, full model alias, resolved_model, model-specific efforts, and native defaults from `paidan models --endpoint kimi-code`. Follow-native omits both overrides. A fixed full alias uses native -m to select its provider, including separate OAuth/API connections; no configuration copy is needed. Editing that native alias definition changes what it routes to, so an alias is not a permanent account/billing lock.
+Select the current Kimi Code executable, not a same-named legacy Python kimi-cli. If needed, guide the user through native login or provider setup; paidan never stores API keys. Show each connection's auth_type/protocol, full model alias, resolved_model, model-specific efforts, and native defaults from the Kimi Code setup result. Follow-native omits both overrides. A fixed full alias uses native -m to select its provider, including separate OAuth/API connections; no configuration copy is needed. Editing that native alias definition changes what it routes to, so an alias is not a permanent account/billing lock.
 
 Authentication and protocol are separate: both Kimi subscription login and Kimi API-key access can use the kimi protocol. Do not classify API-key access as OpenAI protocol automatically. Apply another protocol's capabilities only when the native provider actually declares it; no repeated protocol choice is needed when configuration is clear.
 
@@ -176,24 +139,19 @@ ZCode uses **print only, never app-server**. On the tested desktop 3.12.3 / CLI 
 
 ### Prerequisites
 
-Before installing/connecting paidan, guide the user to configure and enable a working API Key provider in native ZCode Model Settings. For Coding Plan, use its corresponding Coding Plan API Key connection and the [official instructions](https://zcode.z.ai/en/docs/configuration). Distinguish ordinary API billing, Coding Plan API keys and desktop authorization. Users enter keys in the native UI, not in chat.
+Only if setup finds no enabled API provider, guide the user to configure one in native ZCode Model Settings, then query again. Reuse an existing connection. For Coding Plan, use its corresponding Coding Plan API Key connection and the [official instructions](https://zcode.z.ai/en/docs/configuration). Distinguish ordinary API billing, Coding Plan API keys and desktop authorization. Users enter keys in the native UI, not in chat.
 
 Select the real `<install-dir>/resources/glm/zcode.cjs`, asking when multiple installations exist; never create a PATH shim. Keep the companion `resources/config/provider/zcode-builtin.json`. paidan finds it relative to the selected entry and supplies the child environment only, preserving explicit environment values. Doctor checks the resource separately from authentication. Headless mode remains unattended/yolo; unsupported read-only/workspace-write requests are rejected. No mandatory paid test call during installation; skipped verification or exhausted quota does not remove the endpoint.
 
 ### Follow native or use a dedicated JSON
 
-Run `paidan models --endpoint zcode --native` and show provider names/IDs/access types, model candidates and effort_options. This reads local personal rules and bundled templates without starting ZCode or calling a model. Only configured, enabled API providers are listed; do not enable disabled entries. Runtime caches/account access can differ; unknown metadata needs native confirmation.
+Installation uses setup’s native ZCode candidates. After installation, `paidan models --endpoint zcode --native` inspects the original provider rules, bypassing paidan’s dedicated file. Show provider names/IDs/access types, model candidates and effort_options. This reads local personal rules and bundled templates without starting ZCode or calling a model. Only configured, enabled API providers are listed; do not enable disabled entries. Runtime caches/account access can differ; unknown metadata needs native confirmation.
 
 Following native leaves endpoints.overrides.zcode.provider_config unset. Neither mode uses defaults.models.zcode/defaults.efforts.zcode. An inherited ZCODE_PERSONAL_PROVIDER_CONFIG_FILE remains effective unless explicitly bypassed. Native selection is not an OAuth guarantee or a promise to use the first file entry.
 
-For a dedicated profile, let the user select provider, model and effort. Explain its native destination (for example under `~/.zcode/paidan/`), selected combination, and that it copies the selected API connection including its key. After user confirmation, the installing agent creates it without replacing the original v2/provider_config.json, cli/config.json or desktop defaults:
+Use setup's choices file with the selected bin, provider, model and effort. Its preview identifies the native target and discloses the credential copy. After approval, setup extracts only that enabled API provider, preserves both kinds of provider-specific model rules and sets the selected default. The agent need not rediscover the JSON schema or copy a whole native configuration.
 
-1. Select exactly one enabled API provider by ID in the current native provider_config.json. Copy only its complete rule, including templateId/connection settings, and its providerModelRules/manualProviderModelRules. Do not copy unrelated providers or credentials.json.
-2. Use schemaVersion 1. config.providerConfigRules.providerRules contains the selected provider; config.modelConfigRules contains the two filtered arrays; config.defaultModelSelection carries providerId, modelId and options.reasoningLevel. config.providerOrder may contain just the chosen ID. Use the selected candidates, not hardcoded model/effort choices.
-3. Keep the file and backups inside ZCode's native directory. Check destination/parent links cannot redirect credentials outside it. Create new files exclusively; compare existing files and preserve custom edits. Explain fields and obtain the selected scope before replacing them. Never put secrets/file contents into chat, paidan config, the repo or extra logs.
-4. Save only the absolute path in endpoints.overrides.zcode.provider_config, preserving bin and unrelated settings. The runtime passes the path and never copies/updates credentials. Record ownership/path/selection for maintenance and uninstall. A later API-key change requires an approved update to this profile copy.
-
-Neither mode uses paidan --model/--effort overrides for ZCode. The installing agent performs this setup; init does not automatically create credential files.
+The original v2/provider_config.json remains untouched. Dedicated files and backups stay inside the native home; paidan stores only their path. An existing different profile is shown as a backup/update: obtain approval for rebuilding that target. Later key changes require an approved profile resynchronization. Runtime dispatch only passes the path; it never copies or updates credentials. Neither mode adds paidan --model/--effort arguments to ZCode.
 
 ### Actual selection and failure handling
 
@@ -207,13 +165,13 @@ A missing/invalid file, auth/quota or task failure never automatically switches 
 
 The 0.1.8 app-server adapter is removed. With user confirmation, move defaults.models.zcode/defaults.efforts.zcode into a dedicated JSON, then remove those unsupported overrides. Never silently discard them and dispatch elsewhere. Old zapi_ handles cannot resume through print; retain old results and start a new print session.
 
-Current bundles already read v2/provider_config.json. Do not copy it into cli or overwrite cli/config.json. Only confirmed legacy layouts may need a narrowly approved provider merge; that historical workaround is not a universal OAuth fix.
+Current bundles already read v2/provider_config.json. Do not copy it into cli or overwrite cli/config.json. Legacy registries are outside the program writer’s supported scope: use native settings or a compatible version, never an agent-written credential merge.
 
 ## Expand only when needed
 
 ### Fixed models/effort or connection problems
 
-During installation, for customization, or for quota/authentication/model/effort errors, query:
+Use setup for installation and persistent changes. For an already configured endpoint with quota/authentication/model/effort errors, query:
 
 ```sh
 paidan models --endpoint <name>
@@ -223,7 +181,7 @@ Every call reads the current discovery source; `--refresh` is retained for compa
 
 Codex queries the selected CLI's `debug models` and displays each model's `effort_options`, including max/ultra only where declared. The native command may use its own cache or bundled catalog; it does not prove authentication or quota. Older unsupported CLIs expose clearly labelled configuration candidates only. Custom connections without `model_catalog_json` do not inherit the OpenAI catalog; verify additional models/efforts with that provider's native setup or documentation. OpenCode's effort_accepts_custom permits model-defined variants. DSH and ZCode do not accept paidan model/effort overrides; dedicated ZCode selections live in native JSON.
 
-When fixing a Codex model or effort, save that query's `selection_context` unchanged as `defaults.selection_contexts.codex` alongside the approved values. This credential-free digest checks routing configuration, config home, entry, authentication-mode markers and relevant environment changes; it is not proof of account access or billing identity. Changed or unbound old fixed selections return `SELECTION_RECONFIRM_REQUIRED` before dispatch; the worker checks again before launch. Never update the digest merely to silence the check.
+Setup saves the current selection_context together with approved persistent Codex choices; the agent does not write the digest. This credential-free digest checks routing configuration, config home, entry, authentication-mode markers and relevant environment changes; it is not proof of account access or billing identity. Changed or unbound old fixed selections return `SELECTION_RECONFIRM_REQUIRED` before dispatch; the worker checks again before launch. Never update the digest merely to silence the check.
 
 After the user chooses follow-native for this invocation, every endpoint supports `run --native` to bypass saved model and effort overrides together; ZCode also bypasses its dedicated provider JSON. Permissions and saved configuration stay unchanged. A one-run fixed Codex choice can use `--model <model> --effort <effort> --selection-context <current-value>`. Overriding only the model still inherits saved effort, so check the whole combination. Permanent follow-native removes only the approved endpoint overrides and their selection context.
 
@@ -249,24 +207,24 @@ Save run_id and inspect the final state/result. A wait timeout does not authoriz
 
 These workflows are performed by a local agent, without rerunning init or automatically upgrading other software. First identify the selected paidan entry/package version, config_path, actual data directory and installed skill targets. Inspect all nonterminal runs (pending/running/attention), not just the first 50 results: read state files in the confirmed data directory to avoid list's TTL cleanup side effect. Wait for work to finish, or cancel only as explicitly selected by the user and verify process exit, before replacing/removing software. Uninstalling is not cancellation.
 
-### Minimal local installation record
+### Program-maintained installation record
 
-The installing agent merges an install-receipt.json beside config_path: paidan version; each actually installed skill's host, absolute target, installed SHA-256 and prior-file backup if any; approved native file changes with field names, post-change file SHA-256 and backup location inside the native directory. Record successful operations only and retain other hosts' records. Preserve an unreadable/corrupt record rather than replacing it with an empty one.
+Setup and init share the writer, which merges install-receipt.json beside config_path. It records completed files, endpoint/host ownership, hashes, versions and backups; configuration entries include the selected CLI path/source/version. Local changes preserve other entries, and partial failure records completed writes only. An unreadable record is preserved and reported, never replaced with an empty one. Agents do not write or supplement the receipt.
 
-This is agent-maintained, not automatically generated by the CLI, and never authorizes deletion. Store no credentials, native config contents or secret field values. Older installations without records remain maintainable by comparing with the corresponding package version; preserve uncertain/custom files and ask about those differences. Revalidate recorded paths against the actual installation scope; do not recursively follow symlinks/junctions.
+The record contains no credentials or native configuration contents and does not authorize deletion. Old installations without receipts can be compared with packaged files; preserve uncertain/custom files. Writes and backups are per file, not a cross-file transaction. After forced termination, inspect actual files/backups; a missing receipt is not proof that nothing was written.
 
 ### 1. Update paidan
 
 1. Identify the installation being updated and retain its old version/configuration. Back up successfully before any necessary migration; do not rewrite config if no migration is needed.
 2. For npm global installs, use npm install -g paidan@latest (npm.cmd on PowerShell if needed), then verify the actual entry/version. Source installs update/build that checkout while preserving uncommitted work; updating npm is not updating a source checkout.
-3. Sync new packaged skills only into previously user-selected hosts. Missing targets need explanation. If current bytes match the recorded hash/old package, back up and update; if customized or ownership is uncertain, show non-secret differences and let the user keep, merge or replace. Do not use init to bypass the comparison or install into newly discovered hosts.
+3. Sync new packaged skills only into previously user-selected hosts. Missing targets need explanation. Use setup with endpoints:{} and selected hosts to preview updates. Review differences against the receipt/old package; after approval use replace:true. The program compares, backs up, writes and records; do not copy files manually. Do not use init to bypass the comparison or install into newly discovered hosts.
 4. Preserve endpoints, paths, connection/model/effort choices, defaults.modes, dataDir and ttlDays. Explain any changed permission defaults and retain the prior choice instead of silently granting more permission. Migrate only required fields; backup failure or concurrent file changes stop that write until reread/compared.
-5. Update records only for successful operations; retain old entries for failures. Run grouped basic checks on enabled endpoints, without a default model call. Before rollback, verify that the older package supports the current config; never blindly restore the entire old config.
+5. The program updates records for successful writes and preserves entries for failures. Run grouped basic checks on enabled endpoints, without a default model call. Before rollback, verify that the older package supports the current config; never blindly restore the entire old config.
 
 ### 2. Adapt after an upstream CLI update
 
 1. Inspect only the updated endpoint and its native update mechanism, entry, version and configuration. A pinned path is not a pinned version: same-path replacement runs new bytes; versioned paths/old installations may need reselection.
-2. Keep a compatible working entry. If relocation is necessary, show candidates and honor an existing explicit selection or ask the user; change only that endpoint's bin override. Preserve all other settings and never switch account/billing routes automatically.
+2. Keep a compatible working entry. If relocation is necessary, show candidates and honor an existing explicit selection or ask the user; pass only that endpoint’s selected bin to setup for saving. Preserve all other settings and never switch account/billing routes automatically.
 3. Check headless arguments, approval handling, model metadata and output protocol. Doctor drift is advisory, and unchanged CLI versions can still accompany changed desktop resources. ZCode also needs companion resource/provider-layout checks. Do not remove native/organization deny rules for compatibility.
 4. For incompatibility, explain the specific mismatch: the user may update paidan, natively roll back the CLI or defer that endpoint. Do not patch vendor installations or cycle permission modes. Basic checks require no model call; real validation is performed only when explicitly requested.
 
@@ -292,7 +250,7 @@ Preserve partial successes; the agent describes the outcome in its own words.
 | zcode / `zcode` | `<ZCode-install>/resources/glm/zcode.cjs`. Check Program Files, `%LOCALAPPDATA%/Programs/ZCode`, and the user's custom installation directory. Server installations may use `%USERPROFILE%/.zcode/server/agents/glm/zcode.cjs`. Select the CLI bundle, not the desktop exe. |
 | opencode / `opencode` | A discovered native `opencode.exe`; the recorded npm layout is `<npm-root>/opencode-ai/bin/opencode.exe`. Other package managers/layouts require checking their actual entry. |
 | omp / `omp` | `%LOCALAPPDATA%/omp/omp.exe`, or `%PI_INSTALL_DIR%/omp.exe`. The Bun package uses a TypeScript entry requiring Bun; the current paidan bin override does not support that launch recipe. Offer the native binary installation or skip, rather than passing the TS file or bun.exe as bin. |
-| dsh / `dsh` | `%USERPROFILE%/.dsh/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js`; for another profile/package layout inspect its actual `lib/bin.js`. |
+| dsh / `dsh` | Native DSH_HOME/profile, npm layouts and the actual npm cache’s `_npx/<directory>/node_modules/@deepseek-ai/dsh/lib/bin.js`. The program checks package identity and entry presence; a missing cache never authorizes downloading another version. |
 | agy / `agy` | The actual CLI `agy.exe` in its installation directory. No universal default directory is assumed; use discovered entries or ask the user where they installed it. |
 
 These are search hints, not an exhaustive inventory. Expand variables and check user-supplied locations; on POSIX use `type -a` and native package-manager layouts. paidan wraps `.js/.cjs/.mjs` entries with Node automatically.
@@ -301,12 +259,12 @@ These are search hints, not an exhaustive inventory. Expand variables and check 
 
 `effort_options_scope` distinguishes adapter syntax/examples from model compatibility. `effort_accepts_custom` permits native custom variant names where declared; use the selected model’s metadata. `runtime_resources` reports ZCode companion catalog readiness separately from authentication.
 
-`config_path` is the file to edit; honor `PAIDAN_HOME`. `endpoints` contains single matches. `model_selectable`, `effort_options`, and `permission.presets` describe the adapter. `native_defaults` is a partial snapshot; `credential_ready: null` means authentication is unverified. `hosts[].source/target` and `package_root` locate packaged skills and destinations.
+`config_path` is the program-managed configuration location; honor `PAIDAN_HOME`. `endpoints` contains single matches. `model_selectable`, `effort_options`, and `permission.presets` describe the adapter. `native_defaults` is a partial snapshot; `credential_ready: null` means authentication is unverified. `hosts[].source/target` and `package_root` locate packaged skills and destinations.
 
-`ok: true` means doctor ran; `spawn_supported` covers only the launch method. Also read `version_error`, `repair_hint`, and `issues`. Endpoint filtering retains global configuration and host diagnostics, but does not probe unselected endpoints' versions/native state. Backup, copy comparison and JSON validation stay internal to the agent.
+`ok: true` means doctor ran; `spawn_supported` covers only the launch method. Also read `version_error`, `repair_hint`, and `issues`. Endpoint filtering retains global configuration and host diagnostics, but does not probe unselected endpoints' versions/native state. Backup, comparison, validation and installation records are handled by the program.
 
 ### Source installation and optional init
 
 For source, use `npm install`, `npm run build`, then replace every `paidan` invocation in this guide with `node dist/cli.js`; `npm i -g .` is optional. Git is needed only to clone. Use the same installation throughout.
 
-`paidan init` remains an optional terminal shortcut using first-match discovery and may display English. `init --yes` reselects enablement, resets model/effort defaults, and installs selected host skills; do not run it merely to install a skill after careful configuration.
+`paidan init` is an optional terminal UI over the same discovery/planner/writer as setup. Multiple installations require an explicit choice. --yes adds uniquely resolved entries while preserving existing model/effort/context/default choices. Use setup for endpoint-specific maintenance or adding host skills.

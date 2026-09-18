@@ -20,7 +20,8 @@ export function parseOmpModelsJson(text: string): DiscoverModelsResult {
         const e = entry as Record<string, unknown>
         if (typeof e?.selector !== 'string' || !e.selector) continue
         models.push({
-            alias: e.selector, connection: typeof e.provider === 'string' ? e.provider : null,
+            alias: e.selector, ...(typeof e.name === 'string' ? { label: e.name } : {}),
+            connection: typeof e.provider === 'string' ? e.provider : null,
             source: 'native-catalog',
             effort_options: Array.isArray(e.thinking) && e.thinking.every((v) => typeof v === 'string') ? e.thinking : null,
         })
