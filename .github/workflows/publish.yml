@@ -1,0 +1,50 @@
+# 通过 GitHub Actions Trusted Publishing (OIDC) 发布到 npm——无 NPM_TOKEN。
+# npm 侧需先在包级 Settings → Trusted publishing 添加本仓与本工作流
+# （或 `npm trust github paidan --repo wayneg77703/paidan --file publish.yml --allow-publish`）。
+# 触发：创建正式（非 prerelease）GitHub Release；tag 必须等于 package.json 的 version 加 v 前缀。
+name: Publish npm
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Install npm CLI
+        run: npm install --global npm@12.0.2
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+      - name: Check release tag matches package version
+        run: >-
+          node -e "if (process.env.GITHUB_REF_NAME !==
+          'v' + require('./package.json').version) process.exit(1)"
+
+      - name: Stage publish with OIDC (human approves on npm afterwards)
+        run: npm stage publish --access public

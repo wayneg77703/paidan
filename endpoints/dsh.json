@@ -1,0 +1,106 @@
+{
+  "schema_version": "1.0.0",
+  "name": "dsh",
+  "detect": {
+    "bin": "dsh",
+    "version_args": [
+      "--version"
+    ],
+    "version_re": "([0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.]+)?)",
+    "known_paths": [
+      "{home}/.dsh/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js"
+    ],
+    "detect_notes": "Install shape verified 2026-09-10 on this machine: NO PATH shim (`where dsh` finds nothing) and NOT an npm-global layout (`<npm-root>/node_modules/@deepseek-ai` absent), so detect.npm_exe/npm_entry do not apply. The launcher is a Node script under the dsh profile home: ~/.dsh/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js (the retired external-agent-suite dsh adapter's legacyLauncherPath (archived 2026-09-12); a PATH hit would risk binding the wrong binary class, adapter r1 fix 3) — this per-user conventional location is now auto-probed via known_paths. Repair when absent: set endpoints.overrides.dsh.bin in config.json to that JS bundle — spawn.ts wraps .js via process.execPath. `node <bin.js> --version` prints `0.1.2-rc.1` (verified 2026-09-10)."
+  },
+  "command": {
+    "argv": [
+      "{bin}",
+      "--profile",
+      "headless",
+      "{prompt}"
+    ],
+    "prompt_delivery": "argv",
+    "argv_notes": "Headless CLI surface (verified live 2026-09-10 via `<bin> --help` and `--profile headless --help` on 0.1.2-rc.1): `dsh --profile headless [task...]` — the task is the final positional argv value and MULTIPLE positionals are joined into the task text, so paidan declares NO mode_args/model_arg/add_dir_arg: any spliced fragment would silently become prompt content. There are no headless flags for model, permission, or a total timeout (probe report 2026-09-09 eight-agent §6: `--profile`, `--patch` only). Model is profile-selected (settings.yaml agent-default-model); permission is the process-level DSH_PERMISSION_MODE fallback. paidan never passes --patch: the suite's guard patch (cordis.patch.yml hook-external-agent-guard) is retired by decision, and the foreground-settlement patch is suite-managed, not paidan's to ship — see capabilities notes. [2026-09-18 0.1.5-rc.2: P1-write=pass, P2-readonly-refusal=pass, P3-resume=skip. Native settings unchanged. Isolated paidan homes used; model/effort followed the user-selected combination.]",
+    "cwd_arg": null,
+    "mode_env": {
+      "read-only": {
+        "DSH_PERMISSION_MODE": "read-only"
+      }
+    },
+    "mode_env_notes": "Per-preset env splicing (added 2026-09-10) unlocks the read-only tier: DSH_PERMISSION_MODE=read-only is injected only for --mode read-only runs, via ENV not argv — safe against the dsh headless multi-positional trap (any extra argv fragment would be joined into the prompt text; argv_notes). The base profile reads DSH_PERMISSION_MODE at boot as the process-level permission fallback (dsh-base/cordis.patch.yml: mode: process.env.DSH_PERMISSION_MODE ?? 'workspace-write', approval ask unless danger-full-access).",
+    "env": {
+      "DSH_HOME": "{native_default}",
+      "DSH_PERMISSION_MODE": "{native_default}",
+      "DSH_TELEMETRY_DISABLED": "1",
+      "_env_notes": "native_default = paidan does not set the variable (dsh runs against the user's real ~/.dsh: profile, settings.yaml, credentials via apiKeyEnv references — paidan never stages or copies any of it, invariant 3/4). DSH_TELEMETRY_DISABLED=1 matches the suite runner's fixed pin (adapters/dsh.mjs buildProviderEnv). For --mode read-only runs mode_env injects DSH_PERMISSION_MODE=read-only per run (mode_env_notes); for other modes a caller-exported DSH_PERMISSION_MODE still applies verbatim — see permission.presets_notes."
+    },
+    "verified_at": "2026-09-18",
+    "version": "0.1.5-rc.2"
+  },
+  "permission": {
+    "fs.read": {
+      "status": "supported",
+      "via": "workspace-write sandbox tier (native default) allows local reads; suite contract capabilities.local_read=true",
+      "verified_at": "2026-09-18",
+      "version": "0.1.5-rc.2"
+    },
+    "fs.write": {
+      "status": "supported",
+      "via": "workspace-write sandbox tier (dsh-base cordis.patch.yml sandbox-policy default when DSH_PERMISSION_MODE is unset): writes confined to the workspace + temp roots (probe report 2026-09-09 §2); live paidan write run verified 2026-09-10",
+      "verified_at": "2026-09-18",
+      "version": "0.1.5-rc.2"
+    },
+    "shell.exec": {
+      "status": "supported",
+      "via": "headless profile ships bash/pwsh tools; workspace-write+ask runs them foreground, escalation-dependent calls fail closed with no answerer (suite contract capabilities.tests_and_commands=true, 2026-08-21 canary)",
+      "verified_at": "2026-09-09",
+      "version": "0.1.2-rc.1"
+    },
+    "net.fetch": {
+      "status": "unverified",
+      "via": "headless ships web_fetch enabled by default since 0.1.2-rc.1 (probe report 2026-09-09 §5); not covered by paidan P1-P3 probes",
+      "verified_at": "2026-09-09"
+    },
+    "interact.ask": {
+      "status": "unsupported",
+      "via": "headless has no approval channel: approval policy ask fails closed (`sandbox escalation ... requires approval, but no approval channel is available`, suite P2 run 466b67d9, re-verified raw on 0.1.2-rc.1 2026-09-10)",
+      "verified_at": "2026-09-10",
+      "version": "0.1.2-rc.1"
+    },
+    "presets": {
+      "read-only": "supported",
+      "workspace-write": "supported",
+      "unattended": "unsupported"
+    },
+    "presets_notes": "workspace-write = native default tier (no env needed). read-only = DSH_PERMISSION_MODE=read-only injected per run via command.mode_env (env, not argv — the headless positional trap makes argv splicing unsafe): the NATIVE sandbox read-only tier is verified (suite P2 run 466b67d9 2026-09-09: write denied, escalation fail-closed, exit 0; re-verified raw with DSH_PERMISSION_MODE=read-only on 0.1.2-rc.1 2026-09-10; dsh task bare-layer evidence: file not created + sandbox refusal observable). unattended: danger-full-access is deliberately not exposed headless (suite contract required_invocation.task_mode_rule) and there is no approval channel. Probe consequence: P2 runs the live read-only path, P1/P3 tier is workspace-write.",
+    "denial_evidence": {
+      "status": "supported",
+      "via": "sandbox/approval refusals exit 0 and surface in the final text (stdout) with tool-emitted signatures `file access denied under read-only mode` (with or without the `[sandbox: ...]` bracket prefix) and `requires approval, but no approval channel is available`; the parser flags them in-band, detectRefusals covers stderr leakage (suite P2 run 466b67d9 + raw re-verification 2026-09-10)",
+      "verified_at": "2026-09-10",
+      "version": "0.1.2-rc.1"
+    },
+    "default_mode": "workspace-write",
+    "headless_notes": "Headless profile uses native sandbox/settings by default and inherits caller DSH_PERMISSION_MODE. No approval channel or unattended preset. Read-only can be requested via DSH_PERMISSION_MODE=read-only; never splice invented permission flags into positional task text."
+  },
+  "resume": {
+    "kind": "none",
+    "cross_process": false,
+    "notes": "The headless surface returns NO session handle: every run is a fresh Agent by design (suite contract session.supported=false; probe report 2026-09-09 §3: headless 无句柄). The core API ctx.agents.resume exists since 0.1.2-rc.1 and 0.1.3-alpha adds a core-level session lock (same session, at most one process), but neither is exposed on the headless CLI. The 2026-08-26 no-resume decision stands for the headless face. paidan P3 skips on kind!=flag.",
+    "verified_at": "2026-09-10",
+    "version": "0.1.2-rc.1"
+  },
+  "models": {
+    "command": null,
+    "parse": "dsh-native-settings",
+    "notes": "v0: heuristic read of the native $DSH_HOME|~/.dsh/settings.yaml `agent-default-model` block (provider/model/reasoningEffort); dsh is profile-only — no CLI model-list surface and no headless model flag. Credentials are apiKeyEnv references inside settings.yaml; paidan reads names only, never values (invariant 3). Selection = native profile default; no cross-connection fallback."
+  },
+  "parser": "dsh-headless",
+  "parser_notes": "dsh headless emits PLAIN TEXT on stdout (the final assistant message; adapter extractFacts: final = stdout.trim()) and streams reasoning to stderr as `dsh: reasoning:` blocks. No structured events, no session handle, no usage rows (adapter: provider_reports_no_usage -> usage null, source unavailable). A plain-text stream has no structure to violate, so the parser never sets degraded; an empty final is terminal judgment's business. Refusal evidence is in-band in the final text (see permission.denial_evidence).",
+  "capabilities": {
+    "background_native": false,
+    "cancel_native": false,
+    "completed_nonzero_exit": false,
+    "max_run_sec": null,
+    "capabilities_notes": "Stock headless waits only for the root Agent to become idle; subagent/shell background routes CAN outlive the root turn (why the suite ships the foreground-settlement patch). paidan does not inject that patch, so background_native is false and tasks that force background subagents may exit with descendants pending — keep tasks foreground-shaped."
+  }
+}

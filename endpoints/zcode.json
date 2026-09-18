@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.0.0",
+  "name": "zcode",
+  "detect": {
+    "bin": "zcode",
+    "version_args": [
+      "--version"
+    ],
+    "version_re": "([0-9]+\\.[0-9]+\\.[0-9]+)",
+    "known_paths": [
+      "{env:ProgramW6432}/ZCode/resources/glm/zcode.cjs",
+      "{env:ProgramFiles}/ZCode/resources/glm/zcode.cjs",
+      "{env:ProgramFiles(x86)}/ZCode/resources/glm/zcode.cjs",
+      "{env:LOCALAPPDATA}/Programs/ZCode/resources/glm/zcode.cjs",
+      "{home}/.zcode/server/agents/glm/zcode.cjs"
+    ],
+    "detect_notes": "ZCode desktop (observed 3.11.1) ships the CLI only as a node bundle (resources/glm/zcode.cjs; `zcode doctor`: 'default artifact: node-bundle, sea: no'); it installs NO PATH-resolvable zcode binary on Windows (verified 2026-09-10: no zcode on user/machine PATH, and Node >= 20.12 cannot spawn a .cmd/.cjs shim without shell:true). known_paths covers the default system-wide (%ProgramFiles%) and per-user (%LOCALAPPDATA%\\Programs) install dirs; an install on a custom drive/dir still needs the machine config override. Pin the user-selected bundle in endpoints.overrides.zcode.bin (a .cjs is spawned via process.execPath). Use the real bundle file, not a shell wrapper. [2026-09-13: known_paths 增补 {home}/.zcode/server/agents/glm/zcode.cjs——zcode server/远程模式下的实测布局(Linux 真机,0.16.5 可用;非桌面 Linux 标准安装位,桌面版仍走前四条 Windows 位;若 zcode 远端布局有变,按 endpoints.overrides.zcode.bin 补)。此前四条均为 Windows 桌面安装位,Linux 上无法探测(首发 Linux 实测抓到的缺口)。] Headless authentication must be provisioned through the selected CLI’s native setup. Desktop login alone may not suffice; paidan does not copy credentials. credential_ready is null (unverified): only a real run verifies the selected configuration."
+  },
+  "command": {
+    "argv": [
+      "{bin}",
+      "-p",
+      "{prompt}",
+      "--json",
+      "--disallowed-tools",
+      "Agent Task TaskStop TaskOutput CronCreate CronUpdate CronDelete SendMessage"
+    ],
+    "prompt_delivery": "argv",
+    "mode_args": {
+      "unattended": [
+        "--mode",
+        "yolo"
+      ]
+    },
+    "argv_notes": "Evidence: the retired external-agent-suite zcode adapter:258-265 (buildInvocation) + contracts required_invocation.argv_order, archived 2026-09-12: headless print is `-p <prompt> --mode yolo --json --cwd <cwd> --disallowed-tools <space-joined denylist>`; `--resume <sessionId>` is appended when continuing. CLI 0.16.5 --help (probed 2026-09-10) confirms -p/--print, --mode build|edit|plan|yolo (default yolo for --prompt), --json, --disallowed-tools as comma-or-space list. Dead flags that must never be emitted: --max-turns, --permission-mode, --allowed-tools (the retired suite adapter's DEAD_FLAGS list, archived 2026-09-12; they parse but are inert). --cwd is omitted: the worker already spawns with cwd=request.cwd and zcode sessions are cwd-bound (cwd_arg below is informational only in v0). Print with a dedicated native JSON was live-verified 2026-09-18: write, read-only submit refusal and cross-process resume passed; per-turn ledger confirms the selected provider/model/effort. No original native configuration was changed.",
+    "cwd_arg": null,
+    "env": {
+      "ZCODE_CLI_DISABLE_AUTO_UPDATE": "1",
+      "ZCODE_CLI_DISABLE_TELEMETRY": "1",
+      "ZCODE_MODEL": "{native_default}",
+      "ZCODE_BASE_URL": "{native_default}",
+      "ANTHROPIC_API_KEY": "{native_default}",
+      "_env_notes": "{native_default} means paidan never sets the variable; inherited values pass through. Historical 2026-09-10 bundles used ZCODE_MODEL/ZCODE_BASE_URL/ANTHROPIC_API_KEY or cli/config.json. Do not prescribe that surface for every CLI reporting 0.16.5: the desktop bundle inspected 2026-09-17 uses provider rules/defaultModelSelection and standalone native account credentials, and does not consume ZCODE_MODEL as a model selector. Inspect the selected bundle and native setup; desktop OAuth login, Coding Plan API-key access and ordinary API access are distinct. paidan never reads, stages or proxies credentials. Print mode follows native. A selected native provider JSON is passed through ZCODE_PERSONAL_PROVIDER_CONFIG_FILE; no runtime credential copying and no automatic profile fallback."
+    },
+    "verified_at": "2026-09-18",
+    "version": "0.16.5"
+  },
+  "permission": {
+    "fs.read": {
+      "status": "supported",
+      "via": "--mode yolo (native Full Access; ordinary tools autoallowed without per-call permit)",
+      "verified_at": "2026-09-18",
+      "version": "0.16.5"
+    },
+    "fs.write": {
+      "status": "supported",
+      "via": "--mode yolo (native Full Access; ordinary tools autoallowed without per-call permit); live: paidan run_20260910_43acbea2 (unattended) created the declared deliverable and completed, parser not degraded",
+      "verified_at": "2026-09-18",
+      "version": "0.16.5"
+    },
+    "shell.exec": {
+      "status": "supported",
+      "via": "--mode yolo (Bash tool autoallowed)",
+      "verified_at": "2026-09-09",
+      "version": "0.16.5"
+    },
+    "net.fetch": {
+      "status": "supported",
+      "via": "--mode yolo (live public web observed in suite capability matrix)",
+      "verified_at": "2026-09-09",
+      "version": "0.16.5"
+    },
+    "interact.ask": {
+      "status": "unverified",
+      "via": "headless AskUserQuestion receives permission_denied (2026-09-09 probe report); v1 marks interact.ask unverified on all endpoints",
+      "verified_at": "2026-09-10"
+    },
+    "presets": {
+      "read-only": "unsupported",
+      "workspace-write": "unsupported",
+      "unattended": "supported"
+    },
+    "presets_notes": "By design: zcode permission requests have NO timeout and wait forever, so headless plan/edit (read-only/workspace-write) deadlock instead of enforcing — the eight-agent probe (2026-09-09 report §1) and the suite gateway both reject non-yolo presets before submission. yolo is the only enforceable headless preset. This is the intended endpoint shape, not a gap.",
+    "denial_evidence": {
+      "status": "unverified",
+      "via": "no endpoint refusal signal observed for headless yolo in 0.16.5; parser detectRefusals is an honest no-op until a real refusal shape is observed",
+      "verified_at": "2026-09-10"
+    },
+    "default_mode": "unattended",
+    "headless_notes": "Headless delegation supports only yolo, exposed as the endpoint default unattended. Native plan/edit can wait for approvals that paidan cannot answer. Explicit read-only/workspace-write requests remain rejected."
+  },
+  "resume": {
+    "kind": "flag",
+    "args": [
+      "--resume",
+      "{session}"
+    ],
+    "cross_process": true,
+    "notes": "Native CLI flag `--resume <sessionId>` exists (0.16.5 --help: 'Resume a persisted session by sessionId (sess_...)'). Sessions are cwd-bound (`-c/--continue` = 'resume the latest session for the current directory'); resume a run with the same cwd as its source. sessionId is extracted from the envelope sessionId field (sess_ prefix). Suite contract additionally pins same identity/mode/tool-policy/model and prior terminal state; model/permission inheritance on resume is officially unspecified. Concurrent runs on one session handle are forbidden (per-session preempt lock, bridge issue #41). Live-verified through paidan 2026-09-10: run_20260910_07255be6 (remember codename) -> run_20260910_dba2b11b (--resume same sess_ handle, same cwd) recalled the codename exactly, state completed. Former 0.1.8 zapi_ app-server handles are rejected; start a fresh print session. A resumed print session may retain its previous model; inspect per-turn selection evidence.",
+    "verified_at": "2026-09-18",
+    "version": "0.16.5"
+  },
+  "models": {
+    "command": null,
+    "parse": "zcode-native-config",
+    "notes": "Read configured/enabled API providers and candidate model/effort metadata from the selected installation bundled templates and native personal rules. Never start app-server for discovery. Account state and newer cached templates may differ; candidates do not prove access. No print model/effort argv overrides."
+  },
+  "parser": "zcode-print",
+  "parser_notes": "--json emits exactly one pretty-printed JSON envelope on stdout with fields sessionId/traceId/turnId/response/usage/projection (adapter extractFacts required list, zcode.mjs:432; observed live 2026-09-10, CLI 0.16.5). usage is camelCase (inputTokens/outputTokens/cacheReadTokens) -> UsageSummary with source 'provider'. Anything else on stdout degrades the parser (terminal judgment then cannot be exit-code-based).",
+  "capabilities": {
+    "background_native": false,
+    "cancel_native": false,
+    "completed_nonzero_exit": false
+  }
+}

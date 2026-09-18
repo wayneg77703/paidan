@@ -1,0 +1,261 @@
+// Run-store round trips against a throwaway tmp data dir. Never touches
+// %APPDATA% or a real agent.
+
+import assert from 'node:assert/strict'
+import * as fs from 'node:fs/promises'
+import * as os from 'node:os'
+import * as nodePath from 'node:path'
+import { test } from 'node:test'
+import { RunStore, requestFingerprint, StoreCorruptError } from '../dist/engine/run-store.js'
+import { canTransition, transitionRecord } from '../dist/engine/state-machine.js'
+
+async function tmpStore(ttlDays = 30) {
+    const dir = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-test-'))
+    return { dir, store: new RunStore(dir, { ttlDays }) }
+}
+
+const BASE_INPUT = {
+    endpoint: 'kimi-code',
+    cwd: 'D:/work/thing',
+    add_dirs: [],
+    task_file: null,
+    task_text: 'summarize this repo',
+    mode: 'workspace-write',
+    model: null,
+    effort: null,
+    resume_session: null,
+    deliverables: [],
+    warnings: [],
+}
+
+test('create writes request.json + state.json (pending) with stable fingerprint', async () => {
+    const { dir, store } = await tmpStore()
+    try {
+        const { request, state, created } = await store.create(BASE_INPUT, '2026-09-10T00:00:00.000Z')
+        assert.equal(created, true)
+        assert.match(request.run_id, /^run_\d{8}_[0-9a-f]{8}$/)
+        assert.equal(state.state, 'pending')
+        assert.equal(
+            request.fingerprint,
+            requestFingerprint('kimi-code', 'D:/work/thing', 'summarize this repo', 'workspace-write'),
+        )
+        const diskReq = JSON.parse(await fs.readFile(nodePath.join(dir, 'runs', request.run_id, 'request.json'), 'utf8'))
+        assert.equal(diskReq.run_id, request.run_id)
+        const diskState = JSON.parse(await fs.readFile(nodePath.join(dir, 'runs', request.run_id, 'state.json'), 'utf8'))
+        assert.equal(diskState.state, 'pending')
+        assert.equal(diskState.terminal_at, null)
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})
+
+test('idempotent submit: identical fingerprint on a non-terminal run returns that run', async () => {
+    const { dir, store } = await tmpStore()
+    try {
+        const first = await store.create(BASE_INPUT)
+        const second = await store.create(BASE_INPUT)
+        assert.equal(second.created, false)
+        assert.equal(second.request.run_id, first.request.run_id)
+        const other = await store.create({ ...BASE_INPUT, task_text: 'different task' })
+        assert.equal(other.created, true)
+        assert.notEqual(other.request.run_id, first.request.run_id)
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})
+
+test('idempotent submit does NOT match a terminal run', async () => {
+    const { dir, store } = await tmpStore()
+    try {
+        const first = await store.create(BASE_INPUT)
+        const running = transitionRecord(first.state, 'running', new Date().toISOString())
+        const done = transitionRecord(running, 'completed', new Date().toISOString())
+        await store.writeState(done)
+        const second = await store.create(BASE_INPUT)
+        assert.equal(second.created, true)
+        assert.notEqual(second.request.run_id, first.request.run_id)
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})
+
+test('state machine: legal transitions enforced', async () => {
+    const { dir, store } = await tmpStore()
+    try {
+        const { state } = await store.create(BASE_INPUT)
+        assert.equal(canTransition('pending', 'running'), true)
+        assert.equal(canTransition('running', 'pending'), false)
+        assert.equal(canTransition('completed', 'running'), false)
+        assert.equal(canTransition('attention', 'cancelled'), true)
+        assert.equal(canTransition('attention', 'running'), false)
+        const running = transitionRecord(state, 'running', new Date().toISOString(), {
+            worker: { pid: 1234, started_at: new Date().toISOString(), endpoint_pid: 5678 },
+        })
+        await store.writeState(running)
+        const done = transitionRecord(running, 'unknown', new Date().toISOString())
+        assert.ok(done.terminal_at)
+        await store.writeState(done)
+        assert.throws(() => transitionRecord(done, 'running', new Date().toISOString()), /illegal transition/)
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})
+
+test('result.json is write-once: identical rewrite is a no-op, conflicting rewrite throws', async () => {
+    const { dir, store } = await tmpStore()
+    try {
+        const { request } = await store.create(BASE_INPUT)
+        const result = {
+            schema_version: '1.0.0',
+            run_id: request.run_id,
+            state: 'unknown',
+            exit_code: 0,
+            final_text: '',
+            evidence: { deliverables: [], refusals: [], parser: { type: 'kimi-print', degraded: false }, notes: ['x'] },
+            usage: { input_tokens: null, output_tokens: null, cached_input_tokens: null, cost: null, source: 'unavailable' },
+            session_handle: null,
+            terminal_at: new Date().toISOString(),
+        }
+        const fresh = await store.settleResult(result)
+        assert.equal(fresh.own, true)
+        const again = await store.settleResult(result) // identical: idempotent own:true
+        assert.equal(again.own, true)
+        const conflict = await store.settleResult({ ...result, final_text: 'different' })
+        assert.equal(conflict.own, false)
+        assert.equal(conflict.winner.state, 'unknown')
+        const read = await store.readResult(request.run_id)
+        assert.equal(read.state, 'unknown')
+        // settlement leaves no stray tmp directory entries
+        const entries = await fs.readdir(store.runDir(request.run_id))
+        assert.ok(!entries.some((e) => e.includes('.tmp')), `stray tmp: ${entries.join(',')}`)
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})
+
+test('events.jsonl appends and reads back', async () => {
+    const { dir, store } = await tmpStore()
+    try {
+        const { request } = await store.create(BASE_INPUT)
+        await store.appendEvent(request.run_id, { ts: 't1', type: 'spawn', pid: 42 })
+        await store.appendEvent(request.run_id, { ts: 't2', type: 'terminal', state: 'completed' })
+        const events = await store.readEvents(request.run_id)
+        assert.equal(events.length, 2)
+        assert.equal(events[1].type, 'terminal')
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})
+
+test('list() piggy-backs TTL cleanup: old terminal runs are removed, fresh ones kept', async () => {
+    const { dir, store } = await tmpStore(30)
+    try {
+        const old = await store.create(BASE_INPUT)
+        const fresh = await store.create({ ...BASE_INPUT, task_text: 'fresh task' })
+        const oldTerminal = {
+            ...(await store.readState(old.request.run_id)),
+            state: 'completed',
+            terminal_at: new Date(Date.now() - 40 * 24 * 3600 * 1000).toISOString(),
+            updated_at: new Date(Date.now() - 40 * 24 * 3600 * 1000).toISOString(),
+        }
+        await store.writeState(oldTerminal)
+        const freshTerminal = {
+            ...(await store.readState(fresh.request.run_id)),
+            state: 'failed',
+            terminal_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+        }
+        await store.writeState(freshTerminal)
+        const listed = await store.list()
+        const ids = listed.map((s) => s.run_id)
+        assert.ok(!ids.includes(old.request.run_id), 'expired terminal run should be cleaned')
+        assert.ok(ids.includes(fresh.request.run_id), 'fresh terminal run should be kept')
+        await assert.rejects(fs.stat(store.runDir(old.request.run_id)))
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})
+
+test('unsafe run_id is rejected', async () => {
+    const { dir, store } = await tmpStore()
+    try {
+        await assert.rejects(store.readState('../escape'), /unsafe run_id/)
+        await assert.rejects(store.readState('run_20260910_zzzzzzzz'), /unsafe run_id/)
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})
+
+test('concurrent create with the same fingerprint: exactly one creates, the other joins it', async () => {
+    const { dir, store } = await tmpStore()
+    try {
+        const [a, b] = await Promise.all([store.create(BASE_INPUT), store.create(BASE_INPUT)])
+        const winners = [a, b].filter((o) => o.created)
+        assert.equal(winners.length, 1, 'exactly one concurrent create may win')
+        assert.equal(a.request.run_id, b.request.run_id, 'the loser joins the winner\'s run')
+        // the mutex is released once state.json is on disk
+        const hex = requestFingerprint(BASE_INPUT.endpoint, BASE_INPUT.cwd, BASE_INPUT.task_text, BASE_INPUT.mode)
+            .replace(/^sha256:/, '')
+        await assert.rejects(fs.stat(nodePath.join(dir, 'locks', hex)), 'create lock released')
+        // after the run goes terminal a resubmit creates a fresh run (no lock residue)
+        const running = transitionRecord(winners[0].state, 'running', new Date().toISOString())
+        await store.writeState(transitionRecord(running, 'completed', new Date().toISOString()))
+        const third = await store.create(BASE_INPUT)
+        assert.equal(third.created, true)
+        assert.notEqual(third.request.run_id, a.request.run_id)
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})
+
+test('a stale create lock (creator crashed) is broken, not waited on', async () => {
+    const { dir, store } = await tmpStore()
+    try {
+        const hex = requestFingerprint(BASE_INPUT.endpoint, BASE_INPUT.cwd, BASE_INPUT.task_text, BASE_INPUT.mode)
+            .replace(/^sha256:/, '')
+        const lockPath = nodePath.join(dir, 'locks', hex)
+        await fs.mkdir(lockPath, { recursive: true })
+        await fs.writeFile(nodePath.join(lockPath, 'created_at'), new Date(Date.now() - 120_000).toISOString(), 'utf8')
+        const started = Date.now()
+        const outcome = await store.create(BASE_INPUT)
+        assert.equal(outcome.created, true)
+        assert.ok(Date.now() - started < 5_000, 'stale lock must be broken immediately, not polled for the full wait')
+        await assert.rejects(fs.stat(lockPath), 'create lock released after the create')
+    } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+    }
+})
+
+test('settleResult: concurrent conflicting writes — exactly one wins, the other adopts it (own:false)', async () => {
+    const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'paidan-wr-'))
+    try {
+        const store = new RunStore(root, {})
+        const mk = (state, note) => ({
+            schema_version: '1.0.0', run_id: 'run_20260910_deadbeef', state, exit_code: 0,
+            final_text: note,
+            evidence: { deliverables: [], refusals: [], parser: { type: 'none', degraded: false }, notes: [note] },
+            usage: { input_tokens: null, output_tokens: null, cached_input_tokens: null, cost: null, source: 'unavailable' },
+            session_handle: null, terminal_at: new Date().toISOString(),
+        })
+        await fs.mkdir(store.runDir('run_20260910_deadbeef'), { recursive: true })
+        const [r1, r2] = await Promise.all([
+            store.settleResult(mk('completed', 'from-worker')),
+            store.settleResult(mk('cancelled', 'from-cli-fallback')),
+        ])
+        // exactly one own:true; the loser gets own:false with the winner's record
+        const owners = [r1, r2].filter((r) => r.own)
+        assert.equal(owners.length, 1)
+        const loser = r1.own ? r2 : r1
+        assert.equal(loser.own, false)
+        assert.equal(loser.winner.state, (owners[0]).winner.state)
+        // the surviving record is exactly one of the two candidates
+        const final = JSON.parse(await fs.readFile(store.resultPath('run_20260910_deadbeef'), 'utf8'))
+        assert.ok(['completed', 'cancelled'].includes(final.state))
+        // a sequential conflicting write adopts the on-disk winner (own:false)
+        const late = await store.settleResult(mk('failed', 'late-conflict'))
+        assert.equal(late.own, false)
+        assert.equal(late.winner.state, final.state)
+    } finally {
+        await fs.rm(root, { recursive: true, force: true })
+    }
+})

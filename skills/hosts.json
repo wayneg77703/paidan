@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0.0",
+  "skill": {
+    "source": "skills/paidan/SKILL.md",
+    "dir_name": "paidan"
+  },
+  "hosts": [
+    {
+      "name": "kimi-code",
+      "skills_dir": "{home}/.kimi-code/skills",
+      "verified_at": "2026-09-10",
+      "notes": "Kimi Code user-scope skills directory; <skills_dir>/paidan/SKILL.md is listed at session start (deployed and observed live 2026-09-10).",
+      "source": "skills/paidan/variants/kimi-code.SKILL.md"
+    },
+    {
+      "name": "claude-code",
+      "skills_dir": "{home}/.claude/skills",
+      "verified_at": "2026-09-10",
+      "notes": "Claude Code user-scope skills directory (<name>/SKILL.md layout; observed populated on this machine 2026-09-10).",
+      "source": "skills/paidan/variants/claude-code.SKILL.md"
+    },
+    {
+      "name": "zcode",
+      "skills_dir": "{home}/.zcode/skills",
+      "verified_at": "2026-09-10",
+      "notes": "ZCode user-scope skills directory (<name>/SKILL.md layout; observed populated on this machine 2026-09-10).",
+      "source": "skills/paidan/variants/zcode.SKILL.md"
+    },
+    {
+      "name": "codex",
+      "skills_dir": "{home}/.codex/skills",
+      "verified_at": "2026-09-13",
+      "notes": "Codex 旧位置(官方 deprecated 但仍扫描);刻意保留以维持按宿主隔离——~/.agents/skills 为多家共享扫描位,不放各家原生变体。",
+      "source": "skills/paidan/variants/codex.SKILL.md"
+    },
+    {
+      "name": "dsh",
+      "skills_dir": "{home}/.dsh/skills",
+      "verified_at": "2026-09-10",
+      "notes": "dsh user-scope skills directory (<name>/SKILL.md layout; observed populated on this machine 2026-09-10).(2026-09-13:dsh 官方文档化 whenToUse 为可选字段,保留。)",
+      "source": "skills/paidan/variants/dsh.SKILL.md"
+    },
+    {
+      "name": "opencode",
+      "skills_dir": "{home}/.config/opencode/skills",
+      "verified_at": "2026-09-10",
+      "notes": "opencode global skills directory per the official docs (https://opencode.ai/docs/skills: ~/.config/opencode/skills/<name>/SKILL.md); convention verified against the vendor documentation 2026-09-10.",
+      "source": "skills/paidan/variants/opencode.SKILL.md"
+    },
+    {
+      "name": "agy",
+      "skills_dir": "{home}/.gemini/config/skills",
+      "verified_at": "2026-09-10",
+      "notes": "Antigravity (agy) global customization discovery at ~/.gemini/config/ with skills as <name>/SKILL.md, per agy's own builtin agy-customizations guide (read on this machine 2026-09-10).",
+      "source": "skills/paidan/variants/agy.SKILL.md"
+    },
+    {
+      "name": "omp",
+      "skills_dir": "{home}/.omp/agent/skills",
+      "verified_at": "2026-09-10",
+      "notes": "oh-my-pi user-authored skills directory; the discovery loader does a user-level scan of ~/.omp/agent/skills/ (oh-my-pi source, packages/coding-agent/src/discovery/builtin.ts, read 2026-09-10).",
+      "source": "skills/paidan/variants/omp.SKILL.md"
+    }
+  ]
+}
