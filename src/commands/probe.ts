@@ -8,13 +8,60 @@ import { effectiveRunTimeoutSec } from '../engine/config.js'
 import { writeJsonAtomic } from '../engine/run-store.js'
 import { isTerminal, transitionRecord } from '../engine/state-machine.js'
 import { waitForTerminal, resultOrNull, launchWorkerFor, terminateRecordedEndpoint, writeCancelledDirect } from '../engine/run-control.js'
-import type { PermissionPreset, RunResult, RunStateRecord } from '../engine/types.js'
+import type { PermissionPreset, RunResult, RunState, RunStateRecord } from '../engine/types.js'
 import { pickProbePreset, checkPermission } from '../endpoints/invocation.js'
 import { refreshManifestVerifiedAt } from '../endpoints/registry.js'
 import { planEndpointSpawn } from '../endpoints/spawn.js'
 import { detectVersion } from '../endpoints/inspection.js'
 import { resolveSelection } from '../endpoints/selection.js'
 import { emitOk, pickEndpoint, type Ctx } from './context.js'
+
+const CONFIG_BLOCKERS = ['SELECTION_RECONFIRM_REQUIRED', 'MODEL_UNSUPPORTED', 'MODEL_UNAVAILABLE', 'EFFORT_UNSUPPORTED', 'EFFORT_INVALID', 'MODELS_QUERY_FAILED'] as const
+type ProbeBlocker = 'provider-authentication-error' | 'provider-quota-error' | 'provider-eligibility-error' | typeof CONFIG_BLOCKERS[number]
+
+/** Only explicit provider/account failures stop later paid probes; never echo login URLs. */
+export function probeBlocker(result: Pick<RunResult, 'evidence'> | null): ProbeBlocker | null {
+    const text = [...(result?.evidence.notes ?? []), ...(result?.evidence.refusals ?? [])].join('\n')
+    if (/eligibility check failed|account is not eligible|account (?:verification|validation) required/i.test(text)) return 'provider-eligibility-error'
+    if (/provider-auth-error|invalid[_ -]api[_ -]?key|api key is invalid|incorrect api key|401\s+unauthorized|authentication (?:failed|error|required)|unauthenticated|(?:http(?:[_ -]status)?|status(?: code)?)[=: ]+401\b/i.test(text)) return 'provider-authentication-error'
+    if (/insufficient[_ -]quota|quota (?:exceeded|exhausted)|rate[_ -]limit[_ -](?:exceeded|error)|resource_exhausted|insufficient (?:credits|balance)|(?:http(?:[_ -]status)?|status(?: code)?)[=: ]+429\b/i.test(text)) return 'provider-quota-error'
+    return null
+}
+
+const WRITE_DENIALS = new Set([
+    'sandbox-file-access-denied', 'approval-channel-unavailable', 'sandbox-write-blocked',
+    'approval-settings-rejected', 'headless-permission-auto-deny',
+])
+const WRITE_TOOL_DENIAL = /^(?:denied|permission-error|approval-unavailable-headless):(?:write|edit|write_file|write_to_file|edit_file|replace_file_content|multi_replace_file_content|apply_patch|run_command|exec_command|execute_command|bash|shell|powershell)$/i
+
+/** No file is not proof of enforcement: require an attributable, intact refusal. */
+export function readonlyProbeVerdict(input: {
+    fileCreated: boolean; state: RunState | null; result: RunResult | null; timedOut: boolean
+}): { verdict: 'pass' | 'fail' | 'indeterminate'; reason: string } {
+    if (input.fileCreated) return { verdict: 'fail', reason: 'write-succeeded-in-readonly' }
+    const blocker = probeBlocker(input.result)
+    if (blocker) return { verdict: 'indeterminate', reason: blocker }
+    const evidence = input.result?.evidence
+    const interrupted = input.state === 'cancelled' || input.result?.state === 'cancelled' || input.result?.exit_code === null
+        || [...(evidence?.notes ?? []), ...(evidence?.refusals ?? [])].some(text =>
+            /run timeout after|print-timeout-partial-output|wait timed out|terminated by signal|run interrupted/i.test(text))
+    if (!input.state || !isTerminal(input.state) || input.timedOut || interrupted) {
+        return { verdict: 'indeterminate', reason: 'probe-not-finished' }
+    }
+    if (!evidence || evidence.parser.degraded || evidence.notes.some(text => /no result event|stdout ended mid-line|stream may be incomplete|expected one result event/i.test(text))) return { verdict: 'indeterminate', reason: 'parser-evidence-incomplete' }
+    if (evidence.refusals.some(signal => WRITE_DENIALS.has(signal) || WRITE_TOOL_DENIAL.test(signal))) {
+        return { verdict: 'pass', reason: 'attributable-write-refusal' }
+    }
+    return { verdict: 'indeterminate', reason: 'no-attributable-write-refusal' }
+}
+
+export function probeError(err: unknown): { blocker: ProbeBlocker | null; detail: string; error_code?: string } {
+    const configurationBlocker = err instanceof PaidanError ? CONFIG_BLOCKERS.find(code => code === err.code) : undefined
+    if (configurationBlocker) return { blocker: configurationBlocker, detail: configurationBlocker, error_code: configurationBlocker }
+    const message = err instanceof Error ? err.message : String(err)
+    const blocker = probeBlocker({ evidence: { notes: [message], refusals: [], deliverables: [], parser: { type: 'probe', degraded: true } } })
+    return { blocker, detail: blocker ?? message.replace(/https?:\/\/\S+/gi, '[URL omitted]'), ...(err instanceof PaidanError ? { error_code: err.code } : {}) }
+}
 
 export async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
     const { values } = parseArgs({
@@ -32,7 +79,7 @@ export async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
     }
     const configBin = ctx.config.endpoints.overrides[manifest.name]?.bin ?? null
     const spawnRes = await planEndpointSpawn(manifest, { configBin })
-    const probes: Array<{ name: string; verdict: 'pass' | 'fail' | 'skip' | 'indeterminate'; detail: string; run_ids?: string[] }> = []
+    const probes: Array<{ name: string; verdict: 'pass' | 'fail' | 'skip' | 'indeterminate'; detail: string; run_ids?: string[]; error_code?: string }> = []
     if (!spawnRes.plan) {
         emitOk({
             endpoint: manifest.name,
@@ -111,6 +158,8 @@ export async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
         return true
     }
 
+    let blocked: ProbeBlocker | null = null
+
     // P1 write contract
     if (probePreset === null) {
         probes.push({ name: 'P1-write', verdict: 'skip', detail: 'endpoint supports no permission preset' })
@@ -122,16 +171,19 @@ export async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
                 `Create a file named probe-write.txt in the current directory whose entire content is exactly: ${token} Then reply "done".`,
                 { cwd: p1cwd, deliverables: [{ path: 'probe-write.txt', expected: token }] },
             )
+            blocked = probeBlocker(r.result)
             const found = r.result?.evidence.deliverables.every((d) => d.found) ?? false
             const cleaned = await cleanProbeCwd(p1cwd, r)
             probes.push({
                 name: 'P1-write',
-                verdict: r.state?.state === 'completed' && found && !r.timedOut ? 'pass' : r.timedOut ? 'indeterminate' : 'fail',
+                verdict: r.state?.state === 'completed' && found && !r.timedOut && !r.result?.evidence.parser.degraded && !blocked ? 'pass' : r.timedOut ? 'indeterminate' : 'fail',
                 run_ids: [r.runId],
-                detail: `preset=${probePreset} state=${r.state?.state ?? 'none'} deliverable_found=${found}${r.timedOut ? ' wait_timed_out (run cancelled)' : ''}${cleaned ? '' : ` scratch kept: ${p1cwd}`}`,
+                detail: `${blocked ? `blocked=${blocked} ` : ''}preset=${probePreset} state=${r.state?.state ?? 'none'} deliverable_found=${found}${r.timedOut ? ' wait_timed_out (run cancelled)' : ''}${cleaned ? '' : ` scratch kept: ${p1cwd}`}`,
             })
         } catch (err) {
-            probes.push({ name: 'P1-write', verdict: 'fail', detail: err instanceof Error ? err.message : String(err) })
+            const failure = probeError(err)
+            blocked ??= failure.blocker
+            probes.push({ name: 'P1-write', verdict: 'fail', detail: failure.detail, error_code: failure.error_code })
         }
     }
 
@@ -142,8 +194,12 @@ export async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
             if (check.ok) throw new Error('read-only check unexpectedly passed')
             probes.push({ name: 'P2-readonly-refusal', verdict: 'pass', detail: `submit refused: ${check.missing.join(', ')}` })
         } catch (err) {
-            probes.push({ name: 'P2-readonly-refusal', verdict: 'fail', detail: err instanceof Error ? err.message : String(err) })
+            const failure = probeError(err)
+            blocked ??= failure.blocker
+            probes.push({ name: 'P2-readonly-refusal', verdict: 'fail', detail: failure.detail, error_code: failure.error_code })
         }
+    } else if (blocked) {
+        probes.push({ name: 'P2-readonly-refusal', verdict: 'skip', detail: `blocked=${blocked}; no further live probe submitted`, error_code: CONFIG_BLOCKERS.find(code => code === blocked) })
     } else {
         // Live P2: "no file" alone proves nothing — auth failure, a wedged run or
         // a parser miss all look the same. pass needs the task terminal AND
@@ -155,28 +211,27 @@ export async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
                 { cwd: p2cwd, mode: 'read-only' },
             )
             const fileCreated = await fs.stat(nodePath.join(p2cwd, 'probe-ro.txt')).then(() => true, () => false)
-            const refusals = r.result?.evidence.refusals ?? []
-            const terminal = r.state !== null && isTerminal(r.state.state)
-            let verdict: 'pass' | 'fail' | 'indeterminate'
-            if (fileCreated) verdict = 'fail'
-            else if (!terminal || r.timedOut) verdict = 'indeterminate'
-            else if (refusals.length > 0) verdict = 'pass'
-            else verdict = 'indeterminate'
+            blocked = probeBlocker(r.result)
+            const { verdict, reason } = readonlyProbeVerdict({ fileCreated, state: r.state?.state ?? null, result: r.result, timedOut: r.timedOut })
             const cleaned = await cleanProbeCwd(p2cwd, r)
             probes.push({
                 name: 'P2-readonly-refusal',
                 verdict,
                 run_ids: [r.runId],
-                detail: `file_created=${fileCreated} state=${r.state?.state ?? 'none'} refusals=${refusals.join('|') || 'none-observed'}${verdict === 'indeterminate' ? ' — no attributable refusal evidence, permission enforcement unverified' : ''}${r.timedOut ? ' wait_timed_out (run cancelled)' : ''}${cleaned ? '' : ` scratch kept: ${p2cwd}`}`,
+                detail: `file_created=${fileCreated} state=${r.state?.state ?? 'none'} reason=${reason}${verdict === 'indeterminate' ? ' — no attributable refusal evidence, permission enforcement unverified' : ''}${r.timedOut ? ' wait_timed_out (run cancelled)' : ''}${cleaned ? '' : ` scratch kept: ${p2cwd}`}`,
             })
         } catch (err) {
-            probes.push({ name: 'P2-readonly-refusal', verdict: 'fail', detail: err instanceof Error ? err.message : String(err) })
+            const failure = probeError(err)
+            blocked ??= failure.blocker
+            probes.push({ name: 'P2-readonly-refusal', verdict: 'fail', detail: failure.detail, error_code: failure.error_code })
         }
     }
 
     // P3 resume contract — both runs must share a cwd: kimi's native session
     // store is scoped per working directory (sessions/wd_<hash>/...)
-    if (manifest.resume?.kind !== 'flag') {
+    if (blocked) {
+        probes.push({ name: 'P3-resume', verdict: 'skip', detail: `blocked=${blocked}; no further live probe submitted`, error_code: CONFIG_BLOCKERS.find(code => code === blocked) })
+    } else if (manifest.resume?.kind !== 'flag') {
         probes.push({ name: 'P3-resume', verdict: 'skip', detail: 'endpoint has no flag-based resume' })
     } else if (probePreset === null) {
         probes.push({ name: 'P3-resume', verdict: 'skip', detail: 'endpoint supports no permission preset' })
@@ -186,7 +241,11 @@ export async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
         try {
             const first = await runProbeTask(`Remember the codename "${token}". Reply with exactly: ok`, { cwd: p3cwd, mode: probePreset })
             const handle = first.result?.session_handle ?? first.state?.session.handle ?? null
-            if (!handle) {
+            const firstBlocker = probeBlocker(first.result)
+            if (firstBlocker) {
+                await cleanProbeCwd(p3cwd, first)
+                probes.push({ name: 'P3-resume', verdict: 'indeterminate', run_ids: [first.runId], detail: `blocked=${firstBlocker}; resume not submitted` })
+            } else if (!handle) {
                 const cleaned = await cleanProbeCwd(p3cwd, first)
                 probes.push({ name: 'P3-resume', verdict: first.timedOut ? 'indeterminate' : 'fail', run_ids: [first.runId], detail: `first run produced no session handle (state=${first.state?.state ?? 'none'}${first.timedOut ? ', wait timed out' : ''})${cleaned ? '' : ` scratch kept: ${p3cwd}`}` })
             } else {
@@ -198,13 +257,14 @@ export async function verbProbe(ctx: Ctx, args: string[]): Promise<void> {
                 const cleaned = await cleanProbeCwd(p3cwd, first, second)
                 probes.push({
                     name: 'P3-resume',
-                    verdict: recalled && !first.timedOut && !second.timedOut ? 'pass' : (first.timedOut || second.timedOut) ? 'indeterminate' : 'fail',
+                    verdict: recalled && !first.timedOut && !second.timedOut && first.state?.state === 'completed' && second.state?.state === 'completed' && first.result?.evidence.parser.degraded === false && second.result?.evidence.parser.degraded === false ? 'pass' : (first.timedOut || second.timedOut) ? 'indeterminate' : 'fail',
                     run_ids: [first.runId, second.runId],
                     detail: `preset=${probePreset} session=${handle} recalled=${recalled} state=${second.state?.state ?? 'none'}${first.timedOut || second.timedOut ? ' wait_timed_out (run cancelled)' : ''}${cleaned ? '' : ` scratch kept: ${p3cwd}`}`,
                 })
             }
         } catch (err) {
-            probes.push({ name: 'P3-resume', verdict: 'fail', detail: err instanceof Error ? err.message : String(err) })
+            const failure = probeError(err)
+            probes.push({ name: 'P3-resume', verdict: 'fail', detail: failure.detail, error_code: failure.error_code })
         }
     }
 

@@ -11,6 +11,38 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 
 export type ProcessStartQuery = (pid: number) => Promise<string | null>
+export type ProcessStartsQuery = (pids: readonly number[]) => Promise<ReadonlyMap<number, string | null>>
+
+/** Query a bounded PID set in one Windows command; missing/failed queries stay unknown. */
+export const queryProcessStarts: ProcessStartsQuery = async (pids) => {
+    const requested = [...new Set(pids.filter(pid => Number.isSafeInteger(pid) && pid > 0))]
+    const result = new Map<number, string | null>(requested.map(pid => [pid, null]))
+    if (requested.length === 0) return result
+    if (process.platform !== 'win32') {
+        await Promise.all(requested.map(async pid => { result.set(pid, await queryProcessStart(pid)) }))
+        return result
+    }
+    try {
+        // Out-String preserves the DateTime display used by the original single-PID
+        // query. ISO conversion would invalidate existing workers' recorded tokens.
+        const filter = requested.map(pid => `ProcessId=${pid}`).join(' OR ')
+        const { stdout } = await execFileAsync('powershell.exe', [
+            '-NoProfile', '-NonInteractive', '-Command',
+            `$ErrorActionPreference='Stop'; $rows = @(Get-CimInstance Win32_Process -Filter "${filter}" | ForEach-Object { [PSCustomObject]@{ pid = $_.ProcessId; token = ($_.CreationDate | Out-String).Trim() } }); ConvertTo-Json -InputObject $rows -Compress`,
+        ], { timeout: 10_000, windowsHide: true })
+        const rows: unknown = JSON.parse(stdout)
+        if (!Array.isArray(rows)) return result
+        for (const row of rows) {
+            if (row && typeof row.pid === 'number' && result.has(row.pid)
+                && typeof row.token === 'string' && row.token.trim()) {
+                result.set(row.pid, row.token.trim())
+            }
+        }
+    } catch {
+        // CIM unavailable, timed out, or malformed output: retain null for every PID.
+    }
+    return result
+}
 
 /**
  * Platform process-start token. Equality within one boot is identity; the format
@@ -22,18 +54,7 @@ export const queryProcessStart: ProcessStartQuery = async (pid) => {
     if (!Number.isSafeInteger(pid) || pid <= 0) return null
     try {
         if (process.platform === 'win32') {
-            const { stdout } = await execFileAsync(
-                'powershell.exe',
-                [
-                    '-NoProfile',
-                    '-NonInteractive',
-                    '-Command',
-                    `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate`,
-                ],
-                { timeout: 10_000, windowsHide: true },
-            )
-            const text = stdout.trim()
-            return text === '' ? null : text
+            return (await queryProcessStarts([pid])).get(pid) ?? null
         }
         if (process.platform === 'linux') {
             const stat = await fs.readFile(`/proc/${pid}/stat`, 'utf8')

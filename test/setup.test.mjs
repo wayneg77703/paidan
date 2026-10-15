@@ -58,6 +58,28 @@ async function fixture(t) {
     return { root, home, native, env, bin, second, marker, manifest, cli, choose, setup, source, personal }
 }
 
+test('permission-only setup preserves binary discovery, stable entry paths and fixed model choices', async t => {
+    for (const pinned of [false, true]) {
+        const f = await fixture(t)
+        await f.manifest('omp', ['{env:SETUP_FIRST}'])
+        await fs.mkdir(f.home)
+        const original = { endpoints: { enabled: ['omp'], overrides: pinned ? {
+            omp: { bin: path.dirname(f.bin) + path.sep + '.' + path.sep + path.basename(f.bin) }
+        } : {} }, defaults: { endpoint: 'omp', models: { omp: 'old-choice' }, efforts: { omp: 'max' },
+            selection_contexts: { omp: 'sha256:' + 'a'.repeat(64) }, modes: {} } }
+        const file = path.join(f.home, 'config.json')
+        await fs.writeFile(file, JSON.stringify(original))
+        await f.choose({ endpoints: { omp: { mode: 'unattended' } } })
+        const preview = await f.setup()
+        assert.equal(preview.ok, true, JSON.stringify(preview))
+        assert.equal(await fs.readFile(file, 'utf8'), JSON.stringify(original))
+        const result = await f.setup('--apply', '--expect', preview.confirmation)
+        assert.equal(result.applied, true, JSON.stringify(result))
+        original.defaults.modes.omp = 'unattended'
+        assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), original)
+    }
+})
+
 test('setup enumerates both bundled ZCode entries, deduplicates paths and waits for a choice', async t => {
     const f = await fixture(t)
     await f.manifest('zcode', ['{env:SETUP_FIRST}', '{env:SETUP_SECOND}', '{env:SETUP_FIRST}'])
@@ -163,9 +185,9 @@ test('npx DSH discovery and native edits are scoped; adding and disabling anothe
     f.env.NPM_CONFIG_CACHE = path.join(f.root, 'npm-cache')
     f.env.npm_config_cache = f.env.NPM_CONFIG_CACHE // npm test exports a lowercase value on POSIX.
     f.env.DSH_HOME = path.join(f.native, '.dsh')
-    const settings = path.join(f.env.DSH_HOME, 'settings.yaml')
-    await fs.mkdir(f.env.DSH_HOME)
-    const original = 'agent-default-model:\r\n  provider: old # keep\r\n  model: old-model\r\n  reasoningEffort: low\r\nother:\r\n  untouched: yes\r\n'
+    const settings = path.join(f.env.DSH_HOME, 'profiles/headless/cordis.patch.yml')
+    await fs.mkdir(path.dirname(settings), { recursive: true })
+    const original = '- id: agent-default-model\r\n  config:\r\n    provider: old # keep\r\n    model: old-model\r\n    reasoningEffort: low\r\n- id: other\r\n  config:\r\n    untouched: yes\r\n'
     await fs.writeFile(settings, original)
     const entry = path.join(f.env.NPM_CONFIG_CACHE, '_npx', 'fixture-hash', 'node_modules/@deepseek-ai/dsh/lib/bin.js')
     await fs.mkdir(path.dirname(entry), { recursive: true })
@@ -183,7 +205,7 @@ test('npx DSH discovery and native edits are scoped; adding and disabling anothe
     const applied = await f.setup('--apply', '--expect', preview.confirmation)
     assert.equal(applied.applied, true, JSON.stringify(applied))
     assert.equal(await fs.readFile(applied.written[0].backup, 'utf8'), original)
-    assert.equal(await fs.readFile(settings, 'utf8'), original.replace('old # keep', '"route" # keep').replace('old-model', '"chosen"').replace('low', '"high"'))
+    assert.equal(await fs.readFile(settings, 'utf8'), updateDshSettings(original, { provider: 'route', model: 'chosen', effort: 'high' }))
     const readBack = readDshNativeDefaults(await fs.readFile(settings, 'utf8'))
     assert.deepEqual([readBack.connection, readBack.model, readBack.effort], ['route', 'chosen', 'high'])
     const configFile = path.join(f.home, 'config.json'), saved = JSON.parse(await fs.readFile(configFile, 'utf8'))
@@ -207,7 +229,7 @@ test('npx DSH discovery and native edits are scoped; adding and disabling anothe
     const after = JSON.parse(await fs.readFile(configFile, 'utf8'))
     assert.deepEqual(after.endpoints.enabled, ['opencode'])
     assert.deepEqual(after.endpoints.overrides.dsh, saved.endpoints.overrides.dsh)
-    for (const raw of ['agent-default-model: {model: old}\n', original + 'agent-default-model:\n', original + '"agent-default-model":\n  model: other\n', original.replace('  model: old-model', '  model: *alias'), original.replace('  model:', '  "model":')]) {
+    for (const raw of ['agent-default-model: {model: old}\n', original + 'agent-default-model:\n', original + '"agent-default-model":\n  model: other\n', original.replace('    model: old-model', '    model: *alias'), original.replace('    model:', '    "model":')]) {
         assert.throws(() => updateDshSettings(raw, { provider: 'route', model: 'chosen' }), /普通块式/)
     }
 })

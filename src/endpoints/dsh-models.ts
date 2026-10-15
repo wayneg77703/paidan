@@ -1,98 +1,85 @@
-// DSH remains profile-owned: read configured routes, never inject unsupported model/effort flags.
+// Profile-owned metadata. Never boot DSH to inspect config: --dump-config rewrites
+// the native root file. Read literal patch layers; unknown YAML stays unknown.
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
-import * as nodePath from 'node:path'
-import type { DiscoverModelsResult, NativeDefaults, ModelEntry, ConnectionEntry } from './parser-api.js'
+import * as path from 'node:path'
+import { PaidanError } from '../engine/errors.js'
+import { optionalFile } from './native-metadata.js'
+import { inspectDshPatch, type DshModelFields } from './dsh-patch.js'
+import type { DiscoverModelsResult, NativeDefaults } from './parser-api.js'
 
-export function readDshNativeDefaults(settingsYaml: string | null): NativeDefaults {
-    const notes: string[] = []
-    if (settingsYaml === null) {
-        notes.push('native dsh settings.yaml not found; install/login dsh first')
-        return { model: null, connection: null, effort: null, notes }
+export function dshHomePath(): string { return process.env.DSH_HOME ?? path.join(os.homedir(), '.dsh') }
+export function dshSettingsPath(): string { return path.join(dshHomePath(), 'profiles', 'headless', 'cordis.patch.yml') }
+export function dshHomePatchPath(): string { return path.join(dshHomePath(), 'cordis.patch.yml') }
+
+export function readDshPatchDefaults(layers: Array<string | null>): NativeDefaults {
+    let fields: DshModelFields = {}, disabled = false, unknown = false
+    for (const layer of layers) {
+        if (layer === null) continue
+        const projection = inspectDshPatch(layer)
+        if (!projection.safe) { unknown = true; break }
+        // Cordis replaces the row's entire config; it does not merge its fields.
+        if (projection.config !== undefined) fields = projection.config
+        if (projection.disabled !== undefined) disabled = projection.disabled
     }
-    const block = /^agent-default-model:[ \t]*(?:#.*)?\r?\n((?:[ \t]+\S[^\r\n]*\r?\n?)+)/m.exec(settingsYaml)
-    const pick = (key: string): string | null => {
-        if (!block) return null
-        const m = new RegExp(`^[ \\t]+${key}:[ \\t]*(?:"([^"\\r\\n]*)"|'([^'\\r\\n]*)'|([A-Za-z0-9_.:/-]+))[ \\t]*(?:#.*)?\\r?$`, 'm').exec(block[1] ?? '')
-        return m ? m[1] ?? m[2] ?? m[3] ?? null : null
-    }
-    const provider = pick('provider')
-    const model = pick('model')
-    const effort = pick('reasoningEffort')
-    if (!provider || !model) {
-        notes.push('no agent-default-model provider/model in native settings.yaml; dsh profile default applies')
-        return { model: null, connection: provider, effort, notes }
-    }
-    notes.push(
-        'default model from native settings.yaml agent-default-model (profile-only; no CLI model-list surface)' +
-        (effort ? `; reasoningEffort=${effort}` : ''),
-    )
-    notes.push('Settings-file snapshot only: headless profile/plugin layers may override it. DSH profiles compose plugins; they are not interchangeable with OMP account-isolation profiles. No paidan model/effort override; authentication unverified.')
-    return { model, connection: provider, effort, credential_ready: null, notes }
+    if (unknown || disabled) fields = {}
+    return { model: fields.model ?? null, connection: fields.provider ?? null, effort: fields.reasoningEffort ?? null,
+        profile: 'headless', credential_ready: null,
+        notes: [unknown ? 'DSH patch contains unsupported/dynamic model or patch syntax; effective selection unknown. No YAML/JavaScript was evaluated.'
+            : disabled ? 'DSH agent-default-model row is disabled; selection unknown.'
+                : 'Literal DSH headless patch snapshot only; bundle → profile → home order, whole config replacement. Plugin runtime selection/authentication unverified.'] }
 }
 
-
-/** Restricted metadata reader for ordinary block-style settings, not a general YAML evaluator. */
-export function discoverDshModels(settingsYaml: string | null): DiscoverModelsResult {
-    const native = readDshNativeDefaults(settingsYaml)
-    native.profile = 'headless'
-    const models: ModelEntry[] = [], connections: ConnectionEntry[] = []
-    let section = '', provider: string | null = null, inProviders = false
-    const scalar = (v: string) => /^["']?([A-Za-z0-9_.:/-]+)["']?(?:\s+#.*)?$/.exec(v.trim())?.[1] ?? null
-    const addProvider = (id: string) => {
-        if (!connections.some(c => c.id === id)) connections.push({ id, source: 'native-config', auth_type: 'unknown' })
-    }
-    const addModel = (connection: string, id: string) => {
-        if (!models.some(m => m.alias === connection + '/' + id)) models.push({ alias: connection + '/' + id,
-            connection, resolved_model: id, source: 'native-config', effort_selectable: false,
-            default_effort: connection === native.connection && id === native.model ? native.effort ?? null : null })
-    }
-    for (const line of (settingsYaml ?? '').split(/\r?\n/)) {
-        const root = /^([\w-]+):/.exec(line)
-        if (root) { section = root[1]; provider = null; inProviders = false }
-        if (section === 'llm-deepseek') {
-            provider = 'deepseek-official' // native plugin's registered route ID
-            addProvider(provider)
-        } else if (section === 'llm-pi-ai') {
-            if (/^  providers:\s*(?:#.*)?$/.test(line)) inProviders = true
-            else if (/^  \S/.test(line)) { inProviders = false; provider = null }
-            const key = inProviders ? /^    ["']?([\w.-]+)["']?:\s*(?:#.*)?$/.exec(line) : null
-            if (key) { provider = key[1]; addProvider(provider) }
-        } else continue
-        if (!provider) continue
-        const model = /^\s+-\s+id:\s*(.+)$/.exec(line)
-        if (model) { const id = scalar(model[1]); if (id) addModel(provider, id) }
-        const ref = /^\s+apiKeyEnv:\s*(.+)$/.exec(line)
-        if (ref && scalar(ref[1])) {
-            const c = connections.find(c => c.id === provider)!
-            c.auth_type = 'api-key'
-            c.access_type = 'native-credential-reference' // not a claim that the referenced credential exists
-        }
-    }
-    if (native.connection && native.model) { addProvider(native.connection); addModel(native.connection, native.model) }
-    return { models, connections, native_defaults: native,
-        notes: [...native.notes ?? [], '只列 settings.yaml 中明确配置的普通块式 provider/model；插件内置目录、复杂 YAML 和 profile 覆盖不在此菜单范围。缺项不等于不可用，请在原生模型设置中选择。',
-            'DSH 的 provider/model/reasoningEffort 由原生配置共同控制。调整时先展示具体字段并取得用户同意；paidan 不保存假的固定覆盖、不修改原生文件。'] }
+/** One literal patch layer; callers needing effective metadata must supply the full stack. */
+export function readDshNativeDefaults(raw: string | null): NativeDefaults { return readDshPatchDefaults([raw]) }
+export function discoverDshModels(raw: string | null): DiscoverModelsResult { return catalog(readDshNativeDefaults(raw)) }
+function catalog(native: NativeDefaults): DiscoverModelsResult {
+    const connection = native.connection ?? null, model = native.model
+    return { models: connection && model ? [{ alias: connection + '/' + model, connection, resolved_model: model,
+        source: 'native-config', effort_selectable: false, default_effort: native.effort ?? null }] : [],
+        connections: connection ? [{ id: connection, source: 'native-config', auth_type: 'unknown' }] : [], native_defaults: native,
+        notes: [...native.notes ?? [], 'Only the configured literal default is listed, not the plugin model catalog. DSH owns provider/model/effort; missing entries do not imply unavailable models.'] }
 }
 
-export function dshSettingsPath(): string {
-    return nodePath.join(process.env.DSH_HOME ?? nodePath.join(os.homedir(), '.dsh'), 'settings.yaml')
-}
-
-async function readSettings(): Promise<string | null> {
-    let yaml: string | null = null
+async function readPatchLayers(): Promise<{ layers: Array<string | null>; complete: boolean }> {
+    const directory = path.dirname(dshSettingsPath()), manifest = await optionalFile(path.join(directory, 'package.json'))
+    const layers: Array<string | null> = []
+    let complete = true
     try {
-        yaml = await fs.readFile(dshSettingsPath(), 'utf8')
-    } catch {
-        yaml = null
-    }
-    return yaml
+        const bundles: unknown = JSON.parse(manifest ?? '{}').dsh?.profile?.bundles
+        if (!Array.isArray(bundles) || !bundles.length) return { layers: [], complete: false }
+        for (const bundle of bundles) {
+            if (typeof bundle !== 'string' || !/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/.test(bundle)) return { layers: [], complete: false }
+            let folder = directory, found: string | null = null
+            while (true) {
+                const candidate = path.join(folder, 'node_modules', bundle)
+                try { await fs.access(path.join(candidate, 'package.json')); found = candidate; break }
+                catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e }
+                const parent = path.dirname(folder); if (parent === folder) break; folder = parent
+            }
+            if (!found) { complete = false; break }
+            const patch = await optionalFile(path.join(found, 'cordis.patch.yml'))
+            if (patch === null) { complete = false; break }
+            layers.push(patch)
+        }
+    } catch { complete = false }
+    layers.push(await optionalFile(dshSettingsPath()), await optionalFile(dshHomePatchPath()))
+    return { layers, complete }
 }
-
 export async function readNativeDefaults(): Promise<NativeDefaults> {
-    return { ...readDshNativeDefaults(await readSettings()), profile: 'headless' }
+    const { layers, complete } = await readPatchLayers()
+    if (!complete) return { model: null, connection: null, effort: null, profile: 'headless', credential_ready: null,
+        notes: ['DSH headless bundle stack is unavailable or unsupported; no fallback to obsolete settings.yaml. Configure the native profile first.'] }
+    return readDshPatchDefaults(layers)
 }
+export async function discoverModels(): Promise<DiscoverModelsResult> { return catalog(await readNativeDefaults()) }
 
-export async function discoverModels(): Promise<DiscoverModelsResult> {
-    return discoverDshModels(await readSettings())
+/** Setup preserves omitted effort only when the complete effective literal stack is known. */
+export async function readDshSetupDefaults(): Promise<DshModelFields> {
+    const { layers, complete } = await readPatchLayers()
+    if (!complete || layers.some(layer => layer !== null && !inspectDshPatch(layer).safe))
+        throw new PaidanError('SETUP_NATIVE_UNSUPPORTED', 'DSH 原生模型层无法完整解析，不能证明省略 effort 会保持当前强度；请用原生设置调整，或明确选择强度。')
+    const native = readDshPatchDefaults(layers)
+    if (!native.connection || !native.model) throw new PaidanError('SETUP_NATIVE_UNSUPPORTED', 'DSH 当前默认模型不可确定，不能保留未选择修改的强度。')
+    return { provider: native.connection, model: native.model, ...(native.effort === null ? {} : { reasoningEffort: native.effort ?? undefined }) }
 }

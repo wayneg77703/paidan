@@ -33,10 +33,10 @@ test('native metadata binds routes, omits credentials, and does not pretend a pr
 })
 
 test('DSH lists configured routes without exposing credentials or inventing headless overrides', () => {
-    const found = discoverDshModels('agent-default-model:\n  provider: gateway\n  model: model-a\n  reasoningEffort: high\nllm-pi-ai:\n  providers:\n    gateway:\n      apiKeyEnv: TEST_KEY\n      apiKey: fixture-secret\n      models:\n        - id: model-a\n        - id: model-b\n')
-    assert.deepEqual(found.models.map(m => m.alias), ['gateway/model-a', 'gateway/model-b'])
+    const found = discoverDshModels('- id: agent-default-model\n  config:\n    provider: gateway\n    model: model-a\n    reasoningEffort: high\n- id: llm-pi-ai\n  config:\n    apiKey: fixture-secret\n')
+    assert.deepEqual(found.models.map(m => m.alias), ['gateway/model-a'])
     assert.ok(found.models.every(m => m.effort_selectable === false))
-    assert.equal(found.connections[0].auth_type, 'api-key')
+    assert.equal(found.connections[0].auth_type, 'unknown')
     assert.equal(found.native_defaults.profile, 'headless')
     assert.ok(!JSON.stringify(found).includes('fixture-secret'))
 })

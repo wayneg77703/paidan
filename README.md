@@ -77,12 +77,14 @@ paidan run --endpoint codex --cwd . --mode read-only --task "检查这个项目�
 | `zcode` | 先在 ZCode 中配置并启用 API provider，桌面登录不保证 CLI 可用。支持安装在其他盘；固定组合由程序生成专用配置。 |
 | `opencode` | 选择 provider/model 和该模型的 variant；配置查询使用实际任务目录。 |
 | `omp` | 使用当前原生 profile 的模型与 thinking 设置；原生账号轮换、fallback 仍可能生效。 |
-| `dsh` | 使用原生 headless profile 的模型与强度，不支持 paidan 模型参数覆盖。缓存入口失效后需重新定位；不支持续接。 |
+| `dsh` | 使用原生 headless profile 的模型与强度，不支持 paidan 模型参数覆盖。缓存入口失效后需重新定位。0.2 headless 使用 stdin/JSON，支持同目录、同兼容 profile 的显式会话续接与根会话步骤用量。 |
 | `agy` | 选择完整模型 ID，名称中自带的强度不再重复设置；缺少原生权限规则时需另行处理。 |
 
 ZCode 专用文件可能包含所选 API Key 的本地副本，创建前会说明并征得同意；原始配置保持不变。DSH 的原生默认值调整也会先说明影响范围，再由程序处理支持的配置格式。
 
 模型选择与执行权限分开。默认权限通常允许修改工作目录，ZCode 使用权限更宽的 `yolo`。需要只读时明确提出；各端点的支持范围见[权限说明](INSTALL.md#无头权限默认与模型默认分开)。Codex 调用时关闭交互审批，Claude Code 拒绝需要交互确认的操作，再由宿主处理结果，避免无头任务等待用户输入。
+
+需要最高无头权限时，通过 setup 为所选端点设置 `mode: "unattended"`，不影响原生交互配置及模型选择。0.1.13 补齐 DSH 三档环境映射（最高档为 `danger-full-access`），AGY 最高档增加新版 `--dangerously-skip-permissions`；只修改 mode 不再重写程序入口。Kimi 2.2.0 的 print 本身强制 auto，不与 `--auto` 参数混用。DSH 0.2.0rc2 已于 2026-10-15 通过真实最高权限 shell 写入及 P1/P2/P3 探针；AGY 1.3.5 参数已核验，真实执行因账号资格失败而未完成。
 
 ## 调用失败怎么办
 
@@ -102,3 +104,12 @@ ZCode 专用文件可能包含所选 API Key 的本地副本，创建前会说�
 这里保存配置、安装记录和任务历史，可通过 `PAIDAN_HOME` 或数据目录配置调整。已结束任务默认保留 **30 天**，`paidan list` 会清理过期记录；需要长期保留时调整 `ttlDays`。卸载默认保留这些数据及各 agent 的原生设置。
 
 [详细安装与端点配置](INSTALL.md) · [技术说明](docs/contracts.md) · [开发维护指南](AGENTS.md) · [MIT 许可](LICENSE)
+
+
+### 用量与无头配置边界
+
+DSH、OMP、OpenCode 汇总本次根会话已报告的独立步骤/回合，去重重复事件；缺失、冲突或不完整流不伪造精确总数。它不是服务商全账单，缓存写入、隐藏重试、压缩辅助请求和子代理可能不在摘要内。各端点 input 是否包含缓存遵循其原生口径，不能跨端点直接相加后声称同一口径；细节见结果 notes 与 [契约](docs/contracts.md)。
+
+OMP 18.9 print 模式会等待 MCP 初始化；任务必须依赖这些工具时可按原生配置选择 OMP_MCP_REQUIRE_READY=1，未就绪便在模型调用前失败。paidan 不默认改用户 MCP、账号或回退策略。OpenCode 服务复用、Claude --bare 等仍由实际任务选择，不默认增加常驻服务或撤掉工程规则。
+
+本次接入更新的范围和验收见[施工记录](docs/harness-refresh-plan.md)。

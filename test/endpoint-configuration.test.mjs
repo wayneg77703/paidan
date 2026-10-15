@@ -160,12 +160,12 @@ test('ZCode explicit personal rules are honored and never fall back when unreada
 })
 
 test('DSH exposes provider/model/effort as a file snapshot, not a selectable argv override', () => {
-    const native = readDshNativeDefaults('agent-default-model:\n  provider: deepseek-official\n  model: flash\n  reasoningEffort: high\n')
+    const native = readDshNativeDefaults('- id: agent-default-model\n  config:\n    provider: deepseek-official\n    model: flash\n    reasoningEffort: high\n')
     assert.equal(native.connection, 'deepseek-official')
     assert.equal(native.model, 'flash')
     assert.equal(native.effort, 'high')
     assert.equal(native.credential_ready, null)
-    assert.ok(native.notes.some(n => n.includes('layers may override')))
+    assert.ok(native.notes.some(n => n.includes('snapshot')))
 })
 
 test('model context suffixes pass without relaxing session or shell-safety validation', () => {

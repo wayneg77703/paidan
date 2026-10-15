@@ -27,22 +27,21 @@ test('normal run: text is the final answer, sessionID is the handle, single step
     })
 })
 
-test('multi-step write run: blank text parts skipped, tool_use ignored, multiple step_finish collapses usage honestly', () => {
+test('multi-step write run: unique step parts sum provider usage without counting tool progress', () => {
     // Live shape (2026-09-10): a write task emits tool_use + 3 step_finish events.
     const blank = `{"type":"text","timestamp":2,"sessionID":"${SES}","part":{"type":"text","text":"\\n\\n"}}`
     const tool = `{"type":"tool_use","timestamp":3,"sessionID":"${SES}","part":{"type":"tool","tool":"write","state":{"status":"completed"}}}`
-    const finZero = `{"type":"step_finish","timestamp":4,"sessionID":"${SES}","part":{"type":"step-finish","reason":"unknown","tokens":{"input":0,"output":0,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}`
-    const finTool = `{"type":"step_finish","timestamp":5,"sessionID":"${SES}","part":{"type":"step-finish","reason":"tool-calls","tokens":{"total":8617,"input":6715,"output":110,"reasoning":0,"cache":{"write":0,"read":1792}}}}`
+    const finZero = `{"type":"step_finish","timestamp":4,"sessionID":"${SES}","part":{"id":"prt_zero","type":"step-finish","reason":"unknown","tokens":{"input":0,"output":0,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}`
+    const finTool = `{"type":"step_finish","timestamp":5,"sessionID":"${SES}","part":{"id":"prt_tool","type":"step-finish","reason":"tool-calls","tokens":{"total":8617,"input":6715,"output":110,"reasoning":0,"cache":{"write":0,"read":1792}}}}`
     const done = `{"type":"text","timestamp":6,"sessionID":"${SES}","part":{"type":"text","text":"done"}}`
-    const finStop = `{"type":"step_finish","timestamp":7,"sessionID":"${SES}","part":{"type":"step-finish","reason":"stop","tokens":{"total":8635,"input":184,"output":3,"reasoning":0,"cache":{"write":0,"read":8448}}}}`
+    const finStop = `{"type":"step_finish","timestamp":7,"sessionID":"${SES}","part":{"id":"prt_stop","type":"step-finish","reason":"stop","tokens":{"total":8635,"input":184,"output":3,"reasoning":0,"cache":{"write":0,"read":8448}}}}`
     const p = createParser()
     for (const line of [STEP_START, blank, tool, finZero, finTool, done, finStop]) p.acceptStdoutLine(line)
     const r = p.finish('', '')
     assert.equal(r.degraded, false)
     assert.equal(r.finalText, 'done')
     assert.equal(r.sessionId, SES)
-    assert.equal(r.usage, null)
-    assert.ok(r.warnings.some((w) => w.includes('multiple step_finish')))
+    assert.deepEqual(r.usage, { input_tokens: 6899, output_tokens: 113, cached_input_tokens: 10240, cost: null, source: 'provider' })
 })
 
 test('plan-agent refusal run: stream stays valid, refusal lives in finalText, no in-band error and no stderr signature', () => {
@@ -85,7 +84,7 @@ test('non-JSON stdout line degrades the parser but keeps parsing', () => {
     assert.equal(r.degraded, true)
     assert.ok(r.warnings.some((w) => w.includes('non-JSON')))
     assert.equal(r.finalText, 'ok')
-    assert.equal(r.usage?.source, 'provider')
+    assert.equal(r.usage, null)
 })
 
 test('mid-line stdout EOF degrades the parser', () => {
@@ -133,4 +132,73 @@ test('unknown event type is known-benign drift: warning only, never degraded', (
     assert.ok(r.warnings.some((w) => w.includes('unknown event type')))
     assert.equal(r.finalText, 'ok')
     assert.equal(r.usage?.source, 'provider')
+})
+
+const step = (id, tokens = { input: 100, output: 20, reasoning: 5, cache: { read: 80, write: 10 } }) => ({
+    type: 'step_finish', sessionID: SES, part: { id, sessionID: SES, messageID: 'msg-1', type: 'step-finish', tokens },
+})
+const parseSteps = (events, tail = '') => {
+    const p = createParser()
+    for (const event of events) p.acceptStdoutLine(JSON.stringify(event))
+    return p.finish(tail, '')
+}
+
+test('step identities aggregate distinct parts within one message and ignore duplicate deliveries', () => {
+    const a = step('a'), b = step('b')
+    const r = parseSteps([a, { ...a, timestamp: 999 }, b])
+    assert.deepEqual(r.usage, { input_tokens: 200, output_tokens: 50, cached_input_tokens: 160, cost: null, source: 'provider' })
+    assert.ok(r.warnings.some(w => w.includes('cache writes')))
+    assert.ok(r.warnings.some(w => w.includes('root-session')))
+})
+
+test('missing multi-step identity, conflicting duplicates and mismatched sessions do not fabricate totals', () => {
+    assert.equal(parseSteps([step(undefined), step(undefined)]).usage, null)
+    assert.equal(parseSteps([step('a'), step('a', { input: 2, output: 1, cache: { read: 0 } })]).usage, null)
+    const mismatch = step('b'); mismatch.part.sessionID = 'other'
+    assert.equal(parseSteps([step('a'), mismatch]).usage, null)
+})
+
+test('invalid or missing tokens, individual and aggregate overflow invalidate the entire total', () => {
+    for (const tokens of [undefined, null, {}, { input: -1, output: 1, cache: { read: 0 } },
+        { input: 1, output: 1.1, cache: { read: 0 } }, { input: 1, output: 1, cache: { read: '2' } },
+        { input: 1, output: 1, reasoning: -1, cache: { read: 0 } },
+        { input: Number.MAX_SAFE_INTEGER + 1, output: 1, cache: { read: 0 } }]) {
+        const bad = step('b'); bad.part.tokens = tokens
+        assert.equal(parseSteps([step('a'), bad]).usage, null)
+    }
+    for (const tokens of [
+        { input: Number.MAX_SAFE_INTEGER, output: 0, cache: { read: 0 } },
+        { input: 0, output: Number.MAX_SAFE_INTEGER, reasoning: 1, cache: { read: 0 } },
+        { input: 0, output: 0, cache: { read: Number.MAX_SAFE_INTEGER } },
+    ]) assert.equal(parseSteps([step('a'), step('b', tokens)]).usage, null)
+})
+
+test('in-band errors and incomplete streams do not report completed-step usage as full run usage', () => {
+    assert.equal(parseSteps([step('a'), { type: 'error', sessionID: SES, error: { name: 'APIError' } }, step('b')]).usage, null)
+    assert.equal(parseSteps([step('a')], '{').usage, null)
+})
+
+
+const stepStart = (id, messageID = 'msg-1') => ({
+    type: 'step_start', sessionID: SES,
+    part: { id, sessionID: SES, messageID, type: 'step-start' },
+})
+
+test('complete-line EOF after a third step_start leaves usage unknown despite two completed steps', () => {
+    // All parts may belong to one assistant message, but starts and finishes
+    // have distinct part ids. Pair each newly completed step exactly once.
+    const completed = [stepStart('start-a'), step('finish-a'), stepStart('start-b'), step('finish-b')]
+    assert.equal(parseSteps(completed).usage.input_tokens, 200)
+    const r = parseSteps([...completed, stepStart('start-c')], '')
+    assert.equal(r.usage, null)
+    assert.ok(r.warnings.some(w => w.includes('incomplete or interrupted')))
+    assert.equal(parseSteps([...completed, stepStart('start-c'), step('finish-b')]).usage, null)
+})
+
+test('step-start replays and message identities preserve completion pairing without requiring legacy starts', () => {
+    const completed = [stepStart('start-a'), stepStart('start-a'), step('finish-a'), stepStart('start-a')]
+    assert.equal(parseSteps(completed).usage.input_tokens, 100)
+    assert.equal(parseSteps([stepStart('start-a', 'msg-other'), step('finish-a')]).usage, null)
+    assert.equal(parseSteps([step('finish-a'), step('finish-b')]).usage.input_tokens, 200)
+    assert.equal(parseSteps([JSON.parse(STEP_START), JSON.parse(STEP_FIN_OK)]).usage.input_tokens, 6599)
 })

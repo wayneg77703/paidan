@@ -55,14 +55,33 @@ test('Codex and Claude do not inherit interactive approval requests on fresh or 
     }
 })
 
-test('DSH keeps native defaults, overrides only explicit read-only, and rejects unattended', () => {
+test('DSH presets explicitly override inherited permissions on fresh and resumed invocations', () => {
     const dsh = registry.get('dsh')
-    assert.deepEqual(buildEnv(dsh, {}, 'workspace-write').DSH_PERMISSION_MODE, undefined)
-    assert.equal(buildEnv(dsh, { DSH_PERMISSION_MODE: 'read-only' }, 'workspace-write').DSH_PERMISSION_MODE, 'read-only')
-    assert.equal(buildEnv(dsh, { DSH_PERMISSION_MODE: 'workspace-write' }, 'read-only').DSH_PERMISSION_MODE, 'read-only')
+    for (const inherited of [undefined, 'read-only', 'workspace-write', 'danger-full-access']) {
+        const base = { ...(inherited ? { DSH_PERMISSION_MODE: inherited } : {}), DSH_HOME: '/native/home' }
+        for (const [mode, native] of Object.entries({ 'read-only': 'read-only', 'workspace-write': 'workspace-write', unattended: 'danger-full-access' })) {
+            const env = buildEnv(dsh, base, mode)
+            assert.equal(env.DSH_PERMISSION_MODE, native)
+            assert.equal(env.DSH_HOME, base.DSH_HOME)
+            assert.equal(checkPermission(dsh, mode).ok, true)
+        }
+        assert.deepEqual(buildEnv(dsh, base, { 'fs.read': true }).DSH_PERMISSION_MODE, inherited)
+    }
     const args = buildArgs(dsh, request('dsh', resolvePermissionMode(dsh)))
-    assert.deepEqual(args, ['--profile', 'headless', 'fixture'])
-    assert.equal(checkPermission(dsh, 'unattended').ok, false)
+    assert.deepEqual(args, ['--profile', 'headless', '--json'])
+    assert.equal(dsh.command.prompt_delivery, 'stdin')
+    assert.deepEqual(buildArgs(dsh, { ...request('dsh', 'read-only'), resume_session: 'session-fixture' }), ['--profile', 'headless', '--json', '--session-id', 'session-fixture'])
+    assert.deepEqual(buildArgs(dsh, request('dsh', 'unattended', 'session-fixture')), ['--profile', 'headless', '--json', '--session-id', 'session-fixture'])
+})
+
+test('AGY highest mode uses native skip-permissions; restrictive modes never receive it', () => {
+    const agy = registry.get('agy')
+    for (const resume of [null, 'session-fixture']) {
+        for (const mode of ['read-only', 'workspace-write', 'unattended']) {
+            const args = buildArgs(agy, request('agy', mode, resume))
+            assert.equal(args.includes('--dangerously-skip-permissions'), mode === 'unattended')
+        }
+    }
 })
 
 test('persistent permission defaults validate supported presets', async (t) => {

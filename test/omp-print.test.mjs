@@ -38,7 +38,7 @@ test('normal run: session id is the handle, finalText from turn_end, sole-turn u
     })
 })
 
-test('read-only refusal run: approval-gated toolResults are refusal evidence, multi-turn usage stays unavailable', () => {
+test('read-only refusal run: tool denials retain refusal evidence and per-turn usage aggregates', () => {
     // Live P2 shape (18.1.14, 2026-09-10): bash and task denied, file absent, exit 0.
     const denyBash =
         '{"type":"turn_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"..."},{"type":"toolCall","name":"bash","arguments":{"command":"printf x > ro.txt"}}],"usage":{"input":100,"output":10,"cacheRead":0},"stopReason":"toolUse"},"toolResults":[{"role":"toolResult","toolCallId":"c1","toolName":"bash","content":[{"type":"text","text":"Tool \\"bash\\" requires approval but no interactive UI available.\\nOptions:..."}],"isError":true}]}'
@@ -49,14 +49,13 @@ test('read-only refusal run: approval-gated toolResults are refusal evidence, mu
     const agentEnd =
         '{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"Blocked. Cannot create the file: bash and task require approval; no write tool in this session."}],"stopReason":"stop"}],"isTerminal":true}'
     const p = createOmpPrintParser()
-    for (const line of [SESSION, AGENT_START, TURN_START, denyBash, TOOL_EXEC, denyTask, finalTurn, agentEnd]) {
+    for (const line of [SESSION, AGENT_START, TURN_START, denyBash, TOOL_EXEC, TURN_START, denyTask, TURN_START, finalTurn, agentEnd]) {
         p.acceptStdoutLine(line)
     }
     const r = p.finish('', '')
     assert.equal(r.degraded, false)
     assert.ok(r.finalText.startsWith('Blocked.'))
-    assert.deepEqual(r.usage, null)
-    assert.ok(r.warnings.some((w) => w.includes('multiple turn_end')))
+    assert.deepEqual(r.usage, { input_tokens: 370, output_tokens: 48, cached_input_tokens: 0, cost: null, source: 'provider' })
     assert.ok(r.refusals.includes('approval-unavailable-headless:bash'))
     assert.ok(r.refusals.includes('approval-unavailable-headless:task'))
 })
@@ -177,4 +176,88 @@ test('model discovery parses `omp models --json` selector/provider pairs honestl
     assert.throws(() => parseOmpModelsJson('not json'), /non-JSON/)
     assert.throws(() => parseOmpModelsJson('{"other":1}'), /no models array/)
     assert.deepEqual(parseOmpModelsJson('{"models":[]}').models, [])
+})
+
+// 18.9.1: responseId is optional; timestamp and native turn boundaries are
+// fallback evidence. message_end / agent_end are repeats, not extra usage.
+const ompTurn = (id, usage = { input: 100, output: 20, cacheRead: 80 }, extra = {}) => ({
+    type: 'turn_end', message: { role: 'assistant', responseId: id, provider: 'p', model: 'm',
+        content: [{ type: 'text', text: 'done' }], usage, stopReason: 'stop', ...extra }, toolResults: [],
+})
+const parseTurns = (events, tail = '') => {
+    const p = createOmpPrintParser()
+    p.acceptStdoutLine(SESSION)
+    for (const event of events) p.acceptStdoutLine(JSON.stringify(event))
+    return p.finish(tail, '')
+}
+
+test('multi-turn provider totals count each response once, excluding echoed message/agent summaries', () => {
+    const a = ompTurn('req-a'), b = ompTurn('req-b')
+    const r = parseTurns([a, { type: 'message_end', message: a.message }, a, b,
+        { type: 'agent_end', messages: [a.message, b.message] }])
+    assert.deepEqual(r.usage, { input_tokens: 200, output_tokens: 40, cached_input_tokens: 160, cost: null, source: 'provider' })
+    assert.ok(r.warnings.some(w => w.includes('root-session')))
+})
+
+test('timestamp identity deduplicates absent responseId; boundary-only identical turns remain ambiguous', () => {
+    const a = ompTurn(undefined, undefined, { timestamp: 1 })
+    assert.equal(parseTurns([a, a]).usage.input_tokens, 100)
+    const anonymous = ompTurn(undefined)
+    assert.equal(parseTurns([{ type: 'turn_start' }, anonymous, anonymous,
+        { type: 'turn_start' }, anonymous]).usage, null)
+    assert.equal(parseTurns([anonymous, anonymous]).usage, null)
+})
+
+test('conflicting duplicate identity and any missing/invalid/overflow counters keep usage unknown', () => {
+    for (const usage of [undefined, null, {}, { input: -1, output: 1, cacheRead: 0 },
+        { input: 1.1, output: 1, cacheRead: 0 }, { input: '2', output: 1, cacheRead: 0 },
+        { input: Number.MAX_SAFE_INTEGER + 1, output: 1, cacheRead: 0 }]) {
+        const bad = ompTurn('b'); bad.message.usage = usage
+        assert.equal(parseTurns([ompTurn('a'), bad]).usage, null)
+    }
+    assert.equal(parseTurns([ompTurn('a'), ompTurn('a', { input: 2, output: 20, cacheRead: 80 })]).usage, null)
+    for (const field of ['input', 'output', 'cacheRead']) {
+        const huge = { input: 0, output: 0, cacheRead: 0 }; huge[field] = Number.MAX_SAFE_INTEGER
+        assert.equal(parseTurns([ompTurn('a', huge), ompTurn('b')]).usage, null)
+    }
+})
+
+test('errors, failed retry attempts, aborts and damaged streams never turn partial usage into a total', () => {
+    for (const extra of [{ stopReason: 'error', errorStatus: 429 }, { stopReason: 'aborted' }]) {
+        assert.equal(parseTurns([ompTurn('a'), ompTurn('b', undefined, extra), ompTurn('c')]).usage, null)
+        assert.equal(parseTurns([{ type: 'message_end', message: ompTurn('failed', undefined, extra).message }, ompTurn('ok')]).usage, null)
+    }
+    assert.equal(parseTurns([ompTurn('a'), { type: 'error', message: 'network' }]).usage, null)
+    assert.equal(parseTurns([ompTurn('a')], '{').usage, null)
+})
+
+
+test('complete-line EOF after a third turn_start does not report the two completed turns as a total', () => {
+    const completed = [{ type: 'turn_start' }, ompTurn('a'), { type: 'turn_start' }, ompTurn('b')]
+    assert.equal(parseTurns(completed).usage.input_tokens, 200)
+    const r = parseTurns([...completed, { type: 'turn_start' }], '')
+    assert.equal(r.usage, null)
+    assert.ok(r.warnings.some(w => w.includes('incomplete or interrupted')))
+    // Neither an old completion replay nor an agent summary closes turn 3.
+    assert.equal(parseTurns([...completed, { type: 'turn_start' }, ompTurn('b')]).usage, null)
+    assert.equal(parseTurns([...completed, { type: 'turn_start' },
+        { type: 'agent_end', messages: [ompTurn('b').message] }]).usage, null)
+})
+
+
+test('boundary-only replay after third start cannot masquerade as a new completed request at empty EOF', () => {
+    const start = { type: 'turn_start' }
+    const a = ompTurn(undefined, { input: 100, output: 20, cacheRead: 80 })
+    const b = ompTurn(undefined, { input: 150, output: 30, cacheRead: 90 })
+    const completed = [start, a, start, b]
+    assert.equal(parseTurns(completed, '').usage.input_tokens, 250)
+    for (const replay of [a, b]) {
+        const r = parseTurns([...completed, start, replay], '')
+        assert.equal(r.usage, null)
+        assert.ok(r.warnings.some(w => w.includes('trustworthy multi-turn identity')))
+    }
+    // Repetition inside the same boundary is an ordinary duplicate, not a
+    // new charge. Repetition across boundaries is deliberately conservative.
+    assert.equal(parseTurns([start, a, a], '').usage.input_tokens, 100)
+    assert.equal(parseTurns([start, a, start, a], '').usage, null)
 })

@@ -1,7 +1,7 @@
 // Startup reconcile: scan non-terminal runs; if the worker pid is dead, mark
 // attention with an evidence note. Never auto-restart anything.
 
-import { verifyProcessIdentity, type ProcessStartQuery } from './process-identity.js'
+import { queryProcessStarts, verifyProcessIdentity, type ProcessStartQuery, type ProcessStartsQuery } from './process-identity.js'
 import type { RunStateRecord } from './types.js'
 import { isTerminal, transitionRecord } from './state-machine.js'
 import type { RunStore } from './run-store.js'
@@ -33,17 +33,39 @@ export interface ReconcileReport {
 
 export async function reconcileRuns(
     store: RunStore,
-    opts: { now?: string; limit?: number; queryStart?: ProcessStartQuery } = {},
+    opts: { now?: string; limit?: number; queryStart?: ProcessStartQuery; queryStarts?: ProcessStartsQuery } = {},
 ): Promise<ReconcileReport> {
     const now = opts.now ?? new Date().toISOString()
     const report: ReconcileReport = { scanned: 0, changed: [], errors: [] }
     const runs = await store.list({ skipCleanup: true })
+    const selected: RunStateRecord[] = []
     for (const run of runs) {
         if (isTerminal(run.state)) continue
-        if (opts.limit !== undefined && report.scanned >= opts.limit) break
+        if (opts.limit !== undefined && selected.length >= opts.limit) break
+        selected.push(run)
+    }
+    const pids = [...new Set(selected.flatMap(run =>
+        run.worker?.pid_start && pidAlive(run.worker.pid) ? [run.worker.pid] : []))]
+    let starts: ReadonlyMap<number, string | null> = new Map()
+    if (pids.length > 0) {
+        try {
+            // Preserve the single-query injection contract; production queries all
+            // live recorded workers in one call, never terminal or unselected runs.
+            starts = opts.queryStart && !opts.queryStarts
+                ? new Map(await Promise.all(pids.map(async pid => {
+                    try { return [pid, await opts.queryStart!(pid)] as const }
+                    catch { return [pid, null] as const }
+                })))
+                : await (opts.queryStarts ?? queryProcessStarts)(pids)
+        } catch {
+            // An unavailable batch must not become false evidence of PID reuse.
+        }
+    }
+    const queryStart: ProcessStartQuery = async pid => starts.get(pid) ?? null
+    for (const run of selected) {
         report.scanned++
         try {
-            const next = await reconcileOne(store, run, now, opts.queryStart)
+            const next = await reconcileOne(store, run, now, queryStart)
             if (next && next.state !== run.state) {
                 report.changed.push({ run_id: run.run_id, from: run.state, to: next.state })
             }
@@ -83,8 +105,18 @@ async function reconcileOne(
     // Worker is gone. If the worker managed to write result.json before dying,
     // adopt its terminal state instead of inventing one.
     const result = await store.readResult(run.run_id)
+    // The batch query can outlive the worker. Never write its earlier snapshot
+    // over a completion/session update; adoption must preserve the latest fields.
+    const latest = await store.readState(run.run_id)
+    if (!latest || isTerminal(latest.state)) return null
+    if (latest.worker?.pid !== worker?.pid
+        || (latest.worker?.pid_start ?? null) !== (worker?.pid_start ?? null)) {
+        // The evidence was for a different worker registration. Let the next
+        // reconciliation query that identity instead of declaring it gone.
+        return null
+    }
     if (result && isTerminal(result.state)) {
-        const next = transitionRecord(run, result.state, now)
+        const next = transitionRecord(latest, result.state, now)
         await store.writeState(next)
         await store.appendEvent(run.run_id, {
             ts: now,
@@ -94,7 +126,8 @@ async function reconcileOne(
         return next
     }
 
-    const next = transitionRecord(run, 'attention', now)
+    if (latest.state === 'attention') return null
+    const next = transitionRecord(latest, 'attention', now)
     await store.writeState(next)
     await store.appendEvent(run.run_id, {
         ts: now,

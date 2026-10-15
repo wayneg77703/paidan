@@ -1,34 +1,23 @@
-// Deliberately limited native edit: three scalar keys in one ordinary YAML block.
-// Keep unrelated bytes/comments; refuse YAML forms we cannot safely understand.
+// Append a literal whole-config override to the selected headless profile only.
+// Never rewrite legacy settings.yaml, home/global patches, or credential fields.
 import { PaidanError } from '../engine/errors.js'
-
-export function updateDshSettings(raw: string, choice: { provider: string; model: string; effort?: string | null }): string {
-    const reject = () => { throw new PaidanError('SETUP_NATIVE_UNSUPPORTED', 'DSH settings.yaml 不是支持的普通块式配置；未改写。请用 DSH 原生设置功能调整后重新查询。') }
-    if (!choice.provider || !choice.model || /[\t]|^---|^\.\.\.|^\s*<<:|[&*!][A-Za-z_]/m.test(raw)) return reject()
-    const lines = raw.split(/(?<=\n)/)
-    const starts = lines.flatMap((line, i) => /^(?:agent-default-model|"agent-default-model"|'agent-default-model')\s*:/.test(line) ? [i] : [])
-    if (starts.length !== 1 || !/^agent-default-model:\s*(?:#.*)?\r?\n$/.test(lines[starts[0]])) return reject()
-    const start = starts[0] + 1
-    let end = start
-    while (end < lines.length && /^(?:\s|#|$)/.test(lines[end])) end++
-    if (lines.slice(start, end).some(line => line.trim() && !line.trimStart().startsWith('#')
-        && !/^  [A-Za-z0-9_-]+:[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[A-Za-z0-9_.:/-]+)[ \t]*(?:#.*)?\r?\n?$/.test(line))) return reject()
-    const changes: Record<string, string> = { provider: choice.provider, model: choice.model }
-    if (choice.effort != null) changes.reasoningEffort = choice.effort
+import { inspectDshPatch, type DshModelFields } from './dsh-patch.js'
+export function updateDshSettings(raw: string, choice: { provider: string; model: string; effort?: string | null }, homePatch: string | null = null, current?: DshModelFields): string {
+    const reject = (): never => { throw new PaidanError('SETUP_NATIVE_UNSUPPORTED', 'DSH cordis.patch.yml 不是支持的普通块式 patch，或更高优先级 home patch 影响默认模型；未改写。请用 DSH 原生设置调整。') }
+    const profile = inspectDshPatch(raw), home = inspectDshPatch(homePatch ?? '')
+    if (!profile.safe || !home.safe || home.mentioned || ![choice.provider, choice.model, choice.effort ?? 'unset'].every(v => /^[A-Za-z0-9_.:/-]+$/.test(v))) return reject()
+    if (profile.disabled) return reject()
+    const effective = current ?? (profile.config?.provider && profile.config?.model ? profile.config : undefined)
+    if (choice.effort == null && effective === undefined)
+        throw new PaidanError('SETUP_NATIVE_UNSUPPORTED', 'DSH 当前强度无法确定，不能证明省略 effort 会保持原值；请提供完整原生层或明确选择强度。')
+    const effort = choice.effort ?? effective?.reasoningEffort
+    if (effective?.provider === choice.provider && effective.model === choice.model && effective.reasoningEffort === effort) return raw
+    // Existing selected fields may be replaced; no unrelated config is copied.
     const eol = raw.includes('\r\n') ? '\r\n' : '\n'
-    for (const [key, value] of Object.entries(changes)) {
-        const matches = []
-        for (let i = start; i < end; i++) if (new RegExp(`^  ${key}:`).test(lines[i])) matches.push(i)
-        if (matches.length > 1 || lines.slice(start, end).some(l => new RegExp(`^\\s+${key}:`).test(l) && !new RegExp(`^  ${key}:`).test(l))) return reject()
-        const rendered = `  ${key}: ${JSON.stringify(value)}`
-        if (matches.length) {
-            const i = matches[0], original = lines[i]
-            const comment = /\s+(#.*?)(?:\r?\n)?$/.exec(original)?.[1]
-            lines[i] = rendered + (comment ? ` ${comment}` : '') + eol
-        } else {
-            if (end > 0 && !lines[end - 1].endsWith('\n')) lines[end - 1] += eol
-            lines.splice(end++, 0, rendered + eol)
-        }
-    }
-    return lines.join('')
+    const existing = raw.replace(/^\[\]\s*$/m, '')
+    const prefix = existing + (existing && !existing.endsWith('\n') ? eol : '')
+    return prefix + eol + '- id: agent-default-model' + eol + '  config:' + eol
+        + '    provider: ' + JSON.stringify(choice.provider) + eol
+        + '    model: ' + JSON.stringify(choice.model) + eol
+        + (effort != null ? '    reasoningEffort: ' + JSON.stringify(effort) + eol : '')
 }

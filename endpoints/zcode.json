@@ -49,14 +49,14 @@
     "fs.read": {
       "status": "supported",
       "via": "--mode yolo (native Full Access; ordinary tools autoallowed without per-call permit)",
-      "verified_at": "2026-09-18",
-      "version": "0.16.5"
+      "verified_at": "2026-10-12",
+      "version": "0.16.9"
     },
     "fs.write": {
       "status": "supported",
       "via": "--mode yolo (native Full Access; ordinary tools autoallowed without per-call permit); live: paidan run_20260910_43acbea2 (unattended) created the declared deliverable and completed, parser not degraded",
-      "verified_at": "2026-09-18",
-      "version": "0.16.5"
+      "verified_at": "2026-10-12",
+      "version": "0.16.9"
     },
     "shell.exec": {
       "status": "supported",
@@ -80,7 +80,7 @@
       "workspace-write": "unsupported",
       "unattended": "supported"
     },
-    "presets_notes": "By design: zcode permission requests have NO timeout and wait forever, so headless plan/edit (read-only/workspace-write) deadlock instead of enforcing — the eight-agent probe (2026-09-09 report §1) and the suite gateway both reject non-yolo presets before submission. yolo is the only enforceable headless preset. This is the intended endpoint shape, not a gap.",
+    "presets_notes": "The adapter retains yolo-only headless support. Earlier 0.16.5 observations of approval hangs are historical, not a universal current claim: the 3.15.1 source has a headless deny broker and workflow-specific settlement. Non-yolo tool enforcement and arbitrary background child settlement have not been revalidated; do not enable them based on workflow support alone.",
     "denial_evidence": {
       "status": "unverified",
       "via": "no endpoint refusal signal observed for headless yolo in 0.16.5; parser detectRefusals is an honest no-op until a real refusal shape is observed",
@@ -97,8 +97,8 @@
     ],
     "cross_process": true,
     "notes": "Native CLI flag `--resume <sessionId>` exists (0.16.5 --help: 'Resume a persisted session by sessionId (sess_...)'). Sessions are cwd-bound (`-c/--continue` = 'resume the latest session for the current directory'); resume a run with the same cwd as its source. sessionId is extracted from the envelope sessionId field (sess_ prefix). Suite contract additionally pins same identity/mode/tool-policy/model and prior terminal state; model/permission inheritance on resume is officially unspecified. Concurrent runs on one session handle are forbidden (per-session preempt lock, bridge issue #41). Live-verified through paidan 2026-09-10: run_20260910_07255be6 (remember codename) -> run_20260910_dba2b11b (--resume same sess_ handle, same cwd) recalled the codename exactly, state completed. Former 0.1.8 zapi_ app-server handles are rejected; start a fresh print session. A resumed print session may retain its previous model; inspect per-turn selection evidence.",
-    "verified_at": "2026-09-18",
-    "version": "0.16.5"
+    "verified_at": "2026-10-12",
+    "version": "0.16.9"
   },
   "models": {
     "command": null,

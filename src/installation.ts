@@ -21,7 +21,7 @@ import { selectionContext } from './endpoints/native-metadata.js'
 import { providerConfigPath, readProviderConfig, zcodeHome } from './endpoints/zcode-config.js'
 import { buildZcodeProfile } from './endpoints/zcode-setup.js'
 import { prepareZcodeRuntime } from './endpoints/zcode-runtime.js'
-import { dshSettingsPath } from './endpoints/dsh-models.js'
+import { dshSettingsPath, dshHomePatchPath, readDshSetupDefaults } from './endpoints/dsh-models.js'
 import { updateDshSettings } from './endpoints/dsh-setup.js'
 
 export interface EndpointChoice {
@@ -148,7 +148,10 @@ export async function planInstallation(ctx: InstallationContext, choices: Choice
         if (!e.selected_bin) throw new PaidanError('SETUP_CHOICE_REQUIRED', `${e.name} 需要选择有效入口。`, { endpoint: e.name, candidates: e.candidates })
         if (e.version_error) throw new PaidanError('SETUP_VERSION_FAILED', `${e.name} ${e.version_error}；入口已选定，请检查该程序的运行环境。`, { bin: e.selected_bin })
         const c = choices.endpoints[e.name], manifest = ctx.registry.get(e.name)
-        next.endpoints.overrides[e.name] = { ...next.endpoints.overrides[e.name], bin: e.selected_bin }
+        // A permission-only repair must not pin a discovered binary or replace a
+        // stable configured path with its resolved (possibly cached) target.
+        const modeOnly = original && Object.keys(c).length === 1 && c.mode !== undefined
+        if (!modeOnly) next.endpoints.overrides[e.name] = { ...next.endpoints.overrides[e.name], bin: e.selected_bin }
         if (c.mode !== undefined) {
             if (c.mode === null) delete next.defaults.modes[e.name]
             else {
@@ -160,7 +163,7 @@ export async function planInstallation(ctx: InstallationContext, choices: Choice
         if (c.native_settings) {
             const file = dshSettingsPath(), raw = await readOptionalBytes(file)
             if (!raw) throw new PaidanError('SETUP_NATIVE_UNSUPPORTED', 'DSH 原生设置不存在，请先通过 DSH 配置接入。')
-            const payload = updateDshSettings(raw.toString('utf8'), c.native_settings)
+            const payload = updateDshSettings(raw.toString('utf8'), c.native_settings, (await readOptionalBytes(dshHomePatchPath()))?.toString('utf8') ?? null, c.native_settings.effort == null ? await readDshSetupDefaults() : undefined)
             await addFile(path.dirname(file), file, payload, 'dsh-settings', 'dsh')
             decisions.push({ endpoint: 'dsh', native_settings: c.native_settings, affects_other_native_sessions: true, model_access_and_effort_unverified: true })
         }
@@ -206,7 +209,7 @@ export async function planInstallation(ctx: InstallationContext, choices: Choice
         }
         decisions.push({ endpoint: e.name, bin: e.selected_bin, model: next.defaults.models[e.name] ?? null,
             effort: next.defaults.efforts[e.name] ?? null, mode: next.defaults.modes[e.name] ?? manifest.permission.default_mode ?? 'workspace-write',
-            provider_config: next.endpoints.overrides[e.name].provider_config ?? null, notes: e.notes, runtime_resources: e.runtime_resources, error: e.error })
+            provider_config: next.endpoints.overrides[e.name]?.provider_config ?? null, notes: e.notes, runtime_resources: e.runtime_resources, error: e.error })
     }
     for (const requested of choices.hosts ?? []) {
         const name = typeof requested === 'string' ? requested : requested.name

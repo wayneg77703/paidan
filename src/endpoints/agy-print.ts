@@ -34,6 +34,17 @@ export function readAgyUsage(value: unknown): UsageSummary | null {
     return { input_tokens: input, output_tokens: output, cached_input_tokens: cached, cost: null, source: 'provider' }
 }
 
+// AGY >= 1.2.6 emits a structured fatal diagnostic on stderr. Keep only
+// bounded machine fields; provider messages may contain request data.
+function readStructuredError(line: string): Record<string, unknown> | null | undefined {
+    const match = /^AGY_ERROR:\s*(.*)$/.exec(line.trim())
+    if (!match) return undefined
+    try {
+        const value: unknown = JSON.parse(match[1])
+        return isRecord(value) ? value : null
+    } catch { return null }
+}
+
 export function createAgyPrintParser(): AgyPrintParser {
     let resultText: string | null = null
     let fallbackText = ''
@@ -100,10 +111,29 @@ export function createAgyPrintParser(): AgyPrintParser {
         // every other event is recorded by the caller's event log, not by the parser
     }
 
+    function parseStderrLine(line: string): void {
+        const error = readStructuredError(line)
+        if (error === undefined) return
+        if (error === null) {
+            degraded = true
+            warnings.push('malformed AGY_ERROR diagnostic; error details unavailable')
+            return
+        }
+        const fields = ['status', 'code', 'http_status', 'grpc_code'].flatMap(key => {
+            const value = error[key]
+            return (typeof value === 'string' || typeof value === 'number') && /^[A-Za-z0-9_.:-]{1,64}$/.test(String(value))
+                ? [`${key}=${value}`] : []
+        })
+        if (typeof error.retryable === 'boolean') fields.push(`retryable=${error.retryable}`)
+        warnings.push(`AGY_ERROR received${fields.length ? ': ' + fields.join(', ') : ''}; no automatic retry`)
+    }
+
     return {
         acceptStdoutLine: parseStdoutLine,
-        acceptStderrLine: () => {},
-        finish(tailStdout: string, _tailStderr: string): AgyParseResult {
+        acceptStderrLine: parseStderrLine,
+        finish(tailStdout: string, tailStderr: string): AgyParseResult {
+            if (tailStderr.trim()) parseStderrLine(tailStderr)
+
             if (tailStdout.trim()) {
                 degraded = true
                 warnings.push('stdout ended mid-line; stream may be incomplete')
@@ -129,8 +159,13 @@ export function createAgyPrintParser(): AgyPrintParser {
 }
 
 /** Endpoint refusal/incompletion signals from the full stderr capture + exit code. */
-export function detectRefusals(stderrText: string, _exitCode: number | null): string[] {
+export function detectRefusals(stderrText: string, exitCode: number | null): string[] {
     const out: string[] = []
+    // Nonzero exits remain failures through the normal terminal judge. An
+    // error paired with exit 0 is contradictory evidence, never success.
+    if (exitCode === 0 && stderrText.split(/\r?\n/).some(line => !!readStructuredError(line))) {
+        out.push('agy-error-with-success-exit')
+    }
     if (/required the "[^"]+" permission that headless mode cannot prompt for/i.test(stderrText)) {
         out.push('headless-permission-auto-deny')
     }

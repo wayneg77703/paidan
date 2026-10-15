@@ -77,12 +77,14 @@ The program changes only selected endpoints. Follow native defaults or choose a 
 | `zcode` | Configure and enable a native API provider first; desktop login alone does not establish CLI access. Custom installation drives are supported. The program creates a dedicated profile for fixed choices. |
 | `opencode` | Choose provider/model and its variant. Inspect configuration in the actual task directory. |
 | `omp` | Uses the current native profile's model/thinking settings. Native account rotation and fallback may still apply. |
-| `dsh` | Uses native headless profile settings, with no paidan model/effort overrides. Locate the entry again if its cache disappears. No session resume. |
+| `dsh` | Uses native headless profile settings, with no paidan model/effort overrides. Locate the entry again if its cache disappears. The 0.2 headless adapter uses stdin/JSON, explicit session resume in the same cwd/compatible profile, and reported root-session step usage. |
 | `agy` | Choose the complete model ID; do not add effort when the ID already includes it. Missing native permission rules need separate attention. |
 
 A dedicated ZCode file may contain a local copy of the selected API key; setup explains this and asks for approval, preserving the original configuration. DSH native-default changes also disclose their wider impact before the program edits a supported configuration format.
 
 Model settings and execution permissions are separate. Defaults generally permit workspace edits; ZCode uses the broader `yolo` mode. Explicitly request read-only when needed; see [endpoint permission support](INSTALL.en.md#headless-permissions-are-separate-defaults). Codex disables interactive approval, and Claude Code denies operations that require a prompt so the host can handle them without a headless task waiting for input.
+
+For maximum headless permissions, select `mode: "unattended"` through setup without changing native interactive settings or model choices. Version 0.1.13 explicitly maps all three DSH permission environments (maximum: `danger-full-access`) and adds AGY's `--dangerously-skip-permissions`. Permission-only setup preserves existing entry paths. Kimi 2.2.0 print already forces auto and cannot be combined with `--auto`. On 2026-10-15, DSH 0.2.0rc2 passed a live maximum-permission shell write and P1/P2/P3 probes; AGY 1.3.5 accepted the flag but account eligibility blocked live execution.
 
 ## When a task fails
 
@@ -102,3 +104,10 @@ Default data locations:
 These hold configuration, installation records and task history. Change locations with `PAIDAN_HOME` or the data-directory setting. Finished tasks are retained for **30 days** by default; `paidan list` cleans expired records. Adjust `ttlDays` for longer retention. Uninstalling preserves this data and native agent settings by default.
 
 [Detailed installation and endpoint setup](INSTALL.en.md) · [Technical reference](docs/contracts.md) · [Maintainer guide](AGENTS.md) · [MIT license](LICENSE)
+
+
+### Usage and headless configuration boundaries
+
+DSH, OMP and OpenCode aggregate distinct reported root-session steps/turns for this run, ignoring duplicate events. Missing, conflicting or incomplete streams do not produce a fabricated exact total. These summaries are not provider-wide billing: cache writes, hidden retries, auxiliary compaction and subagent requests may be absent. Input/cache semantics remain endpoint-specific; see result notes and [contracts](docs/contracts.md).
+
+OMP 18.9 print mode waits for MCP startup. Native OMP_MCP_REQUIRE_READY=1 can make required-but-unavailable MCP tools fail before the model turn. Paidan does not enable it globally or change native MCP/accounts/fallback settings. Existing-server attachment and Claude --bare remain optional task-specific choices, not new default services or reduced project context.

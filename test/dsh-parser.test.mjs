@@ -1,104 +1,57 @@
-// Golden fixtures for the dsh-headless parser (src/endpoints/dsh-headless.ts).
-// Text shapes mirror dsh 0.1.2-rc.1 live streams and the suite probe runs
-// 23476842 (P1 write) / 466b67d9 (P2 read-only refusal) captured 2026-09-09;
-// no real agent is touched.
-
+// Fixtures mirror the installed DSH 0.2.0-rc.2 JSON projection. No model calls.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createDshHeadlessParser, detectDshRefusals } from '../dist/endpoints/dsh-headless.js'
-import { discoverDshModels } from '../dist/endpoints/dsh-models.js'
+function parse(events, tail = '') { const p = createDshHeadlessParser(); for (const e of events) p.acceptStdoutLine(typeof e === 'string' ? e : JSON.stringify(e)); return p.finish(tail, '') }
+const session = { type: 'session', sessionId: 'session-fixture', cwd: '/fixture' }
+const end = (step, usage, turn = 1) => ({ type: 'status', phase: 'step_end', turn, step, ...(usage ? { usage } : {}) })
+const sample = { inputTokens: 12, outputTokens: 3, cacheReadTokens: 8 }
+const final = { type: 'final', text: 'DONE' }
 
-const P2_FINAL = [
-    '无法创建文件 `probe-ro.txt`。',
-    '',
-    '- 本次任务的工作区 DSH 文件策略为 **read-only（只读）**；',
-    '- 我使用 write 工具尝试创建文件时，文件沙箱直接拒绝：`[sandbox: file access denied under read-only mode]`；',
-    '- 升级重试返回：`sandbox escalation to "workspace-write" requires approval, but no approval channel is available`；',
-    '- 文件确认未创建。',
-    '',
-    'OK',
-].join('\n')
-
-test('normal run: whole stdout is the final text, no session, no usage, never degraded', () => {
-    // Live P1 shape (suite run 23476842): stdout "DONE", stderr reasoning blocks.
-    const p = createDshHeadlessParser()
-    p.acceptStdoutLine('DONE')
-    p.acceptStderrLine('dsh: reasoning:')
-    p.acceptStderrLine('The task is simple: create file probe-write.txt ...')
-    const r = p.finish('', '')
-    assert.equal(r.finalText, 'DONE')
-    assert.equal(r.sessionId, null)
-    assert.equal(r.usage, null)
-    assert.equal(r.degraded, false)
-    assert.deepEqual(r.refusals, [])
+test('current invocation sums distinct root steps, not text or final duplicates', () => {
+    const r = parse([session, end(1, sample), { type: 'text', text: 'interim' }, end(2, sample), final])
+    assert.equal(r.sessionId, 'session-fixture'); assert.equal(r.finalText, 'DONE'); assert.equal(r.degraded, false)
+    assert.deepEqual(r.usage, { input_tokens: 24, output_tokens: 6, cached_input_tokens: 16, cost: null, source: 'provider' })
+    assert.ok(r.warnings.some(w => w.includes('child sessions are not included')))
 })
-
-test('sandbox refusal run: exit-0 denial surfaces in-band from the final text', () => {
-    // Live P2 shape (suite run 466b67d9): exit 0, file absent, signatures in final text.
-    const p = createDshHeadlessParser()
-    for (const line of P2_FINAL.split('\n')) p.acceptStdoutLine(line)
-    const r = p.finish('', '')
-    assert.equal(r.degraded, false)
-    assert.ok(r.finalText.includes('read-only'))
+test('duplicate step is idempotent; same step in another turn is distinct', () => {
+    assert.equal(parse([session, end(1, sample), end(1, sample), final]).usage.input_tokens, 12)
+    assert.equal(parse([session, end(1, sample), end(1, sample, 2), final]).usage.input_tokens, 24)
+    const r = parse([session, end(1, sample), end(1, { ...sample, inputTokens: 13 }), final])
+    assert.equal(r.usage, null); assert.equal(r.degraded, true)
+})
+test('a missing attempt/step sample makes the total unknown, not a partial sum', () => {
+    assert.equal(parse([session, end(1, sample), end(2), final]).usage, null)
+    assert.equal(parse([session, final]).usage, null)
+    assert.equal(parse([session, end(1, { inputTokens: 0, outputTokens: 0 }), final]).usage.cached_input_tokens, null)
+})
+test('optional cache must be reported on every step; zero is genuine evidence', () => {
+    const r = parse([session, end(1, sample), end(2, { inputTokens: 0, outputTokens: 0 }), final])
+    assert.equal(r.usage.input_tokens, 12); assert.equal(r.usage.cached_input_tokens, null)
+    assert.equal(parse([session, end(1, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }), final]).usage.input_tokens, 0)
+})
+test('truncated final, unclosed step, missing final and malformed events fail closed', () => {
+    for (const events of [[session, end(1, sample)], [session, end(1, sample), { ...final, truncated: true }],
+        [session, { type: 'status', phase: 'step_start', turn: 1, step: 2 }, final], [session, 'not JSON', final],
+        [session, end(1, sample), { type: 'new_unknown_event' }, final], [session, final, end(1, sample)]]) {
+        const r = parse(events); assert.equal(r.degraded, true); assert.equal(r.usage, null)
+    }
+})
+test('complete final without trailing newline is accepted; partial JSON is not', () => {
+    assert.equal(parse([session, end(1, sample)], JSON.stringify(final)).finalText, 'DONE')
+    assert.equal(parse([session], '{"type":"final"').degraded, true)
+})
+test('invalid counters and unsafe totals cannot become usage facts', () => {
+    for (const value of [-1, 1.5, '12', null, 1e20]) assert.equal(parse([session, end(1, { ...sample, inputTokens: value }), final]).usage, null)
+    assert.equal(parse([session, end(1, { ...sample, inputTokens: Number.MAX_SAFE_INTEGER }), end(2, sample), final]).usage, null)
+})
+test('tool and final refusal evidence persists despite exit-zero text', () => {
+    const refusal = 'file access denied under read-only mode; requires approval, but no approval channel is available'
+    const r = parse([session, { type: 'tool_result', result: refusal }, final])
     assert.deepEqual(r.refusals.sort(), ['approval-channel-unavailable', 'sandbox-file-access-denied'])
+    assert.deepEqual(detectDshRefusals(refusal, 0).sort(), r.refusals)
+    assert.deepEqual(detectDshRefusals('', 1), [])
 })
-
-test('multi-line stdout joins with newlines and trims; mid-line tail is appended, not degraded', () => {
-    const p = createDshHeadlessParser()
-    p.acceptStdoutLine('first line')
-    p.acceptStdoutLine('second line')
-    const r = p.finish(' tail-without-newline', '')
-    assert.equal(r.finalText, 'first line\nsecond line\n tail-without-newline')
-    assert.equal(r.degraded, false)
-    assert.deepEqual(r.warnings, [])
-})
-
-test('empty stdout yields empty finalText (terminal judgment decides, parser stays neutral)', () => {
-    const p = createDshHeadlessParser()
-    const r = p.finish('', '')
-    assert.equal(r.finalText, '')
-    assert.equal(r.degraded, false)
-    assert.deepEqual(r.refusals, [])
-})
-
-test('detectRefusals: signatures on stderr are flagged without exit-code gating; benign reasoning stays silent', () => {
-    const leaked = 'dsh: reasoning:\nThe write failed: [sandbox: file access denied under read-only mode]\n'
-    assert.deepEqual(detectDshRefusals(leaked, 0), ['sandbox-file-access-denied'])
-    assert.deepEqual(detectDshRefusals(leaked, 1), ['sandbox-file-access-denied'])
-    // raw 0.1.2-rc.1 re-verification (2026-09-10) quoted the denial WITHOUT the bracket prefix
-    const unbracketed = 'the sandbox denied it (`file access denied under read-only mode`)'
-    assert.deepEqual(detectDshRefusals(unbracketed, 0), ['sandbox-file-access-denied'])
-    const benign = 'dsh: reasoning:\nThe write was denied under read-only mode. Escalation was rejected.\n'
-    assert.deepEqual(detectDshRefusals(benign, 0), [])
-    assert.deepEqual(detectDshRefusals('', null), [])
-})
-
-test('model-paraphrased denial phrasing is also flagged (live run_20260910_e092fee4)', () => {
-    const paraphrased =
-        'I could not create `should-not-exist.txt`: the sandbox is in read-only mode, so the write was denied, ' +
-        "and escalating to workspace-write requires an approval channel that isn't available in this session."
-    assert.deepEqual(detectDshRefusals(paraphrased, 0), ['sandbox-file-access-denied', 'approval-channel-unavailable'])
-    const p = createDshHeadlessParser()
-    for (const line of paraphrased.split('\n')) p.acceptStdoutLine(line)
-    assert.deepEqual(p.finish('', '').refusals, ['sandbox-file-access-denied', 'approval-channel-unavailable'])
-})
-
-test('model discovery reads the native settings.yaml agent-default-model block honestly', () => {
-    const yaml = [
-        'ui-onboarding:',
-        '  welcomeNoticeVersion: 2026-08-13.1',
-        'agent-default-model:',
-        '  provider: deepseek-official',
-        '  model: deepseek-v4-flash-vision-exp',
-        '  reasoningEffort: max',
-        'llm-pi-ai:',
-        '  providers: {}',
-    ].join('\n')
-    const { models, notes } = discoverDshModels(yaml)
-    assert.deepEqual(models.map(({ alias, connection, source }) => ({ alias, connection, source })), [{ alias: 'deepseek-official/deepseek-v4-flash-vision-exp', connection: 'deepseek-official', source: 'native-config' }])
-    assert.equal(models[0].default_effort, 'max')
-    assert.equal(models[0].effort_selectable, false)
-    assert.ok(notes.some((n) => n.includes('reasoningEffort=max')))
-    assert.deepEqual(discoverDshModels(null).models, [])
-    assert.deepEqual(discoverDshModels('ui-onboarding:\n  x: 1\n').models, [])
+test('plain legacy stdout is unknown instead of masquerading as JSON success', () => {
+    const r = parse(['DONE']); assert.equal(r.degraded, true); assert.equal(r.finalText, ''); assert.equal(r.sessionId, null)
 })

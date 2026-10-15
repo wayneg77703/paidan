@@ -187,3 +187,26 @@ test('parseAgyModelsOutput: TSV id<TAB>display-name rows (live shape 1.1.28)', (
     assert.ok(notes.length > 0)
     assert.deepEqual(parseAgyModelsOutput('').models, [])
 })
+
+
+test('structured fatal diagnostic retains bounded machine fields without leaking provider text', () => {
+    const p = createParser()
+    const line = 'AGY_ERROR: ' + JSON.stringify({status:'UNAUTHENTICATED', code:401, retryable:false, message:'private request text', error_id:'private-id'})
+    p.acceptStderrLine(line)
+    const r = p.finish('', '')
+    assert.equal(r.degraded, false)
+    assert.ok(r.warnings.some(x => x.includes('status=UNAUTHENTICATED') && x.includes('retryable=false')))
+    assert.ok(!r.warnings.join(' ').includes('private'))
+    assert.deepEqual(detectRefusals(line, 3), [])
+    assert.deepEqual(detectRefusals(line, 0), ['agy-error-with-success-exit'])
+})
+
+test('malformed AGY_ERROR degrades; ordinary stderr is ignored; EOF diagnostic is parsed', () => {
+    const p = createParser()
+    p.acceptStderrLine('ordinary diagnostic')
+    assert.equal(p.finish('', 'AGY_ERROR: {broken').degraded, true)
+    const q = createParser()
+    assert.ok(q.finish('', 'AGY_ERROR: {"code":429,"retryable":true}').warnings.some(x => x.includes('code=429')))
+    assert.deepEqual(detectRefusals('quoted AGY_ERROR: {"code":401}', 0), [])
+    assert.deepEqual(detectRefusals('AGY_ERROR: []', 0), [])
+})

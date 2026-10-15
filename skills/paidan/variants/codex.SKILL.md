@@ -57,11 +57,11 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 ## 权限预设与提交期拒绝
 
 - “跟随原生”仅指连接、模型、强度，不包括交互审批。省略 `--mode` 时按 `defaults.modes.<端点>` → 端点默认选择；内置默认七个端点为 workspace-write，zcode 为 unattended。可用 `--mode` 作本次调整、`defaults.modes` 作持久调整，不自动升权。用户要求只读时显式传 read-only；端点不支持就报告，不回到较宽默认。
-- 无头审批按各家适配：Codex 显式 approval_policy=never；Claude acceptEdits 加 permission-prompts=none（不撤销已有 allow，不提供强制只读）；Kimi print 为 auto；ZCode 仅 yolo；OpenCode build 保留原生规则；OMP write，需审批的执行操作拒绝；DSH 默认 native headless，可经 DSH_PERMISSION_MODE 请求只读但无 unattended；AGY accept-edits 依赖原生 allow 规则，缺规则时说明，由用户决定原生调整，通过受支持的程序/原生设置方式完成。无头权限错误先返回宿主处理，不把等待用户/SDK host 确认的交互方式当成可用配置。
+- 无头审批按各家适配：Codex 显式 approval_policy=never；Claude acceptEdits 加 permission-prompts=none（不撤销已有 allow，不提供强制只读）；Kimi print 为 auto；ZCode 仅 yolo；OpenCode build 保留原生规则；OMP write，需审批的执行操作拒绝；DSH 三档显式设置 DSH_PERMISSION_MODE，unattended 对应 danger-full-access + never；AGY unattended 使用原生 --dangerously-skip-permissions，受限模式仍遵循原生规则。无头权限错误先返回宿主处理，不把等待用户/SDK host 确认的交互方式当成可用配置。
 - 三预设：`read-only` / `workspace-write` / `unattended`。各端点把预设映射到自己的原生权限模型。
 - 端点无法强制所请预设时**提交期硬拒** `PERMISSION_UNSUPPORTED`（message 列出缺失能力），不会降级偷跑。此时不得改权限重试；报告限制，或换支持该预设的端点。
 - `soft` 能力只记入返回的 `warnings` 字段，任务照跑；含义是端点声称支持但强制力存疑。
-- 预设支持速查（以 `paidan doctor` 实况为准）：kimi-code、claude-code 无 `read-only`；zcode 仅 `unattended`；dsh 无 `unattended`；omp 的 `workspace-write` 不含 shell.exec（shell 需 `unattended`）；agy 的 shell.exec 为 `soft`。
+- 预设支持速查（以 `paidan doctor` 实况为准）：kimi-code、claude-code 无 `read-only`；zcode 仅 `unattended`；dsh 支持显式 `unattended`；omp 的 `workspace-write` 不含 shell.exec（shell 需 `unattended`）；agy 的 shell.exec 为 `soft`。
 
 ## 终态判读纪律（证据优先）
 
@@ -80,7 +80,7 @@ paidan 是本机委派工具：把任务交给本机已安装的 AI CLI agent �
 ## 续接（resume）
 
 - `paidan run --endpoint <name> --cwd <与首次相同> --resume <session_handle> --task-file <新任务>`；`session_handle` 取自上次 `get` 结果的 `result.session_handle`（或 `run.session.handle`）。
-- resume 的权限档分两类端点：**恢复原档型**（codex `exec resume` 不收 `-s`/`--add-dir`，恢复会话原 sandbox，本次 `--mode` 只记在请求里不生效，提交回执会带警告）；**重定档型**（claude 等 flag 拼接路径会重传本次 mode；agy 本次调用可重新定档）。kimi/zcode 会话按 cwd 绑定，必须同 cwd。dsh 无 resume。
+- resume 的权限档分两类端点：**恢复原档型**（codex `exec resume` 不收 `-s`/`--add-dir`，恢复会话原 sandbox，本次 `--mode` 只记在请求里不生效，提交回执会带警告）；**重定档型**（claude 等 flag 拼接路径会重传本次 mode；agy 本次调用可重新定档）。kimi/zcode 会话按 cwd 绑定，必须同 cwd。dsh 0.2 headless 支持显式 session handle 续接，要求相同 cwd 与兼容 profile，未知句柄直接拒绝；不保证后台子任务收尾。
 
 ## 红线（不可越过）
 

@@ -8,10 +8,10 @@
 //    agent_end {messages[], isTerminal}, advisor_cost_changed, error.
 //  - finalText = last turn_end assistant text, else last agent_end's;
 //    assistant text = content blocks with type "text" joined by \n.
-//  - usage comes ONLY from a sole turn_end usage {input, output, cacheRead}
-//    (source provider); multiple turn_end events are NORMAL with tool use and
-//    stay unavailable — per-turn vs cumulative semantics unproven, never
-//    aggregate, never fabricate zeros (omp-cli.json usage_contract).
+//  - 18.9.1 agent-loop.ts emits per-turn assistant usage. Count turn_end only;
+//    message_end / agent_end repeat messages and are not extra requests.
+//    Response ids, timestamps, or explicit turn boundaries identify duplicates.
+//    Totals cover reported root-session turns, not hidden retries/subagents.
 //  - headless approval denials are in-band: toolResults rows with isError and
 //    "requires approval but no interactive UI available" (live 2026-09-10).
 //  - a native --max-time deadline stop aborts the in-flight assistant message
@@ -76,7 +76,64 @@ export function createOmpPrintParser(): EndpointStreamParser {
     const sessions = new Set<string>()
     const turnFinals: string[] = []
     const agentFinals: string[] = []
-    const turnUsages: unknown[] = []
+    const turns = new Map<string, string>()
+    const boundaryFingerprints = new Map<string, number>()
+    let turnBoundary = 0
+    let turnInFlight = false
+    let turnCount = 0
+    let anonymousTurns = 0
+    let usageInvalid = false
+    let providerInterrupted = false
+    const totals = { input: 0, output: 0, cacheRead: 0 }
+
+    function observeUsage(message: unknown): void {
+        turnCount++
+        const m = message as Message | null
+        if (!m || m.role !== 'assistant' || !validProviderTokens(m.usage)) {
+            usageInvalid = true
+            return
+        }
+        const u = m.usage
+        const scope = [m.provider ?? null, m.model ?? null]
+        const stableKey = typeof m.responseId === 'string' && m.responseId
+            ? JSON.stringify(['response', ...scope, m.responseId])
+            : Number.isSafeInteger(m.timestamp) && (m.timestamp as number) >= 0
+                ? JSON.stringify(['timestamp', ...scope, m.timestamp])
+                : null
+        const key = stableKey ?? (turnBoundary > 0 ? `turn:${turnBoundary}` : null)
+        // Same identity with different usage/content is conflicting evidence, not
+        // another charge. No identity across multiple events remains unknown.
+        const fingerprint = JSON.stringify([u.input, u.output, u.cacheRead, m.content, m.stopReason])
+        if (stableKey === null) {
+            // A new turn_start is not a request identity. An identical older
+            // completion may be replayed after it; do not close or charge the
+            // new turn unless the evidence distinguishes it from that replay.
+            const signature = JSON.stringify([...scope, fingerprint])
+            const previousBoundary = boundaryFingerprints.get(signature)
+            if (previousBoundary !== undefined && previousBoundary !== turnBoundary) {
+                usageInvalid = true
+                return
+            }
+            boundaryFingerprints.set(signature, turnBoundary)
+        }
+        if (key !== null) {
+            const previous = turns.get(key)
+            if (previous !== undefined) {
+                if (previous !== fingerprint) usageInvalid = true
+                return
+            }
+            turns.set(key, fingerprint)
+        } else {
+            anonymousTurns++
+        }
+        // Only a new completion can close an observed start. A replayed older
+        // turn_end must not hide an interrupted later turn.
+        turnInFlight = false
+        totals.input += u.input
+        totals.output += u.output
+        totals.cacheRead += u.cacheRead
+        if (!validProviderTokens(totals)) usageInvalid = true
+    }
     let abortedMessages = 0
     let deadlineSeen = false
     let unknownEvents = 0
@@ -88,12 +145,16 @@ export function createOmpPrintParser(): EndpointStreamParser {
         if (!message || typeof message !== 'object' || Array.isArray(message)) return
         const m = message as Message
         if (messageHasError(m)) {
+            providerInterrupted = true
             const summary = summarizeMessageError(m)
             warnings.push(summary)
             refusals.push(summary)
             if (messageHasAuthError(m)) refusals.push('provider-auth-error')
         }
-        if (String(m.stopReason ?? '').toLowerCase() === 'aborted') abortedMessages++
+        if (String(m.stopReason ?? '').toLowerCase() === 'aborted') {
+            abortedMessages++
+            providerInterrupted = true
+        }
     }
 
     function observeToolResults(toolResults: unknown): void {
@@ -130,7 +191,15 @@ export function createOmpPrintParser(): EndpointStreamParser {
         const type = typeof o.type === 'string' ? o.type : ''
         if (type === 'session') {
             if (typeof o.id === 'string' && o.id) sessions.add(o.id)
+        } else if (type === 'turn_start') {
+            if (turnInFlight) usageInvalid = true
+            turnInFlight = true
+            turnBoundary++
+        } else if (type === 'message_end') {
+            // Failed attempts may never emit turn_end; do not report a partial sum.
+            observeMessage(o.message)
         } else if (type === 'error') {
+            providerInterrupted = true
             const summary = `provider error event: ${JSON.stringify(o).slice(0, 200)}`
             warnings.push(summary)
             refusals.push(summary)
@@ -138,7 +207,7 @@ export function createOmpPrintParser(): EndpointStreamParser {
             observeMessage(o.message)
             const text = assistantText(o.message)
             if (text) turnFinals.push(text)
-            turnUsages.push((o.message as Message | undefined)?.usage)
+            observeUsage(o.message)
             observeToolResults(o.toolResults)
         } else if (type === 'agent_end' && Array.isArray(o.messages)) {
             for (const m of o.messages) {
@@ -149,7 +218,7 @@ export function createOmpPrintParser(): EndpointStreamParser {
         } else if (!KNOWN_EVENT_TYPES.has(type)) {
             unknownEvents++
         }
-        // known progress rows (agent_start/turn_start/message_*/tool_execution_*,
+        // known progress rows (agent_start/message_*/tool_execution_*,
         // advisor_cost_changed) are the caller's event log, not parser state
     }
 
@@ -173,14 +242,14 @@ export function createOmpPrintParser(): EndpointStreamParser {
                 warnings.push(`expected one unique session id, got ${sessions.size}; no trustworthy resume handle`)
             }
             let usage: UsageSummary | null = null
-            if (turnUsages.length > 1) {
-                warnings.push(`multiple turn_end events (${turnUsages.length}); per-turn vs cumulative semantics unproven, usage unavailable`)
-            } else if (turnUsages.length === 1) {
-                const u = turnUsages[0]
-                if (validProviderTokens(u)) {
-                    usage = { input_tokens: u.input, output_tokens: u.output, cached_input_tokens: u.cacheRead, cost: null, source: 'provider' }
+            if (turnCount > 0) {
+                if (usageInvalid || (anonymousTurns > 0 && turnCount > 1)) {
+                    warnings.push('turn_end usage missing or invalid, conflicting, or without trustworthy multi-turn identity; usage unavailable')
+                } else if (degraded || sessions.size > 1 || providerInterrupted || turnInFlight) {
+                    warnings.push('incomplete or interrupted root-session stream; usage unavailable rather than a partial total')
                 } else {
-                    warnings.push('turn_end usage missing or invalid; usage unavailable')
+                    usage = { input_tokens: totals.input, output_tokens: totals.output, cached_input_tokens: totals.cacheRead, cost: null, source: 'provider' }
+                    warnings.push('usage covers reported root-session turns only; input excludes cache reads/writes, output includes thinking; cache writes, orchestration, hidden retries and auxiliary/subagent requests are not represented')
                 }
             }
             if (abortedMessages > 0) {
