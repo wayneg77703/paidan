@@ -6,3 +6,7 @@ tmp/
 
 # test fixture artifacts
 fake-deliverable.txt
+
+# 构建产物与内部维护记录：保留在本地，不进公开仓/发布包
+*.tgz
+docs/harness-refresh-plan.md
