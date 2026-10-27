@@ -48,3 +48,38 @@ OpenCode --attach、Codex App Server、Claude --bare、任务特定 MCP 配置�
 - DSH 三档权限显式映射到 DSH_PERMISSION_MODE，unattended 使用 danger-full-access；AGY unattended 增加 1.3.5 的 --dangerously-skip-permissions。Kimi 2.2.0 print 原生强制 auto，不添加与 print 冲突的 --auto。仅改 mode 的 setup 保留原有入口和固定选择，不将稳定入口重写为缓存解析路径。
 - 全量 321 项测试：320 通过、1 跳过、0 失败。DSH 0.2.0rc2 P1/P2/P3 通过；最高权限真实 shell 写入通过。部署后不传 --mode 的新任务实际采用配置指定的 unattended，shell 写入、文件精确内容和 completed 终态均通过。AGY 因账号资格失败，未将参数核验冒充真实权限验证。
 - 本机按用户选择配置七个端点的最高权限默认，Claude Code 保持原样；此为本机选择，公共包仍保留原有端点默认，不随源码发布用户配置。原有模型、强度、连接、路径保留，技能沿 setup 自动备份及回执机制更新。用户于本次部署后要求同步 GitHub，源码版本为 0.1.13；临时配置、凭据、任务日志和安装包不进入 Git。
+
+## 当前版本适配与真实验收（2026-10-27）
+
+基线为 `c530b995255f65fb5b7fd0da3f5ca95af81ba50b`（0.1.13）。保留持久 run、零运行时依赖、原生认证、无跨连接 fallback 和证据优先终态；不引入 OpenCode 2、常驻服务或新的 SDK/ACP 通道。包版本保持 0.1.13，只做本机安装，未发布 npm。
+
+### 本轮修复
+
+- OpenCode 接受下划线 provider；Codex/Kimi/OpenCode 的全零及混合用量不再伪造精确零或部分合计。DSH 保留 terminal error；Kimi 保留结构化 error；ZCode 可选观测字段不再使整包 degraded，移除过时的 12 回合上限；OMP 原生 fallback 事件成为有界 warning。
+- DSH setup 可经 `native_settings.source_profile=web|acp` 同步所选 provider 对应的 `llm-pi-ai` 段。只在该段内检查所选 provider/model、动态语法和直接凭据；不复制 secret，也不因无关旧插件段拒绝。模型默认仍由原生 headless profile 承载，setup 不替换稳定入口。多端点调查改为串行，避免原生 CLI 竞争。
+- 配置投影跳过 `llm-pi-ai` 内的模型列表，不再把嵌套模型 ID 误认成顶层插件。probe 识别 `MISSING_CREDENTIAL` 后停止后续付费尝试。Codex 启动配置提示与实验特性提示保留 warning，不再误作 refusal 使成功续接变成 unknown。HTTP Cookie/Set-Cookie 进入日志前脱敏；旧 run 不改写。
+
+### 实际结果
+
+下表模型为 paidan 提交组合，DSH/ZCode 为原生专用选择；配置快照本身不等于实际路由证明。
+
+| 端点（实测版本） | 模型 / 强度 | P1-write | P2-readonly-refusal | P3-resume | verified_at_refresh |
+|---|---|---|---|---|---|
+| Codex 0.164.0 | `gpt-6-astra + xhigh` | pass `run_20261027_36c81d76` | indeterminate `run_20261027_eb622e2d` | pass `run_20261027_ea87f2fa` → `run_20261027_76708c0c` | ok |
+| Kimi Code 2.3.3 | `kimi-code/k3.1-pro + max` | pass `run_20261027_8157caf2` | pass：提交期拒绝 read-only | pass `run_20261027_57549b43` → `run_20261027_ca8dab61` | ok |
+| OpenCode 1.19.4 | `opencode-go/deepseek-v4.1-flash + max` | pass `run_20261027_bb154f00` | indeterminate `run_20261027_ff843269` | pass `run_20261027_07d33a69` → `run_20261027_7fe4420a` | ok |
+| OMP 18.13.1 | `deepseek/deepseek-flash + max` | pass `run_20261027_436c62a8` | pass `run_20261027_58c39870` | pass `run_20261027_16249a7e` → `run_20261027_b396ca4c` | ok |
+| DSH 0.2.1-rc.4 | `wb_lan/cn:deepseek-v4.1-flash + max` | fail `run_20261027_3bb6a20d` | indeterminate `run_20261027_c908ebe4` | fail `run_20261027_ebafbc99` → `run_20261027_76f5f468` | 未尝试 |
+| ZCode 0.17.0 | `bigmodel-api-3/GLM-5.3 + max` | fail `run_20261027_a24720b1` | pass：提交期拒绝 read-only | skip：额度阻断后未提交 | 未尝试 |
+
+- 上表 Codex/Kimi/OpenCode/OMP 的 P1/P3 均为 `state=completed`、`parser.degraded=false`，同 session 回忆成功。OMP P2 的 run 为 `unknown`，因有可归因的工具拒绝而 verdict=pass。Codex/OpenCode 本次 P2 只有模型文本，缺少可归因的工具拒绝事件，不据此宣称强制只读已验证。Kimi/ZCode 的 P2 只证明提交期能力边界。
+- 完成调用的 Codex/OpenCode/OMP usage 来源为 provider，Kimi 为 endpoint-ledger，非空用量与 session_handle 均已回读。P1 的 input/output/cached 分别为：Codex 37,864/147/25,984；Kimi 5,880/158/103,168；OpenCode 12,122/92/15,488；OMP 10,876/157/21,120。不同端点口径不能直接相加。
+- DSH 四次均为 `MISSING_CREDENTIAL`：headless 无法解析 `WB_LAN_API_KEY`，未进入模型调用，usage unavailable。没有复制凭据、移除 `apiKeyEnv` 或改走其他连接。最终 setup 应用 `applied=true`，headless 配置与 paidan 配置均 `unchanged`；doctor 仍读回目标 provider/model/effort。web/acp 默认及宿主 skill 未改。
+- ZCode P1 为 provider 429：5 小时使用上限，原生给出的重置时点为 2026-10-27 16:56:55。P3 未继续提交，usage unavailable；没有本轮 session/trace/turn 可供账本核对，故 `matches_expected=null`，不能声称实际组合已验证。未自动重试或切换 provider。
+- Claude Code 未配置可用模型、AGY 未配置登录态，按用户要求不做真实调用，也不刷新 verified_at。OMP 原生 fallback/角色切换保持开启，本轮未观察到 fallback warning，不代表以后不会发生。Kimi 原生 highspeed 默认未被 paidan 固定值覆盖。
+
+### 回归与剩余阻断
+
+`npm run build` 通过；`npm test` 共 335 项：334 通过、1 跳过、0 失败。已从当前源码打包并本机全局安装，`paidan --version`=0.1.13。DSH 最终 setup 预览/应用、doctor 与六端点 run store 已回读；没有遗留 pending/running/attention。
+
+本轮不是六端点全部验收成功：Codex/Kimi/OpenCode/OMP 的真实调用路径通过，DSH 缺原生 headless 凭据、ZCode 受 5 小时额度阻断。两者需相应外部条件恢复后另行补验；不把离线测试、配置读取或历史成功记录冒充本轮模型调用成功。

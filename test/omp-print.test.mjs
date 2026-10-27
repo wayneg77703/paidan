@@ -261,3 +261,24 @@ test('boundary-only replay after third start cannot masquerade as a new complete
     assert.equal(parseTurns([start, a, a], '').usage.input_tokens, 100)
     assert.equal(parseTurns([start, a, start, a], '').usage, null)
 })
+
+test('native fallback events surface route warnings without changing terminal or usage semantics', () => {
+    const a = ompTurn('a', { input: 10, output: 2, cacheRead: 0 })
+    a.message.provider = 'deepseek'; a.message.model = 'deepseek-flash'
+    const b = ompTurn('b', { input: 20, output: 2, cacheRead: 0 })
+    b.message.provider = 'other'; b.message.model = 'provider-model'
+    const r = parseTurns([
+        { type: 'turn_start' },
+        { type: 'retry_fallback_applied', from: 'deepseek/deepseek-flash', to: 'other/provider-model', role: 'default', reason: 'synthetic' },
+        a,
+        { type: 'turn_start' },
+        { type: 'retry_fallback_succeeded', model: 'other/provider-model', role: 'default' },
+        b,
+        { type: 'agent_end', messages: [], isTerminal: true },
+    ])
+    assert.equal(r.degraded, false)
+    assert.equal(r.usage.input_tokens, 30)
+    assert.ok(r.warnings.some(w => w.includes('fallback applied') && w.includes('other/provider-model')))
+    assert.ok(r.warnings.some(w => w.includes('fallback succeeded')))
+    assert.ok(!r.warnings.some(w => w.includes('unknown event types')))
+})

@@ -133,7 +133,10 @@ async function sumWireFile(
         for (const field of WIRE_USAGE_FIELDS) {
             const value = u[field]
             if (!Number.isSafeInteger(value) || (value as number) < 0) return { records, invalid: true }
-            const next = totals[field] + (value as number)
+        }
+        if (WIRE_USAGE_FIELDS.every((field) => u[field] === 0)) return { records, invalid: true }
+        for (const field of WIRE_USAGE_FIELDS) {
+            const next = totals[field] + (u[field] as number)
             if (!Number.isSafeInteger(next)) return { records, invalid: true }
             totals[field] = next
         }

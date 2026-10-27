@@ -55,3 +55,24 @@ test('tool and final refusal evidence persists despite exit-zero text', () => {
 test('plain legacy stdout is unknown instead of masquerading as JSON success', () => {
     const r = parse(['DONE']); assert.equal(r.degraded, true); assert.equal(r.finalText, ''); assert.equal(r.sessionId, null)
 })
+
+test('terminal error preserves its diagnostic and judges exit 1 as failed', async () => {
+    const message = 'session "missing" does not exist; omit --session-id to start a new Session'
+    const r = parse([{ type: 'error', message }])
+    assert.equal(r.finalText, message)
+    assert.equal(r.degraded, false)
+    assert.equal(r.usage, null)
+    assert.equal(r.sessionId, null)
+    assert.ok(r.warnings.some(w => w.includes('terminal error')))
+    const { judgeTerminal } = await import('../dist/engine/terminal.js')
+    const verdict = judgeTerminal({ exit_code: 1, signal: null, final_text: r.finalText,
+        deliverables_declared: false, deliverables: [], refusals: r.refusals,
+        parser: { type: 'dsh-headless', degraded: r.degraded }, capabilities: {} })
+    assert.equal(verdict.state, 'failed')
+})
+
+test('an event after a terminal error makes the stream degraded', () => {
+    const r = parse([{ type: 'error', message: 'failed' }, session])
+    assert.equal(r.degraded, true)
+    assert.equal(r.usage, null)
+})

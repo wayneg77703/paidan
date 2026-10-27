@@ -80,6 +80,18 @@ test('usage clamps: cached > input collapses usage to null with a warning, parse
     assert.ok(r.warnings.some((w) => w.includes('usage')))
 })
 
+test('all-zero usage records make single and mixed totals unavailable', () => {
+    const zero = '{"type":"turn.completed","usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0}}'
+    for (const events of [[zero], [zero, TURN_OK], [TURN_OK, zero]]) {
+        const p = createCodexExecParser()
+        for (const line of [THREAD, TURN_START, MSG_FINAL, ...events]) p.acceptStdoutLine(line)
+        const r = p.finish('', '')
+        assert.equal(r.usage, null)
+        assert.equal(r.degraded, false)
+        assert.ok(r.warnings.some(w => w.includes('all zero')))
+    }
+})
+
 test('multiple turn.completed events sum usage (adapter semantics)', () => {
     const second = '{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":5}}'
     const p = createCodexExecParser()
@@ -107,6 +119,20 @@ test('turn.failed and top-level error events: no crash, usage null without turn.
     assert.ok(r.warnings.some((w) => w.includes('error event')))
 })
 
+test('native startup configuration notices stay warnings, not refusal evidence', () => {
+    const notices = [
+        'Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  user (~/.codex/config.toml): `future.setting` is ignored.',
+        'Under-development features enabled: prefer_mxc. Under-development features are incomplete and may behave unpredictably.',
+    ]
+    const p = createCodexExecParser()
+    for (const line of [THREAD, TURN_START, ...notices.map(message => JSON.stringify({ type: 'item.completed', item: { type: 'error', message } })), MSG_FINAL, TURN_OK]) p.acceptStdoutLine(line)
+    const r = p.finish('', '')
+    assert.equal(r.degraded, false)
+    assert.deepEqual(r.refusals, [])
+    assert.equal(r.warnings.filter(w => w.startsWith('configuration notice:')).length, 2)
+    assert.equal(r.finalText, 'done')
+})
+
 test('soft in-band error item is a warning, never a degrade', () => {
     const errItem = '{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Code Mode is unavailable"}}'
     const p = createCodexExecParser()
@@ -114,6 +140,7 @@ test('soft in-band error item is a warning, never a degrade', () => {
     const r = p.finish('', '')
     assert.equal(r.degraded, false)
     assert.ok(r.warnings.some((w) => w.includes('in-band error item')))
+    assert.equal(r.refusals.length, 1)
     assert.equal(r.finalText, 'done')
 })
 

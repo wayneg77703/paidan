@@ -78,9 +78,10 @@ export function createCodexExecParser(): CodexExecParser {
             if (item && item.type === 'agent_message' && typeof item.text === 'string') {
                 finalText = item.text
             } else if (item && item.type === 'error' && typeof item.message === 'string') {
-                const text = `in-band error item: ${item.message.slice(0, 200)}`
+                const notice = /^(?:Codex is ignoring \d+ unrecognized configuration settings?\.|Under-development features enabled:)/.test(item.message)
+                const text = `${notice ? 'configuration notice' : 'in-band error item'}: ${item.message.slice(0, 500)}`
                 warnings.push(text)
-                refusals.push(text)
+                if (!notice) refusals.push(text)
             }
         } else if (type === 'turn.completed') {
             turnsCompleted++
@@ -90,6 +91,11 @@ export function createCodexExecParser(): CodexExecParser {
                 || (u.cached_input_tokens as number) > (u.input_tokens as number)) {
                 usageInvalid = true
                 warnings.push('turn.completed usage missing or invalid; usage unavailable')
+                return
+            }
+            if (values.every((v) => v === 0)) {
+                usageInvalid = true
+                warnings.push('turn.completed usage is all zero, which can indicate missing provider usage; usage unavailable')
                 return
             }
             inputTokens += u.input_tokens as number

@@ -17,6 +17,15 @@ export function inspectDshPatch(raw: string): DshPatchModel {
         if (!line.trim() || line.trimStart().startsWith('#')) continue
         if (literalIndent !== null) { if (indent > literalIndent) continue; literalIndent = null }
         if (/:[ \t]*[|>][-+]?\s*(?:#.*)?$/.test(line)) { literalIndent = indent; continue }
+        if (indent === 0 && /^- id:\s*llm-pi-ai\s*$/.test(line)) {
+            let end = i + 1
+            for (; end < lines.length; end++) {
+                const next = lines[end], depth = next.length - next.trimStart().length
+                if (next.trim() && !next.trimStart().startsWith('#') && depth === 0 && /^- (?:id:|insert:)/.test(next)) break
+            }
+            i = end - 1
+            continue
+        }
         if (indent === 0 && line !== '[]' && !/^- (?:id:|insert:\s*(?:#.*)?$)/.test(line)) return { safe: false, mentioned: false }
         const id = /^( *)(?:- )id:\s*(.*)$/.exec(line)
         if (!id) {

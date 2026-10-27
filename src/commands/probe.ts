@@ -23,7 +23,7 @@ type ProbeBlocker = 'provider-authentication-error' | 'provider-quota-error' | '
 export function probeBlocker(result: Pick<RunResult, 'evidence'> | null): ProbeBlocker | null {
     const text = [...(result?.evidence.notes ?? []), ...(result?.evidence.refusals ?? [])].join('\n')
     if (/eligibility check failed|account is not eligible|account (?:verification|validation) required/i.test(text)) return 'provider-eligibility-error'
-    if (/provider-auth-error|invalid[_ -]api[_ -]?key|api key is invalid|incorrect api key|401\s+unauthorized|authentication (?:failed|error|required)|unauthenticated|(?:http(?:[_ -]status)?|status(?: code)?)[=: ]+401\b/i.test(text)) return 'provider-authentication-error'
+    if (/provider-auth-error|missing[_ -]credentials?|invalid[_ -]api[_ -]?key|api key is invalid|incorrect api key|401\s+unauthorized|authentication (?:failed|error|required)|unauthenticated|(?:http(?:[_ -]status)?|status(?: code)?)[=: ]+401\b/i.test(text)) return 'provider-authentication-error'
     if (/insufficient[_ -]quota|quota (?:exceeded|exhausted)|rate[_ -]limit[_ -](?:exceeded|error)|resource_exhausted|insufficient (?:credits|balance)|(?:http(?:[_ -]status)?|status(?: code)?)[=: ]+429\b/i.test(text)) return 'provider-quota-error'
     return null
 }

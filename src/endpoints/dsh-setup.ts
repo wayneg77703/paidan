@@ -21,3 +21,65 @@ export function updateDshSettings(raw: string, choice: { provider: string; model
         + '    model: ' + JSON.stringify(choice.model) + eol
         + (effort != null ? '    reasoningEffort: ' + JSON.stringify(effort) + eol : '')
 }
+
+export type DshSourceProfile = 'web' | 'acp'
+
+function splitDshBlocks(raw: string): { header: string[]; blocks: string[][] } {
+    const groups: string[][] = []
+    let current: string[] = []
+    for (const line of raw.split(/\r?\n/)) {
+        if (/^- (?:id:|insert:)/.test(line)) {
+            if (current.length) groups.push(current)
+            current = [line]
+        } else current.push(line)
+    }
+    if (current.length) groups.push(current)
+    const [first = [], ...rest] = groups
+    const startsWithRow = first.length > 0 && /^- (?:id:|insert:)/.test(first[0])
+    return { header: startsWithRow ? [] : first, blocks: startsWithRow ? groups : rest }
+}
+
+function hasSelectedDshModel(source: string[], choice: { provider: string; model: string }): boolean {
+    const providers = source.findIndex(line => /^\s+providers:\s*(?:#.*)?$/.test(line))
+    if (providers < 0) return false
+    const rootIndent = source[providers].length - source[providers].trimStart().length
+    const providerIndent = rootIndent + 2
+    let start = -1
+    for (let i = providers + 1; i < source.length; i++) {
+        const row = source[i], depth = row.length - row.trimStart().length
+        if (!row.trim() || row.trimStart().startsWith('#')) continue
+        if (depth <= rootIndent) break
+        if (depth === providerIndent && row.trim() === choice.provider + ':') { start = i; break }
+    }
+    if (start < 0) return false
+    let modelsIndent: number | null = null
+    for (let i = start + 1; i < source.length; i++) {
+        const row = source[i], depth = row.length - row.trimStart().length
+        if (!row.trim() || row.trimStart().startsWith('#')) continue
+        if (depth <= providerIndent) break
+        if (depth === providerIndent + 2 && row.trim() === 'models:') { modelsIndent = depth; continue }
+        if (modelsIndent === null) continue
+        if (depth <= modelsIndent) { modelsIndent = null; continue }
+        if (depth !== modelsIndent + 2) continue
+        const id = /^- id:\s*([A-Za-z0-9_.:/@-]+|"[^"]+"|'[^']+')\s*(?:#.*)?$/.exec(row.trim())
+        const value = id?.[1]
+        if (value && (value === choice.model || value === `"${choice.model}"` || value === `'${choice.model}'`)) return true
+    }
+    return false
+}
+
+export function syncDshProviderSettings(raw: string, sourceRaw: string, sourceProfile: DshSourceProfile, choice: { provider: string; model: string }): string {
+    const reject = (): never => { throw new PaidanError('SETUP_NATIVE_UNSUPPORTED', `DSH ${sourceProfile} 的 llm-pi-ai 配置缺少目标模型，或包含直接凭据/不支持的语法；未复制。`) }
+    if (![choice.provider, choice.model].every(value => /^[A-Za-z0-9_.:/-]+$/.test(value))) return reject()
+    const source = splitDshBlocks(sourceRaw).blocks.find(block => /^- id:\s*llm-pi-ai\s*$/.test(block[0] ?? ''))
+    if (!source || !inspectDshPatch(source.join('\n')).safe) return reject()
+    const meaningful = source.filter(line => !line.trimStart().startsWith('#'))
+    const directCredential = meaningful.some(line => /^\s*["']?(?:apiKey|token|secret|password)["']?\s*:/.test(line)
+        || /["']?Authorization["']?\s*:/.test(line) && !line.includes('${'))
+    const dynamic = meaningful.some(line => /!![A-Za-z]|<<:|---|^\s*[*&][A-Za-z_]/.test(line))
+    if (directCredential || dynamic || !hasSelectedDshModel(source, choice)) return reject()
+    const eol = raw.includes('\r\n') ? '\r\n' : '\n'
+    const target = splitDshBlocks(raw.replace(/^\[\]\s*$/m, ''))
+    const chunks = [target.header, source, ...target.blocks.filter(block => !/^- id:\s*llm-pi-ai\s*$/.test(block[0] ?? ''))]
+    return chunks.map(block => block.join(eol).replace(/\s+$/, '')).filter(Boolean).join(eol) + eol
+}

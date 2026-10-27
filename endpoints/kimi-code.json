@@ -38,14 +38,14 @@
     "fs.read": {
       "status": "supported",
       "via": "print mode auto permission",
-      "verified_at": "2026-09-09",
-      "version": "0.42.0"
+      "verified_at": "2026-10-27",
+      "version": "2.3.3"
     },
     "fs.write": {
       "status": "supported",
       "via": "print mode auto permission",
-      "verified_at": "2026-09-18",
-      "version": "0.43.1"
+      "verified_at": "2026-10-27",
+      "version": "2.3.3"
     },
     "shell.exec": {
       "status": "supported",
@@ -85,8 +85,8 @@
     ],
     "cross_process": true,
     "notes": "Evidence: the operator-local kimi job runner's kimi-process.ts:169 passes `-S <sessionId>`; the native stderr hint prints `kimi -r session_xxx` (the runner's kimi-output.ts:56, whole-line only). sessionId is extracted from the stdout meta row {role:\"meta\", type:\"session.resume_hint\", session_id} (the runner's kimi-output.ts:102-111). kimi's native session store is scoped per working directory (sessions/wd_<hash>/): a resume run must use the same cwd as the original run, else the endpoint exits non-zero (paidan probe P3, 2026-09-10). Model inheritance on resume: officially unspecified.",
-    "verified_at": "2026-09-18",
-    "version": "0.43.1"
+    "verified_at": "2026-10-27",
+    "version": "2.3.3"
   },
   "models": {
     "command": [
@@ -115,7 +115,7 @@
     "notes": "No CLI effort flag; paidan passes KIMI_MODEL_THINKING_EFFORT only in the child environment. Native 0.43.1 request capture (2026-09-18): kimi protocol honored high, while openai/anthropic retained native low. Explicit paidan effort is therefore allowed only for confirmed kimi-protocol thinking models, checked against their effective supportEfforts (including overrides). A disabled optional thinking mode also refuses the override. Other protocols may select a model alias but follow native effort; changing native settings requires user consent. The option set is adapter syntax, not every model's supported levels."
   },
   "parser": "kimi-print",
-  "parser_notes": "stream-json JSONL on stdout: assistant text rows {role:\"assistant\", content}; session hint {role:\"meta\", type:\"session.resume_hint\", session_id, command}. Non-JSON stdout line or mid-line EOF degrades the parser (terminal judgment then cannot be exit-code-based). Evidence: the operator-local kimi job runner's kimi-output.ts:88-114.",
+  "parser_notes": "stream-json JSONL on stdout: assistant text rows {role:\"assistant\", content}; session hint {role:\"meta\", type:\"session.resume_hint\", session_id, command}. Structured {type:error,code,message} rows preserve a bounded diagnostic warning without being misclassified as permission refusals. Non-JSON stdout line or mid-line EOF degrades the parser (terminal judgment then cannot be exit-code-based). Evidence: the operator-local kimi job runner's kimi-output.ts:88-114 and current structured-error shape.",
   "capabilities": {
     "background_native": false,
     "cancel_native": false,

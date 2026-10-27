@@ -2,10 +2,9 @@
 // Verified against ZCode CLI 0.16.5 live output (2026-09-10) and the suite
 // adapter (the retired external-agent-suite zcode adapter, archived 2026-09-12):
 //  - with --json, stdout is exactly ONE pretty-printed JSON envelope:
-//    {sessionId ("sess_..."), traceId, turnId, response, usage, projection}
-//    (required-field list per extractFacts, zcode.mjs:432); usage is camelCase.
-//  - projection.status must be "idle" with turnCount a positive safe integer
-//    (the suite's authoritative terminal signal; MAX_TURNS = 12).
+//    sessionId, projection and response are required; traceId/turnId/usage may be absent.
+//  - projection.status must be "idle" with turnCount a positive safe integer;
+//    there is no fixed turn-count cap.
 // Empty stdout (startup/auth failure) is NOT degraded — the exit code governs.
 // Unknown output degrades (degraded=true), it never crashes.
 
@@ -19,8 +18,8 @@ import { discoverZcodeApiCandidates } from './zcode-models.js'
 import { prepareZcodeRuntime } from './zcode-runtime.js'
 export { readExecutionSelection } from './zcode-ledger.js'
 
-const REQUIRED_ENVELOPE_FIELDS = ['sessionId', 'traceId', 'turnId', 'usage', 'projection', 'response'] as const
-const MAX_TURNS = 12
+const REQUIRED_ENVELOPE_FIELDS = ['sessionId', 'projection', 'response'] as const
+const OPTIONAL_ENVELOPE_FIELDS = ['traceId', 'turnId', 'usage'] as const
 
 export interface ZcodeParseResult extends EndpointParseResult {
 /** envelope usage mapped to provider-source tokens; null when absent/invalid */
@@ -81,6 +80,10 @@ export function createZcodePrintParser(): ZcodePrintParser {
             degraded = true
             warnings.push(`required envelope fields missing: ${missing.join(', ')}`)
         }
+        const missingOptional = OPTIONAL_ENVELOPE_FIELDS.filter((f) => !Object.hasOwn(o, f))
+        if (missingOptional.length > 0) {
+            warnings.push(`optional envelope fields missing: ${missingOptional.join(', ')}; usage/selection evidence may be unavailable`)
+        }
         const projection = o.projection
         if (!projection || typeof projection !== 'object' || Array.isArray(projection)) {
             degraded = true
@@ -95,9 +98,6 @@ export function createZcodePrintParser(): ZcodePrintParser {
             if (turnCount === null || turnCount < 1) {
                 degraded = true
                 warnings.push('projection.turnCount must be a positive safe integer')
-            } else if (turnCount > MAX_TURNS) {
-                degraded = true
-                warnings.push(`projection.turnCount ${turnCount} exceeded ${MAX_TURNS}`)
             }
         }
         const finalText = typeof o.response === 'string' ? o.response.trim() : ''

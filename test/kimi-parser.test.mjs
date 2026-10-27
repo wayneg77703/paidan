@@ -22,6 +22,15 @@ test('normal stream-json: text accumulates, session hint extracted, not degraded
     assert.equal(r.usage, null)
 })
 
+test('structured endpoint errors preserve code and message without becoming refusals', () => {
+    const p = createKimiPrintParser()
+    p.acceptStdoutLine('{"type":"error","code":"SESSION_LOCKED","message":"session is occupied"}')
+    const r = p.finish('', '')
+    assert.equal(r.degraded, false)
+    assert.deepEqual(r.refusals, [])
+    assert.ok(r.warnings.some(w => w.includes('SESSION_LOCKED') && w.includes('session is occupied')))
+})
+
 test('non-JSON stdout line degrades the parser but keeps parsing', () => {
     const p = createKimiPrintParser()
     p.acceptStdoutLine('{"role":"assistant","content":"partial"}')

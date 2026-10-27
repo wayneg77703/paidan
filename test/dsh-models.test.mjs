@@ -61,3 +61,19 @@ test('setup preserves omitted effort and repeated selection is byte-idempotent',
     assert.equal(readDshNativeDefaults(inherited).effort, 'max')
     assert.throws(() => updateDshSettings(patch + '    futureField: value\n', { provider: 'route', model: 'chosen', effort: 'high' }), /普通块式/)
 })
+
+test('provider sync copies only the safe llm-pi-ai block and refuses direct credentials', async () => {
+    const { syncDshProviderSettings } = await import('../dist/endpoints/dsh-setup.js')
+    const source = '# source\n- id: llm-deepseek\n  config:\n    alias: *legacy\n- id: llm-pi-ai\n  config:\n    providers:\n      wb_lan:\n        apiKeyEnv: WB_LAN_API_KEY\n        headers:\n          Authorization: Bearer ${WB_LAN_API_KEY}\n        models:\n          - id: cn:deepseek-v4.1-flash\n          - id: target-model\n      other_route:\n        models:\n          - id: other-model\n- id: agent-default-model\n  config:\n    provider: do-not-copy\n    model: do-not-copy\n'
+    const target = '# target\n- id: agent-default-model\n  config:\n    provider: wb_lan\n    model: target-model\n- insert:\n    - id: mcp-fixture\n      name: fixture\n'
+    const choice = { provider: 'wb_lan', model: 'target-model' }
+    const result = syncDshProviderSettings(target, source, 'web', choice)
+    assert.ok(result.includes('wb_lan'))
+    assert.ok(result.includes('mcp-fixture'))
+    assert.ok(!result.includes('do-not-copy'))
+    assert.equal(readDshNativeDefaults(result).model, 'target-model')
+    assert.throws(() => syncDshProviderSettings(target, source, 'web', { provider: 'wb_lan', model: 'other-model' }), /缺少目标模型/)
+    assert.throws(() => syncDshProviderSettings(target, source, 'web', { provider: 'other_route', model: 'target-model' }), /缺少目标模型/)
+    assert.throws(() => syncDshProviderSettings(target, source.replace('apiKeyEnv: WB_LAN_API_KEY', 'apiKey: direct-secret'), 'web', choice), /直接凭据/)
+    assert.throws(() => syncDshProviderSettings(target, source.replace('models:', 'models: !!js'), 'web', choice), /未复制/)
+})

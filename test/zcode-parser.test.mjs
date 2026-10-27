@@ -119,13 +119,28 @@ test('non-idle projection status degrades (abnormal termination evidence)', () =
     assert.ok(r.warnings.some((w) => w.includes('projection.status')))
 })
 
-test('turnCount above the 12-turn cap degrades', () => {
+test('turnCount above the legacy 12-turn cap is accepted', () => {
     const over = JSON.parse(ENVELOPE_OK)
     over.projection.turnCount = 13
     const p = createZcodePrintParser()
     const tail = feed(p, JSON.stringify(over) + '\n')
     const r = p.finish(tail, '')
-    assert.equal(r.degraded, true)
+    assert.equal(r.degraded, false)
+})
+
+test('optional observation fields may be absent without degrading the envelope', () => {
+    const partial = JSON.parse(ENVELOPE_OK)
+    delete partial.usage
+    delete partial.traceId
+    delete partial.turnId
+    const p = createZcodePrintParser()
+    const tail = feed(p, JSON.stringify(partial) + '\n')
+    const r = p.finish(tail, '')
+    assert.equal(r.degraded, false)
+    assert.equal(r.usage, null)
+    assert.equal(r.traceId, null)
+    assert.equal(r.turnId, null)
+    assert.ok(r.warnings.some(w => w.includes('optional envelope fields missing')))
 })
 
 test('usage absent or partial -> null, never fabricated zeros', () => {

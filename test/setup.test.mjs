@@ -234,6 +234,73 @@ test('npx DSH discovery and native edits are scoped; adding and disabling anothe
     }
 })
 
+test('DSH native-settings-only repair preserves the configured profile entry instead of its cache target', async t => {
+    const f = await fixture(t)
+    const previousDshHome = process.env.DSH_HOME
+    f.env.DSH_HOME = path.join(f.native, '.dsh')
+    process.env.DSH_HOME = f.env.DSH_HOME
+    t.after(() => {
+        if (previousDshHome === undefined) delete process.env.DSH_HOME
+        else process.env.DSH_HOME = previousDshHome
+    })
+    const settings = path.join(f.env.DSH_HOME, 'profiles/headless/cordis.patch.yml')
+    await fs.mkdir(path.dirname(settings), { recursive: true })
+    await fs.writeFile(settings, '- id: agent-default-model\n  config:\n    provider: old\n    model: old-model\n    reasoningEffort: low\n')
+    const source = path.join(f.env.DSH_HOME, 'profiles/web/cordis.patch.yml')
+    await fs.mkdir(path.dirname(source), { recursive: true })
+    await fs.writeFile(source, '- id: llm-pi-ai\n  config:\n    providers:\n      wb_lan:\n        apiKeyEnv: WB_LAN_API_KEY\n        models:\n          - id: cn:deepseek-v4.1-flash\n')
+    const stableBin = path.join(f.env.DSH_HOME, 'profiles/node_modules/@deepseek-ai/dsh/lib/bin.js')
+    const targetBin = path.join(f.root, 'npm-cache/_npx/hash/node_modules/@deepseek-ai/dsh/lib/bin.js')
+    const configFile = path.join(f.home, 'config.json')
+    await fs.mkdir(f.home, { recursive: true })
+    await fs.writeFile(configFile, JSON.stringify({ endpoints: { enabled: ['dsh'], overrides: { dsh: { bin: stableBin } } },
+        defaults: { endpoint: 'dsh', models: {}, efforts: {}, selection_contexts: {}, modes: {} } }))
+    await f.manifest('dsh', [])
+    const { loadConfig } = await import('../dist/engine/config.js')
+    const { EndpointRegistry } = await import('../dist/endpoints/registry.js')
+    const { planInstallation, applyInstallation } = await import('../dist/installation.js')
+    const ctx = { config: loadConfig(configFile), configPath: configFile, dataDir: path.join(f.home, 'data'),
+        registry: await EndpointRegistry.load(f.env.PAIDAN_ENDPOINTS_DIR) }
+    const surveyed = [{ name: 'dsh', selected_bin: targetBin, version_error: null, runtime_resources: null,
+        candidates: [{ bin: targetBin, source: 'config-override', version: '1.0.0', version_error: null }],
+        native_defaults: null, configured_defaults: { model: null, effort: null, provider_config: null },
+        connections: [], models: [], selection_context: null, notes: [], error: null }]
+    const plan = await planInstallation(ctx, { endpoints: { dsh: {
+        native_settings: { provider: 'wb_lan', model: 'cn:deepseek-v4.1-flash', effort: 'max', source_profile: 'web' },
+    } } }, f.root, surveyed)
+    assert.ok(plan.files.find(f => f.kind === 'dsh-settings').payload.includes('wb_lan'))
+    const applied = await applyInstallation(plan, plan.preview.confirmation)
+    assert.equal(applied.applied, true, JSON.stringify(applied))
+    assert.ok(applied.written.some(f => f.kind === 'dsh-settings'))
+    const saved = JSON.parse(await fs.readFile(configFile, 'utf8'))
+    assert.equal(saved.endpoints.overrides.dsh.bin, stableBin)
+    assert.notEqual(saved.endpoints.overrides.dsh.bin, targetBin)
+    assert.equal(readDshNativeDefaults(await fs.readFile(settings, 'utf8')).model, 'cn:deepseek-v4.1-flash')
+    assert.ok((await fs.readFile(settings, 'utf8')).includes('llm-pi-ai'))
+})
+
+test('multi-endpoint setup surveys run sequentially instead of racing native CLIs', async t => {
+    const f = await fixture(t)
+    const timeline = path.join(f.root, 'timeline.jsonl')
+    f.env.SETUP_TIMELINE = timeline
+    const fake = (kind) => `const fs=require('node:fs');const a=process.argv.slice(2);const timeline=process.env.SETUP_TIMELINE;
+        const log=(event)=>fs.appendFileSync(timeline,JSON.stringify({event,pid:process.pid,kind:${JSON.stringify(kind)},args:a})+'\\n');log('start');
+        setTimeout(()=>{${kind === 'codex'
+            ? `if(a.includes('--version'))console.log('codex-cli 1.0.0');else if(a[0]==='debug')console.log('{"models":[]}');`
+            : `if(a.includes('--version'))console.log('omp/1.0.0');else if(a[0]==='models')console.log('{"models":[]}');else if(a[0]==='config'&&a[1]==='path')console.log(${JSON.stringify(f.native)});else if(a[0]==='config')console.log('{}');`}
+            log('end')},75)`
+    await fs.writeFile(f.bin, fake('codex'))
+    await fs.writeFile(f.second, fake('omp'))
+    await f.manifest('codex', ['{env:SETUP_FIRST}'])
+    await f.manifest('omp', ['{env:SETUP_SECOND}'])
+    const found = await f.cli('setup', '--endpoint', 'codex', '--endpoint', 'omp')
+    assert.equal(found.ok, true, JSON.stringify(found))
+    const events = (await fs.readFile(timeline, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    const lastCodex = events.findLastIndex(e => e.kind === 'codex')
+    const firstOmp = events.findIndex(e => e.kind === 'omp')
+    assert.ok(lastCodex >= 0 && firstOmp > lastCodex, JSON.stringify(events))
+})
+
 test('installation records completed writes on partial failure and refuses malformed receipts before writing', async t => {
     const f = await fixture(t), config = path.join(f.home, 'config.json')
     if (process.platform === 'win32') {

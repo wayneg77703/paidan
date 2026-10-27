@@ -1,6 +1,6 @@
 // Redaction before anything lands in events.jsonl / result.json.
 // Covers: Bearer tokens, sk- style keys, GitHub/GitLab/Slack/AWS/Google
-// tokens, JWTs, URL userinfo credentials, KEY/TOKEN/SECRET/PASSWORD
+// tokens, JWTs, URL userinfo credentials, HTTP cookies, KEY/TOKEN/SECRET/PASSWORD
 // assignments, the actual values of env vars whose names end in those words,
 // and the user's home directory path (machine paths stay out of shared output).
 
@@ -14,6 +14,8 @@ export interface Redactor {
 const SECRET_ENV_NAME_RE = /(?:KEY|TOKEN|SECRET|PASSWORD)$/i
 
 const PATTERNS: Array<[RegExp, (m: RegExpExecArray) => string]> = [
+    [/(\bset-cookie["']?\s*:\s*["']?)[^"'\r\n]*/gi, (m) => `${m[1]}[REDACTED]`],
+    [/(\bcookie["']?\s*:\s*["']?)[^"'\r\n]*/gi, (m) => `${m[1]}[REDACTED]`],
     [/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, () => 'Bearer [REDACTED]'],
     [/sk-[A-Za-z0-9_-]{8,}/g, () => 'sk-[REDACTED]'],
     [/\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,}/g, () => '[REDACTED]'],

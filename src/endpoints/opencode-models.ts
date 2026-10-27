@@ -24,7 +24,7 @@ export function parseVerboseModelsOutput(text: string): DiscoverModelsResult {
         })
     }
     for (const line of lines) {
-        if (/^[a-z0-9][a-z0-9.-]*\/\S+$/i.test(line)) { flush(); alias = line; block = [] }
+        if (/^[a-z0-9][a-z0-9._-]*\/\S+$/i.test(line)) { flush(); alias = line; block = [] }
         else if (alias) block.push(line)
         else if (line.trim()) throw new Error('opencode models --verbose returned an unknown preamble; raw output withheld')
     }

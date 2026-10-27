@@ -91,6 +91,17 @@ test('OpenCode variants are model-specific, including custom names and explicit 
     for (const name of ['--injected', 'two words', 'high&evil', 'high\nmax']) assert.equal(supportsEffort(manifest, name), false)
 })
 
+test('OpenCode verbose parser accepts underscore providers across consecutive records', () => {
+    const text = 'opencode-go/step-5-preview\n' + JSON.stringify({ variants: {} }, null, 2)
+        + '\nwb_lan/cn:deepseek-v4.1-flash\n' + JSON.stringify({ name: 'DeepSeek', variants: { low: {}, max: {} } }, null, 2)
+        + '\nworkbuddy/cn:deepseek-v4.1-flash\n' + JSON.stringify({ variants: { high: {} } }, null, 2) + '\n'
+    const result = parseVerboseModelsOutput(text)
+    assert.deepEqual(result.models.map(m => m.alias), [
+        'opencode-go/step-5-preview', 'wb_lan/cn:deepseek-v4.1-flash', 'workbuddy/cn:deepseek-v4.1-flash',
+    ])
+    assert.deepEqual(result.models[1].effort_options, ['low', 'max'])
+})
+
 test('ZCode rules default never falls back to legacy or an unverified model environment variable', async (t) => {
     const root = await temporary(t)
     const keys = ['USERPROFILE', 'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE', 'ZCODE_MODEL']

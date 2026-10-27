@@ -49,6 +49,20 @@ test('fresh run: wire usage.record rows sum into endpoint-ledger usage', async (
     }
 })
 
+test('all-zero usage records make the ledger unavailable, including mixed streams', async () => {
+    const zero = { type: 'usage.record', usageScope: 'turn', usage: { inputCacheRead: 0, inputOther: 0, inputCacheCreation: 0, output: 0 } }
+    for (const rows of [[zero], [zero, TURN_ROW]]) {
+        const home = await fixtureHome(rows)
+        try {
+            const r = await readKimiLedgerUsage(HANDLE, { resume: false, home })
+            assert.equal(r.usage, null)
+            assert.ok(r.warnings.some(w => w.includes('invalid usage.record')))
+        } finally {
+            await fs.rm(home, { recursive: true, force: true })
+        }
+    }
+})
+
 test('resume without a pre-spawn cursor cannot charge previous turns', async () => {
     const home = await fixtureHome([TURN_ROW])
     try {

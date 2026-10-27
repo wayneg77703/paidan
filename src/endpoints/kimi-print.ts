@@ -46,6 +46,10 @@ export function createKimiPrintParser(): KimiPrintParser {
             finalText += o.content
         } else if (o.role === 'meta' && o.type === 'session.resume_hint' && typeof o.session_id === 'string') {
             sessionId = o.session_id
+        } else if (o.type === 'error') {
+            const code = typeof o.code === 'string' || typeof o.code === 'number' ? String(o.code) : 'unknown'
+            const message = typeof o.message === 'string' && o.message.trim() ? o.message.trim().slice(0, 1000) : '<no message>'
+            warnings.push(`endpoint error ${code}: ${message}`)
         }
         // other rows are ignored by the parser; the worker logs semantic events and
         // stdout chunk metadata, not every raw row

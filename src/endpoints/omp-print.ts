@@ -215,6 +215,12 @@ export function createOmpPrintParser(): EndpointStreamParser {
                 const text = assistantText(m)
                 if (text) agentFinals.push(text)
             }
+        } else if (type === 'retry_fallback_applied') {
+            const detail = [o.from, o.to, o.role, o.reason].filter((v): v is string => typeof v === 'string' && !!v).map(v => v.slice(0, 120)).join(' | ')
+            warnings.push(`native fallback applied${detail ? `: ${detail}` : ''}`.slice(0, 600))
+        } else if (type === 'retry_fallback_succeeded') {
+            const detail = [o.model, o.role].filter((v): v is string => typeof v === 'string' && !!v).map(v => v.slice(0, 120)).join(' | ')
+            warnings.push(`native fallback succeeded${detail ? `: ${detail}` : ''}`.slice(0, 600))
         } else if (!KNOWN_EVENT_TYPES.has(type)) {
             unknownEvents++
         }

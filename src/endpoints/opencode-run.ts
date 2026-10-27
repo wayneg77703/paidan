@@ -82,6 +82,12 @@ export function createOpencodeRunParser(): OpencodeRunParser {
             usageInvalid = true
             return
         }
+        const cacheWrite = (tokens.cache as { write?: unknown }).write
+        if (tokens.input === 0 && tokens.output === 0 && (tokens.reasoning ?? 0) === 0
+            && tokens.cache.read === 0 && (cacheWrite === undefined || cacheWrite === 0)) {
+            usageInvalid = true
+            return
+        }
         if (typeof part?.sessionID === 'string' && part.sessionID !== o.sessionID) usageInvalid = true
         const key = typeof part?.id === 'string' && part.id
             ? JSON.stringify([o.sessionID ?? null, part.id]) : null

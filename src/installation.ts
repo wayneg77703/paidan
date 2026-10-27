@@ -21,13 +21,13 @@ import { selectionContext } from './endpoints/native-metadata.js'
 import { providerConfigPath, readProviderConfig, zcodeHome } from './endpoints/zcode-config.js'
 import { buildZcodeProfile } from './endpoints/zcode-setup.js'
 import { prepareZcodeRuntime } from './endpoints/zcode-runtime.js'
-import { dshSettingsPath, dshHomePatchPath, readDshSetupDefaults } from './endpoints/dsh-models.js'
-import { updateDshSettings } from './endpoints/dsh-setup.js'
+import { dshSettingsPath, dshHomePath, dshHomePatchPath, readDshSetupDefaults } from './endpoints/dsh-models.js'
+import { updateDshSettings, syncDshProviderSettings } from './endpoints/dsh-setup.js'
 
 export interface EndpointChoice {
     bin?: string; locations?: string[]; enabled?: boolean; native?: boolean; model?: string | null; effort?: string | null; provider?: string
     mode?: PermissionPreset | null
-    native_settings?: { provider: string; model: string; effort?: string | null }
+    native_settings?: { provider: string; model: string; effort?: string | null; source_profile?: 'web' | 'acp' }
 }
 export interface Choices {
     endpoints: Record<string, EndpointChoice>
@@ -59,9 +59,10 @@ export function parseChoices(value: unknown, ctx: InstallationContext): Choices 
         if (c.enabled === false && Object.keys(c).some(k => k !== 'enabled')) throw new PaidanError('SETUP_INVALID', '禁用端点时只填写 enabled:false，原有组合保留。')
         if (c.mode != null && !PERMISSION_PRESETS.includes(c.mode)) throw new PaidanError('SETUP_INVALID', 'mode 必须是受支持的权限预设。')
         if (c.native_settings !== undefined) {
-            const n = object(c.native_settings, ['provider', 'model', 'effort'], 'native_settings')
+            const n = object(c.native_settings, ['provider', 'model', 'effort', 'source_profile'], 'native_settings')
             if (name !== 'dsh' || ![n.provider, n.model].every(v => typeof v === 'string' && /^[A-Za-z0-9_.:/-]+$/.test(v))
-                || n.effort != null && (typeof n.effort !== 'string' || !/^[A-Za-z0-9_.-]+$/.test(n.effort))) throw new PaidanError('SETUP_INVALID', 'native_settings 仅用于 DSH 原生 provider/model/effort 的明确选择。')
+                || n.effort != null && (typeof n.effort !== 'string' || !/^[A-Za-z0-9_.-]+$/.test(n.effort))
+                || n.source_profile !== undefined && !['web', 'acp'].includes(n.source_profile)) throw new PaidanError('SETUP_INVALID', 'native_settings 仅用于 DSH 原生 provider/model/effort 的明确选择，source_profile 仅支持 web/acp。')
             if (c.model != null || c.effort != null) throw new PaidanError('SETUP_INVALID', 'DSH 原生设置不能与 paidan 模型/强度覆盖混用。')
         }
     }
@@ -123,7 +124,11 @@ export function choicesTemplate(ctx: InstallationContext, endpoints: Awaited<Ret
 export async function planInstallation(ctx: InstallationContext, choices: Choices, cwd: string,
     surveyed?: Awaited<ReturnType<typeof surveyInstallation>>[]) {
     choices = parseChoices(choices, ctx)
-    const endpoints = surveyed ?? await Promise.all(Object.entries(choices.endpoints).filter(([, c]) => c.enabled !== false).map(([name, c]) => surveyInstallation(ctx, name, c, cwd)))
+    const endpoints = surveyed ?? await (async () => {
+        const result = []
+        for (const [name, c] of Object.entries(choices.endpoints).filter(([, c]) => c.enabled !== false)) result.push(await surveyInstallation(ctx, name, c, cwd))
+        return result
+    })()
     const { registry: hostRegistry, hosts } = await installationHosts()
     const original = await readOptionalBytes(ctx.configPath)
     const next = original ? JSON.parse(original.toString('utf8')) : {}
@@ -148,10 +153,10 @@ export async function planInstallation(ctx: InstallationContext, choices: Choice
         if (!e.selected_bin) throw new PaidanError('SETUP_CHOICE_REQUIRED', `${e.name} 需要选择有效入口。`, { endpoint: e.name, candidates: e.candidates })
         if (e.version_error) throw new PaidanError('SETUP_VERSION_FAILED', `${e.name} ${e.version_error}；入口已选定，请检查该程序的运行环境。`, { bin: e.selected_bin })
         const c = choices.endpoints[e.name], manifest = ctx.registry.get(e.name)
-        // A permission-only repair must not pin a discovered binary or replace a
-        // stable configured path with its resolved (possibly cached) target.
-        const modeOnly = original && Object.keys(c).length === 1 && c.mode !== undefined
-        if (!modeOnly) next.endpoints.overrides[e.name] = { ...next.endpoints.overrides[e.name], bin: e.selected_bin }
+        // Permission/native-settings-only repairs must not pin a discovered binary
+        // or replace a stable configured path with its resolved (possibly cached) target.
+        const preserveBin = original && Object.keys(c).every(key => key === 'mode' || key === 'native_settings')
+        if (!preserveBin) next.endpoints.overrides[e.name] = { ...next.endpoints.overrides[e.name], bin: e.selected_bin }
         if (c.mode !== undefined) {
             if (c.mode === null) delete next.defaults.modes[e.name]
             else {
@@ -163,7 +168,13 @@ export async function planInstallation(ctx: InstallationContext, choices: Choice
         if (c.native_settings) {
             const file = dshSettingsPath(), raw = await readOptionalBytes(file)
             if (!raw) throw new PaidanError('SETUP_NATIVE_UNSUPPORTED', 'DSH 原生设置不存在，请先通过 DSH 配置接入。')
-            const payload = updateDshSettings(raw.toString('utf8'), c.native_settings, (await readOptionalBytes(dshHomePatchPath()))?.toString('utf8') ?? null, c.native_settings.effort == null ? await readDshSetupDefaults() : undefined)
+            let payload = updateDshSettings(raw.toString('utf8'), c.native_settings, (await readOptionalBytes(dshHomePatchPath()))?.toString('utf8') ?? null, c.native_settings.effort == null ? await readDshSetupDefaults() : undefined)
+            if (c.native_settings.source_profile) {
+                const sourceFile = path.join(dshHomePath(), 'profiles', c.native_settings.source_profile, 'cordis.patch.yml')
+                const sourceRaw = await readOptionalBytes(sourceFile)
+                if (!sourceRaw) throw new PaidanError('SETUP_NATIVE_UNSUPPORTED', `DSH ${c.native_settings.source_profile} 的模型配置不存在，未同步。`)
+                payload = syncDshProviderSettings(payload, sourceRaw.toString('utf8'), c.native_settings.source_profile, c.native_settings)
+            }
             await addFile(path.dirname(file), file, payload, 'dsh-settings', 'dsh')
             decisions.push({ endpoint: 'dsh', native_settings: c.native_settings, affects_other_native_sessions: true, model_access_and_effort_unverified: true })
         }

@@ -100,3 +100,12 @@ test('prose safety: lookalikes without an assignment survive', () => {
     assert.equal(r.redactText('TOKEN=abc'), 'TOKEN=abc')
     assert.equal(r.redactText('see https://example.com/docs?token=abc for details'), 'see https://example.com/docs?token=abc for details')
 })
+
+test('HTTP cookie headers redact the entire value without breaking JSON', () => {
+    const r = redactor()
+    const json = r.redactText('{"responseHeaders":{"set-cookie":"session=fixture-response; Path=/; HttpOnly","cookie":"session=fixture-request"}}')
+    assert.equal(json, '{"responseHeaders":{"set-cookie":"[REDACTED]","cookie":"[REDACTED]"}}')
+    assert.doesNotThrow(() => JSON.parse(json))
+    assert.ok(!json.includes('fixture-response') && !json.includes('fixture-request'))
+    assert.equal(r.redactText('set-cookie: session=fixture-cookie; Path=/\r\nserver: ok'), 'set-cookie: [REDACTED]\r\nserver: ok')
+})

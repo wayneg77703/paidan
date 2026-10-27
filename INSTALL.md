@@ -59,7 +59,7 @@ ZCode 已有启用 API 时直接选，不重复要求创建 Key；确实缺少�
 - `endpoints.<名称>.bin`：选中的完整入口；多版本时必须填写。唯一候选可由程序采用并固定。
 - `native: true`：整体跟随原生。固定时使用 `model`（精确 ID 或目录中唯一显示名称）、`effort`；省略项保留已有选择，显式 null 表示该项跟随原生。
 - ZCode 固定组合使用 `provider`、`model`、`effort`。程序在 ZCode 原生目录生成仅含所选 provider 的专用文件，保留其 providerModelRules 和 manualProviderModelRules；原文件与桌面默认值不变。
-- DSH 要调整原生默认时使用 `native_settings: {"provider":"已选标识","model":"已选模型","effort":"用户指定档位"}`。这修改原生 profiles/headless/cordis.patch.yml，影响后续 headless 调用；在摘要中说明。只处理可证明安全的字面量默认模型 patch，保留其余内容；更高优先级 home patch 影响模型或遇到不支持的 YAML 时拒绝写入，改用 DSH 原生设置功能；不让 agent 手改 YAML。菜单与强度不完整时明确未验证，不猜选项。
+- DSH 要调整原生默认时使用 `native_settings: {"provider":"已选标识","model":"已选模型","effort":"用户指定档位"}`。需要从现有 web/acp 同步 provider 适配配置时，另加 `source_profile:"web"` 或 `"acp"`；setup 只复制其 `llm-pi-ai` 段，直接凭据、动态语法或缺少目标模型会拒绝，绝不复制 secret。上述修改落在原生 profiles/headless/cordis.patch.yml，影响后续 headless 调用；在摘要中说明。只处理可证明安全的字面量 patch，保留其余内容；更高优先级 home patch 影响模型或遇到不支持的 YAML 时拒绝写入，改用 DSH 原生设置功能；不让 agent 手改 YAML。菜单与强度不完整时明确未验证，不猜选项。
 - `mode`：可选权限默认；省略保留，null 恢复端点默认，不额外询问未要求调整的权限。
 - `enabled: false`：只禁用这个端点，保留原有路径与组合；该项不混填其他字段。
 - `default_endpoint`：已有默认保留，多个端点且尚无默认时让用户选；单端点自动作为新默认。明确传 null 可取消默认。
@@ -114,7 +114,7 @@ confirmation 是内部校验值，不让用户抄写。程序重新检查选择�
 | claude-code | 展示原生模型、已有固定值、别名→模型映射和逐模型强度。自定义地址/云路由与模型是不同设置；来源冲突标为未知，不凭登录状态推断当前计费连接。 | 保存完整模型 ID 或用户选择的动态别名、原生 `--effort`，同时保存本次确认的 `defaults.selection_contexts.claude-code`。连接/映射等变化后重新选择。 |
 | opencode | paidan 查询所选 CLI 在当前任务目录解析的配置、原生认证类型记录和 provider/model → variants。未显式配置的默认模型保持未知，不拿目录第一项代替；认证记录不证明额度。 | 固定完整 provider/model 与该模型声明的 variant，并保存同次查询的 selection_context。换连接或固定组合失效时让用户重新选择；目录支持的自定义 variant 原样传递。 |
 | omp | 继承当前 OMP_PROFILE；展示原生认证元数据、完整 selector 与逐模型 thinking。主模型读 modelRoles.default，模糊名称/角色引用/自动默认保持未知；不改 smol/slow/plan。 | 固定完整 selector、thinking 及同次 selection_context；auto 表示原生自动强度。多个原生账号仍由 OMP 管理，固定模型不等于固定账号。发现原生 fallback/角色切换时告知用户，需要严格固定才询问是否调整原生设置。 |
-| dsh | 按 bundle → headless profile → home 的 cordis.patch.yml 层读取可证明的默认 provider/model/effort。config 是整块替换，不做字段合并；复杂或动态配置返回未知。仅列明确默认项，缺项不代表不可用。 | 跟随原生；要换组合时用 setup 的 native_settings 明确选择，由程序最小修改 agent-default-model；不支持的 YAML 改用原生设置功能。paidan 不写模型/强度覆盖，不提供假的固定选项，也不直接输出可能含凭据的 dump-config。 |
+| dsh | 按 bundle → headless profile → home 的 cordis.patch.yml 层读取可证明的默认 provider/model/effort。config 是整块替换，不做字段合并；复杂或动态配置返回未知。仅列明确默认项，缺项不代表不可用。 | 跟随原生；要换组合时用 setup 的 native_settings 明确选择，由程序最小修改 agent-default-model；可选 source_profile=web/acp 仅同步安全的 llm-pi-ai provider 段，直接凭据会拒绝。不支持的 YAML 改用原生设置功能。paidan 不写模型/强度覆盖，不提供假的固定选项，也不直接输出可能含凭据的 dump-config。 |
 | agy | 展示原生模型 ID、显示名称与 ID 自带的强度档位，并将当前显示名称与目录匹配。原生账号类型未知时直说，不推断 Google OAuth。 | 固定完整模型 ID 与 selection_context；带 high/medium/low 后缀时该档位已随模型选定，不额外询问或叠加 --effort。登录态变化未必能由配置摘要发现，调用失败后仍按实际错误检查。 |
 
 原生改动通过 setup 预览目标、字段和影响后由程序完成；尚未支持的原生操作使用该工具自己的设置功能，不让 agent 自行拼 JSON/YAML 或复制配置。登录通过原生流程完成，不要求用户把 key/token 发进对话，不让 paidan 接管凭据。无须修改时直接沿用。

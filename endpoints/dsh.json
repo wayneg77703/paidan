@@ -112,7 +112,7 @@
     "notes": "Read-only metadata projection of configured headless bundle layers, profiles/headless/cordis.patch.yml, then home cordis.patch.yml. Only literal agent-default-model rows are understood; ambiguous/dynamic configurations return unknown, never evaluate JavaScript or call mutating --dump-config."
   },
   "parser": "dsh-headless",
-  "parser_notes": "NDJSON root-session projection: session.sessionId, final.text, status.step_end.usage. Sum distinct (turn,step) usage only when every observed step reports valid counters and the stream completes; missing retry/step usage stays unknown. Child session usage is not covered.",
+  "parser_notes": "NDJSON root-session projection: session.sessionId, final.text, status.step_end.usage. Sum distinct (turn,step) usage only when every observed step reports valid counters and the stream completes; missing retry/step usage stays unknown. A terminal {type:error,message} preserves bounded diagnostic text without final/session and can yield failed with exit 1; later events degrade the stream. Child session usage is not covered.",
   "capabilities": {
     "background_native": false,
     "cancel_native": false,

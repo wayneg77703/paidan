@@ -1,5 +1,6 @@
-// DSH 0.2.0-rc.2 --json projection: one root session, current invocation only.
+// DSH --json projection: one root session, current invocation only.
 // Missing usage (including unreported retries) remains unknown; no child ledger is implied.
+// A terminal error keeps bounded diagnostic text and may end the stream without final/session.
 import type { EndpointParseResult, EndpointStreamParser } from './parser-api.js'
 export { discoverModels, readNativeDefaults } from './dsh-models.js'
 export type DshParseResult = EndpointParseResult
@@ -21,7 +22,7 @@ function refusalSignals(text: string): string[] {
 }
 
 export function createDshHeadlessParser(): DshHeadlessParser {
-    let sessionId: string | null = null, finalText = '', finalSeen = false, degraded = false
+    let sessionId: string | null = null, finalText = '', finalSeen = false, terminalError = false, degraded = false
     let incomplete = false, input = 0, output = 0, cached: number | null = 0
     const steps = new Map<string, string>(), openSteps = new Set<string>()
     const warnings = new Set<string>(), refusals = new Set<string>()
@@ -34,7 +35,7 @@ export function createDshHeadlessParser(): DshHeadlessParser {
         let e: Record<string, unknown>
         try { const v: unknown = JSON.parse(line); if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(); e = v as Record<string, unknown> }
         catch { bad('dsh-json: invalid event; stream content suppressed'); return }
-        if (finalSeen) { bad('dsh-json: event after final'); return }
+        if (finalSeen || terminalError) { bad('dsh-json: event after terminal'); return }
         if (e.type === 'session') {
             if (sessionId !== null || typeof e.sessionId !== 'string' || !e.sessionId || e.truncated === true) bad('dsh-json: invalid or repeated session')
             else sessionId = e.sessionId
@@ -42,6 +43,12 @@ export function createDshHeadlessParser(): DshHeadlessParser {
             finalSeen = true
             if (typeof e.text !== 'string' || e.truncated === true) bad('dsh-json: invalid final')
             else { finalText = e.text.trim(); for (const signal of refusalSignals(finalText)) refusals.add(signal) }
+        } else if (e.type === 'error') {
+            if (typeof e.message !== 'string' || !e.message.trim() || e.truncated === true) { bad('dsh-json: invalid terminal error'); return }
+            terminalError = true
+            incomplete = true
+            finalText = e.message.trim().slice(0, 2000)
+            warnings.add(`dsh-json: terminal error: ${finalText.slice(0, 500)}`)
         } else if (e.type === 'status' && (e.phase === 'step_start' || e.phase === 'step_end')) {
             const key = stepKey(e)
             if (key === null || e.truncated === true) { bad('dsh-json: invalid step identity'); return }
@@ -64,7 +71,7 @@ export function createDshHeadlessParser(): DshHeadlessParser {
         acceptStderrLine() {},
         finish(tailStdout, _tailStderr) {
             if (tailStdout) accept(tailStdout)
-            if (!finalSeen || !sessionId || openSteps.size) bad('dsh-json: incomplete root-session stream')
+            if (!terminalError && (!finalSeen || !sessionId || openSteps.size)) bad('dsh-json: incomplete root-session stream')
             const usage = steps.size && !incomplete ? { input_tokens: input, output_tokens: output, cached_input_tokens: cached, cost: null, source: 'provider' as const } : null
             if (usage) warnings.add('dsh usage covers only root-session steps in this invocation; child sessions are not included')
             return { finalText, sessionId, usage, refusals: [...refusals], degraded, warnings: [...warnings] }

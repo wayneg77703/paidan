@@ -18,7 +18,8 @@ export async function verbSetup(ctx: Ctx, args: string[]) {
     if (!values.choices) {
         if (!values.endpoint?.length) throw new PaidanError('ARGS_INVALID', 'setup 需要 --endpoint <所选端点>（可重复）或 --choices <文件>。')
         const choices = parseChoices({ endpoints: Object.fromEntries(values.endpoint.map(name => [name, { bin: values.bin, locations: values.location }])) }, ctx)
-        const endpoints = await Promise.all(Object.entries(choices.endpoints).map(([name, c]) => surveyInstallation(ctx, name, c, cwd)))
+        const endpoints = []
+        for (const [name, c] of Object.entries(choices.endpoints)) endpoints.push(await surveyInstallation(ctx, name, c, cwd))
         emitOk({ config_path: ctx.configPath, endpoints, hosts: (await installationHosts()).hosts, choices: choicesTemplate(ctx, endpoints),
             guidance: '只处理所选端点；可以提供安装目录或程序路径作为 location 线索。多候选由用户选，不默认运行 probe。' })
         return

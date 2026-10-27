@@ -27,7 +27,16 @@ test('normal run: text is the final answer, sessionID is the handle, single step
     })
 })
 
-test('multi-step write run: unique step parts sum provider usage without counting tool progress', () => {
+test('an all-zero step does not become a precise zero bill', () => {
+    const zero = `{"type":"step_finish","timestamp":4,"sessionID":"${SES}","part":{"id":"prt_zero","type":"step-finish","reason":"unknown","tokens":{"input":0,"output":0,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}`
+    const p = createParser()
+    for (const line of [STEP_START, TEXT_OK, zero]) p.acceptStdoutLine(line)
+    const r = p.finish('', '')
+    assert.equal(r.degraded, false)
+    assert.equal(r.usage, null)
+})
+
+test('multi-step write run with an all-zero step leaves total usage unavailable', () => {
     // Live shape (2026-09-10): a write task emits tool_use + 3 step_finish events.
     const blank = `{"type":"text","timestamp":2,"sessionID":"${SES}","part":{"type":"text","text":"\\n\\n"}}`
     const tool = `{"type":"tool_use","timestamp":3,"sessionID":"${SES}","part":{"type":"tool","tool":"write","state":{"status":"completed"}}}`
@@ -41,7 +50,7 @@ test('multi-step write run: unique step parts sum provider usage without countin
     assert.equal(r.degraded, false)
     assert.equal(r.finalText, 'done')
     assert.equal(r.sessionId, SES)
-    assert.deepEqual(r.usage, { input_tokens: 6899, output_tokens: 113, cached_input_tokens: 10240, cost: null, source: 'provider' })
+    assert.equal(r.usage, null)
 })
 
 test('plan-agent refusal run: stream stays valid, refusal lives in finalText, no in-band error and no stderr signature', () => {

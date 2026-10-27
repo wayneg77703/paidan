@@ -43,7 +43,7 @@ test('actual AGY eligibility failure produces a fixed category without its login
 })
 
 test('explicit auth and quota blockers are recognized, not arbitrary provider or permission errors', () => {
-    for (const note of ['HTTP 401', 'http_status=401', '401 Unauthorized', 'invalid_api_key', 'API key is invalid', 'Authentication failed']) {
+    for (const note of ['HTTP 401', 'http_status=401', '401 Unauthorized', 'invalid_api_key', 'API key is invalid', 'Authentication failed', 'dsh: MISSING_CREDENTIAL: no credential for provider route']) {
         assert.equal(probeBlocker(result([], [note])), 'provider-authentication-error', note)
     }
     for (const note of ['HTTP 429', 'insufficient_quota', 'quota exhausted', 'RESOURCE_EXHAUSTED', 'rate_limit_exceeded']) {
