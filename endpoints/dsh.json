@@ -54,14 +54,14 @@
     "fs.read": {
       "status": "supported",
       "via": "workspace-write sandbox tier (native default) allows local reads; suite contract capabilities.local_read=true",
-      "verified_at": "2026-10-15",
-      "version": "0.2.0-rc.2"
+      "verified_at": "2026-10-27",
+      "version": "0.2.1-rc.4"
     },
     "fs.write": {
       "status": "supported",
       "via": "workspace-write sandbox tier (dsh-base cordis.patch.yml sandbox-policy default when DSH_PERMISSION_MODE is unset): writes confined to the workspace + temp roots (probe report 2026-09-09 §2); live paidan write run verified 2026-09-10",
-      "verified_at": "2026-10-15",
-      "version": "0.2.0-rc.2"
+      "verified_at": "2026-10-27",
+      "version": "0.2.1-rc.4"
     },
     "shell.exec": {
       "status": "supported",
@@ -103,8 +103,8 @@
     ],
     "cross_process": true,
     "notes": "Source and fixture validated against installed 0.2.0-rc.2 on 2026-10-12; live P3 pending. Exact existing session ID only, same recorded cwd; presets, child/forked sessions and live-owned sessions are rejected by native headless.",
-    "verified_at": "2026-10-15",
-    "version": "0.2.0-rc.2"
+    "verified_at": "2026-10-27",
+    "version": "0.2.1-rc.4"
   },
   "models": {
     "command": null,
