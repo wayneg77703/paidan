@@ -7,7 +7,7 @@
       "--version"
     ],
     "version_re": "^([0-9]+\\.[0-9]+\\.[0-9]+)",
-    "detect_notes": "`agy --version` prints a bare semver (\"1.2.0\", live 2026-09-10). On this machine agy is a single native agy.exe directly on PATH (no npm shim, no script wrapper), so detect.npm_exe/npm_entry do not apply: the PATH scan resolves the .exe and spawns it without a shell. The binary self-updates in place (an in-place 1.1.27 -> 1.1.28 update was observed in the 2026-09-09 probe report; this record is calibrated on 1.2.0); version drift policy applies — re-run probes after upgrades."
+    "detect_notes": "`agy --version` prints a bare semver (\"1.2.0\", live 2026-09-10). On this machine agy is a single native agy.exe directly on PATH (no npm shim, no script wrapper), so detect.npm_exe/npm_entry do not apply: the PATH scan resolves the .exe and spawns it without a shell. The binary self-updates in place (an in-place 1.1.27 -> 1.1.28 update was observed in the 2026-09-09 probe report; this record is calibrated on 1.2.0); version drift policy applies — re-run probes after upgrades. [2026-10-27 re-check on 1.4.8: still a bare semver; still a single native exe, but an official-installer reinstall moved it from a machine-local custom directory to the official default target directory, which the installer also adds to User PATH (the old directory and its PATH entry were removed). bin:\"agy\" survived the move because detection is PATH-based; only absolute overrides such as a paidan config endpoints.overrides.agy.bin needed repointing.]"
   },
   "command": {
     "argv": [
@@ -35,7 +35,7 @@
         "--dangerously-skip-permissions"
       ]
     },
-    "mode_args_notes": "Current AGY 1.3.5 exposes --dangerously-skip-permissions (native --help, 2026-10-15). unattended uses --mode accept-edits plus that explicit auto-approval flag; read-only and workspace-write retain plan/accept-edits without it. No native settings are rewritten, no sandbox flag is added. The skip flag is passed on fresh and resumed invocations. Older manifest evidence about native allow rules describes restricted modes, not the new unattended path. Real account/permission smoke status is recorded separately.",
+    "mode_args_notes": "AGY exposes --dangerously-skip-permissions (introduced 1.3.5, native --help 2026-10-15; re-verified on 1.4.8 with native --help 2026-10-27, which also lists --mode accept-edits|auto|plan and --effort low|medium|high|xhigh|max — paidan still sends no --effort). unattended uses --mode accept-edits plus that explicit auto-approval flag; read-only and workspace-write retain plan/accept-edits without it. No native settings are rewritten, no sandbox flag is added. The skip flag is passed on fresh and resumed invocations. Older manifest evidence about native allow rules describes restricted modes, not the new unattended path. Real account/permission smoke status is recorded separately.",
     "model_arg": [
       "--model",
       "{model}"

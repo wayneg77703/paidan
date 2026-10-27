@@ -98,7 +98,7 @@ confirmation 是内部校验值，不让用户抄写。程序重新检查选择�
 | opencode | `run --agent build`，保留原生 permission 规则；paidan 不提供交互审批通道，不默认添加 `--auto`。需要调整时由用户选择。 |
 | omp | `-p --approval-mode write`。允许该档的读写，需审批的 shell 等操作在无头模式下拒绝；需要 yolo 时由用户明确调整。 |
 | dsh | `--profile headless`，三档通过 `DSH_PERMISSION_MODE` 显式设置 read-only/workspace-write/danger-full-access；unattended 使用原生 approval=never，无需交互审批，不向任务参数插入权限 flag。 |
-| agy | 默认 `--mode accept-edits`，配合原生 allow 规则；显式 unattended 另外传 `--dangerously-skip-permissions`（1.3.5 参数已核验，真实执行仍受账号资格限制）。已标为 soft 的能力仍保持该标记。 |
+| agy | 默认 `--mode accept-edits`，配合原生 allow 规则；显式 unattended 另外传 `--dangerously-skip-permissions`（1.3.5 引入，2026-10-27 在 1.4.8 的 `--help` 复核仍存在；真实执行仍受账号资格限制）。已标为 soft 的能力仍保持该标记。 |
 
 直接采用默认即可，不要求用户先学会这些参数。需要调整时，本次调用使用 `--mode read-only|workspace-write|unattended`；持久调整使用 setup choices 中的 `endpoints.<endpoint>.mode`，由程序写入 `defaults.modes`。优先级为本次 `--mode` → `defaults.modes` → 端点默认。端点不支持用户所选档位时直接报告，不回退或升权。任务本身明确要求只读时，宿主应显式选择只读；默认权限不是扩大任务范围的授权。
 
@@ -271,7 +271,7 @@ setup 与 init 共用写入器，在 config_path 同目录自动合并 install-r
 | opencode / `opencode` | 已发现的原生 `opencode.exe`；已记录的 npm 布局是 `<npm-root>/opencode-ai/bin/opencode.exe`。其他包管理器或布局需确认实际入口。 |
 | omp / `omp` | `%LOCALAPPDATA%/omp/omp.exe` 或 `%PI_INSTALL_DIR%/omp.exe`。Bun 包使用需要 Bun 的 TypeScript 入口，当前 paidan 的 bin 覆盖不支持这种启动方式。可选择原生二进制安装或跳过，不把 TS 文件或 bun.exe 填进 bin。 |
 | dsh / `dsh` | 原生 DSH_HOME/profile 的对应包、npm 布局，以及实际 npm 缓存下 `_npx/<目录>/node_modules/@deepseek-ai/dsh/lib/bin.js`；程序核对包名和入口，保留完整目录。缓存可能被清理，不自动下载替代。 |
-| agy / `agy` | 安装目录内真正的 CLI `agy.exe`。不假定存在通用默认目录，使用已发现的入口，或请用户提供位置。 |
+| agy / `agy` | 安装目录内真正的 CLI `agy.exe`。官方安装器默认装到 `%LOCALAPPDATA%\agy\bin` 并写入 User PATH（2026-10-27 本机重装实证）；历史自定义目录安装也常见，仍以已发现入口为准，或请用户提供位置。 |
 
 以上是查找线索，不是完整清单。变量需展开，用户提供的位置优先按其选择核对；POSIX 使用 `type -a` 等命令及原生包管理器布局。CLI 脚本 `.js/.cjs/.mjs` 会由 paidan 自动通过 Node 启动。
 
